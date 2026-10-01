@@ -1,0 +1,15 @@
+# Python caches and packaging metadata
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Rebuildable desktop application output
+/build/
+/dist/
+
+# Local research, downloaded reference sources, and temporary experiment files
+/work/
+
+# Local runtime data and audio captures
+.pytest_cache/
+.ruff_cache/

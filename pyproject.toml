@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pixel-qso"
+version = "0.3.0"
+description = "Repeated-burst digital radio image-card application"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "PySide6>=6.6"]
+
+[project.optional-dependencies]
+loopback = ["sounddevice>=0.4.6"]
+
+[project.scripts]
+pixel-qso = "app:main"
+
+[tool.setuptools]
+py-modules = ["app", "cardmodem", "card_views"]

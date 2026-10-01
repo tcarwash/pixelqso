@@ -2,8 +2,6 @@
 
 Pixel QSO is a desktop application for sending small pixel-art QSO/QSL cards over radio. Transfers are one-way and can be repeated so the receiver can combine successfully decoded data from multiple copies.
 
-## Run
-
 Requires Python 3.10+.
 
 ```sh

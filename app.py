@@ -23,9 +23,11 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QListWidget
     QVBoxLayout, QWidget, QButtonGroup, QScrollArea, QTableView, QAbstractItemView, QFrame, QCheckBox, QGroupBox)
 
 import cardmodem as modem
+from card_backends import BACKENDS, get_backend, is_card_backend, is_available
 from card_views import DeckDialog, card_art, deck_events
 
 DATA = Path.home() / ".local" / "share" / "PixelQSO"
+AUTO_REPLY_GUARD_MS = 600
 PALETTE = [(0, 0, 0), (15, 15, 15), (0, 0, 15), (0, 15, 15),
            (0, 15, 0), (15, 15, 0), (15, 0, 0), (15, 0, 15)]
 
@@ -139,6 +141,9 @@ class DecodeWorker(QRunnable):
     def run(self):
         try:
             audio, sr = modem.read_wav(self.path)
+            if self.mode.startswith("data2g_"):
+                self.signals.finished.emit((str(self.path), get_backend(self.mode).decode(audio, sr), None))
+                return
             try:
                 result = decode_avatar_report(audio, sr)
             except Exception:
@@ -176,6 +181,13 @@ class LiveDecodeWorker(QRunnable):
     def run(self):
         try:
             audio = np.frombuffer(self.samples, dtype="<i2").astype(np.float32) / 32768.0
+            if self.mode.startswith("data2g_"):
+                result = get_backend(self.mode).decode(audio, self.sample_rate)
+                card = result["card"]
+                self.signals.finished.emit((self.generation, {"valid_packet_count": 0,
+                    "card": card, "pixels": result["pixels"], "fresh_packets": [],
+                    "receive_profile": result["receive_profile"]}, bool(card.get("exact")), None))
+                return
             if self.mode in {"fast_avatar", "fast_avatar_fec"}:
                 result = decode_avatar_report(audio, self.sample_rate)
                 card = result["card"]
@@ -1334,8 +1346,7 @@ class MainWindow(QMainWindow):
             self.card.validate()
             name, _ = QFileDialog.getSaveFileName(self, "Export transmission audio", str(DATA / "card.wav"), "WAV audio (*.wav)")
             if not name: return
-            symbols, profile = self._card_tx_symbols(self.card)
-            audio = modem.synthesize(symbols, profile=profile)
+            audio = self._card_tx_audio(self.card)
             modem.write_wav(Path(name), audio)
             self.status.setText(f"Created {Path(name).name}. No radio was keyed.")
             QMessageBox.information(self, "Audio ready", f"Created {name}. This is an audio file only; it has not been transmitted.")
@@ -1371,8 +1382,9 @@ class MainWindow(QMainWindow):
         self.profile_form_widget = QWidget(); profile_form = QFormLayout(self.profile_form_widget)
         profile_form.setContentsMargins(0, 0, 0, 0); profile_form.addRow("Bandwidth", self.profile_combo)
         self.mode_combo = QComboBox()
-        self.mode_combo.addItem("Fast · unverified", "fast_avatar")
-        self.mode_combo.addItem("Resilient", "fast_avatar_fec")
+        for backend in BACKENDS.values():
+            if is_available(backend.key):
+                self.mode_combo.addItem(backend.label, backend.key)
         if self.show_experimental_modes.isChecked():
             self.mode_combo.addItem("Legacy · experimental", "standard")
         configured_mode = self.settings.value("transfer/mode", "fast_avatar_fec")
@@ -1617,8 +1629,9 @@ class MainWindow(QMainWindow):
         current = self.selected_mode()
         with QSignalBlocker(self.mode_combo):
             self.mode_combo.clear()
-            self.mode_combo.addItem("Fast · unverified", "fast_avatar")
-            self.mode_combo.addItem("Resilient", "fast_avatar_fec")
+            for backend in BACKENDS.values():
+                if is_available(backend.key):
+                    self.mode_combo.addItem(backend.label, backend.key)
             if self.show_experimental_modes.isChecked():
                 self.mode_combo.addItem("Legacy · experimental", "standard")
             index = self.mode_combo.findData(current)
@@ -1641,12 +1654,24 @@ class MainWindow(QMainWindow):
             return
         try:
             card = self._chosen_card()
-            symbols, profile = self._card_tx_symbols(card)
-            copy_seconds = len(symbols) / profile.baud / self.repeat_count.value()
-            total_seconds = copy_seconds * self.repeat_count.value()
+            if is_card_backend(self.selected_mode()):
+                total_seconds = get_backend(self.selected_mode()).estimate_seconds(card, self.repeat_count.value())
+            else:
+                symbols, profile = self._card_tx_symbols(card)
+                total_seconds = len(symbols) / profile.baud
             self.transfer_summary.setText(f"{card.width}×{card.height} · {len(card.palette)} colors · {total_seconds:.1f}s")
         except Exception:
             self.transfer_summary.setText("Choose a card and burst type to see estimated send time.")
+
+    def _card_tx_audio(self, card, *, beacon=False):
+        stage = "card" if beacon else self._outgoing_message_type()
+        wire_type = {"report73": "73", "final73": "73"}.get(stage, stage)
+        snr_db = self.tx_snr_db if stage in {"exchange", "report73"} else None
+        mode = self.selected_mode()
+        if is_card_backend(mode):
+            return get_backend(mode).encode(card, self.repeat_count.value(), wire_type, snr_db)
+        symbols, profile = self._card_tx_symbols(card, beacon=beacon)
+        return modem.synthesize(symbols, profile=profile)
 
     def _card_tx_symbols(self, card, *, beacon=False):
         mode = self.selected_mode()
@@ -1854,7 +1879,7 @@ class MainWindow(QMainWindow):
             self.contact_stage = "send_exchange"
             self._refresh_contact_stage_indicator()
             self.exchange_log.append(f"CQ received from {callsign}; sending exchange card.")
-            QTimer.singleShot(0, self.transmit_exchange)
+            QTimer.singleShot(AUTO_REPLY_GUARD_MS, self.transmit_exchange)
         elif kind == "exchange" and self.auto_role == "caller":
             self.cq_timer.stop()
             if self.active_qso_log is None:
@@ -1867,12 +1892,12 @@ class MainWindow(QMainWindow):
             self.contact_stage = "send_report73"
             self._refresh_contact_stage_indicator()
             self.exchange_log.append(f"Exchange received from {callsign}; sending 73 with measured SNR.")
-            QTimer.singleShot(0, self.transmit_exchange)
+            QTimer.singleShot(AUTO_REPLY_GUARD_MS, self.transmit_exchange)
         elif kind == "73" and card.get("snr_db") is not None and self.auto_role == "responder":
             self.contact_stage = "send_final73"
             self._refresh_contact_stage_indicator()
             self.exchange_log.append(f"73 with SNR received from {callsign}; sending final 73.")
-            QTimer.singleShot(0, self.transmit_exchange)
+            QTimer.singleShot(AUTO_REPLY_GUARD_MS, self.transmit_exchange)
         elif kind == "73" and card.get("snr_db") is None and self.auto_role == "caller":
             self._complete_contact()
 
@@ -1928,19 +1953,20 @@ class MainWindow(QMainWindow):
             self.tx_message_type = self._outgoing_message_type()
             if self.tx_message_type in {"exchange", "report73"} and self.reply_report:
                 self.tx_snr_db = (self.reply_report.get("card") or {}).get("measured_snr_db")
+            elif self.tx_message_type not in {"exchange", "report73"}:
+                self.tx_snr_db = None
             if self.auto_armed and card.callsign.upper() != self.station_call.text().strip().upper():
                 raise ValueError("The automatic exchange card must use the call sign configured in Station settings.")
             if self.auto_armed and self.selected_mode() == "fast_avatar":
                 raise ValueError("Raw burst pixels have no correction or integrity check; use a checked-block mode for automatic exchange.")
             if self.auto_armed: self.auto_own_card_id = card.card_id
-            symbols, profile = self._card_tx_symbols(card)
-            audio = modem.synthesize(symbols, profile=profile)
+            audio = self._card_tx_audio(card)
             duration = len(audio) / modem.SAMPLE_RATE
             self.auto_last_card_duration = duration
             self.tx_bytes = np.clip(audio * 32767, -32768, 32767).astype("<i2").tobytes()
             self.tx_offset = 0
             self.tx_deadline = duration + 30.0
-            self.tx_label = "card burst" if self.selected_mode() in {"fast_avatar", "fast_avatar_fec"} else "loopback card"
+            self.tx_label = "card burst" if is_card_backend(self.selected_mode()) else "loopback card"
         except Exception as exc:
             self.refresh_tx_button()
             if self.auto_armed: self.stop_auto_exchange("Automatic exchange stopped: its selected card could not be prepared.")
@@ -1952,7 +1978,7 @@ class MainWindow(QMainWindow):
         if self.exchange_mode.currentIndex() != 1:
             QMessageBox.information(self, "Select automatic exchange", "Choose Automatic card exchange before starting.")
             return
-        if self.selected_mode() != "fast_avatar_fec":
+        if self.selected_mode() != "fast_avatar_fec" and not self.selected_mode().startswith("data2g_"):
             QMessageBox.warning(self, "Choose resilient burst", "Automatic CQ exchanges require resilient burst cards so the message type and integrity checks are available.")
             return
         link_ready = self.test_link_enabled and self.audio_test_mode.isChecked()
@@ -2061,19 +2087,20 @@ class MainWindow(QMainWindow):
             self.tx_message_type = self._outgoing_message_type()
             if self.tx_message_type in {"exchange", "report73"} and self.reply_report:
                 self.tx_snr_db = (self.reply_report.get("card") or {}).get("measured_snr_db")
+            elif self.tx_message_type not in {"exchange", "report73"}:
+                self.tx_snr_db = None
             if self.auto_armed and card.callsign.upper() != self.station_call.text().strip().upper():
                 raise ValueError("The automatic exchange card must use the call sign configured in Station settings.")
             if self.auto_armed: self.auto_own_card_id = card.card_id
             if self.auto_armed and self.selected_mode() == "fast_avatar":
                 raise ValueError("Raw burst pixels have no correction or integrity check; use a checked-block mode for automatic exchange.")
-            symbols, profile = self._card_tx_symbols(card)
-            audio = modem.synthesize(symbols, profile=profile)
+            audio = self._card_tx_audio(card)
             duration = len(audio) / modem.SAMPLE_RATE
             self.auto_last_card_duration = duration
             self.tx_bytes = np.clip(audio * 32767, -32768, 32767).astype("<i2").tobytes()
             self.tx_offset = 0
             self.tx_deadline = duration + 8.0
-            self.tx_label = "card burst" if self.selected_mode() in {"fast_avatar", "fast_avatar_fec"} else "legacy card"
+            self.tx_label = "card burst" if is_card_backend(self.selected_mode()) else "legacy card"
         except Exception as exc:
             self.tx_btn.setEnabled(self.rig.connected())
             if self.auto_armed: self.stop_auto_exchange("Automatic exchange stopped: its selected card could not be prepared.")
@@ -2317,8 +2344,7 @@ class MainWindow(QMainWindow):
         try:
             self.update_identity()
             self.card.validate()
-            symbols, profile = self._card_tx_symbols(self.card, beacon=True)
-            audio = modem.synthesize(symbols, profile=profile)
+            audio = self._card_tx_audio(self.card, beacon=True)
             self.tx_bytes = np.clip(audio * 32767, -32768, 32767).astype("<i2").tobytes()
             self.tx_offset = 0
             self.tx_deadline = len(audio) / modem.SAMPLE_RATE + 8.0
@@ -2407,7 +2433,8 @@ class MainWindow(QMainWindow):
             if not already_saved:
                 self._record_received_card(report)
         received_profile = report.get("receive_profile")
-        profile_label = ("Card burst" if received_profile == modem.MINIMAL_AVATAR_PROFILE.key else
+        profile_label = ("Data2G" if str(received_profile).startswith("data2g:") else
+                         "Card burst" if received_profile == modem.MINIMAL_AVATAR_PROFILE.key else
                          modem.resolve_profile(received_profile).label.split(" · ")[0]
                          if received_profile else "profile unknown")
         if not card.get("raw_avatar"):
@@ -2416,8 +2443,11 @@ class MainWindow(QMainWindow):
             else:
                 self.rx_status.setText(f"{len(report.get('valid_packets', []))} packets · {card.get('callsign') or 'unknown station'} · {profile_label} · saved {result_path.name}")
         if self.decode_jobs == 0: self.record_button.setEnabled(not self.auto_armed)
-        if auto_capture and not handled_live and not already_saved and not is_avatar:
-            self._handle_auto_received_card(report)
+        if auto_capture and not handled_live and not already_saved:
+            if is_avatar and card.get("exact"):
+                self._handle_contact_message(report)
+            elif not is_avatar:
+                self._handle_auto_received_card(report)
 
     def _handle_auto_received_card(self, report):
         if not self.auto_armed: return
@@ -2504,7 +2534,7 @@ class MainWindow(QMainWindow):
                 if self.auto_armed: self.stop_auto_exchange("Automatic exchange stopped because the audio input could not be opened.")
                 return
         self.rx_bytes.clear()
-        self.rx_live_profile = self.selected_profile() if (self.test_link_enabled or self.selected_mode() in {"fast_avatar", "fast_avatar_fec"}) else None
+        self.rx_live_profile = self.selected_profile() if (self.test_link_enabled or is_card_backend(self.selected_mode())) else None
         self.live_decode_inflight = False; self.live_decode_samples = 0; self.rx_timer.start()
         self.auto_receive_timer.stop()
         self.record_button.setEnabled(False); self.stop_record_button.setEnabled(True)
@@ -2540,15 +2570,10 @@ class MainWindow(QMainWindow):
         if not self.rx_timer.isActive() or self.live_decode_inflight:
             return
         sample_count = len(self.rx_bytes) // 2
-        raw_avatar = self.selected_mode() in {"fast_avatar", "fast_avatar_fec"}
-        if raw_avatar:
-            if self.selected_mode() == "fast_avatar_fec":
-                minimum_symbols = len(modem.FRAME_SYNC) + modem.AVATAR_META_TONE_COUNT + 132
-                minimum_samples = int(minimum_symbols * self.rx_rate / modem.MINIMAL_AVATAR_PROFILE.baud)
-            else:
-                minimum_symbols = len(modem.FRAME_SYNC) + modem.AVATAR_META_TONE_COUNT + 32
-                minimum_samples = int(minimum_symbols * self.rx_rate / modem.MINIMAL_AVATAR_PROFILE.baud)
-            interval = max(1, int(0.5 * self.rx_rate))
+        if is_card_backend(self.selected_mode()):
+            backend = get_backend(self.selected_mode())
+            minimum_samples = int(backend.minimum_audio_seconds() * self.rx_rate)
+            interval = max(1, int((1.0 if self.selected_mode().startswith("data2g_") else 0.5) * self.rx_rate))
         else:
             minimum_samples = int(1.0 * self.rx_rate)
             interval = 2 * self.rx_rate
@@ -2632,6 +2657,9 @@ class MainWindow(QMainWindow):
         if generation != self.auto_generation or not self.rx_timer.isActive():
             return
         if error:
+            if self.selected_mode().startswith("data2g_") and "No checked Data2G card fragment received yet" in error:
+                QTimer.singleShot(0, self._drain_rx)
+                return
             self.rx_status.setText(f"Live decode error: {error}")
             return
         card = report.get("card") or {}

@@ -11,9 +11,10 @@ dependencies = ["numpy>=1.24", "PySide6>=6.6"]
 
 [project.optional-dependencies]
 loopback = ["sounddevice>=0.4.6"]
+data2g = ["data2g @ git+https://github.com/arodland/Data2G.git@e5452ec185e4f864a716d3682a2ab1a90af3a951", "torch>=2.13"]
 
 [project.scripts]
 pixel-qso = "app:main"
 
 [tool.setuptools]
-py-modules = ["app", "cardmodem", "card_views"]
+py-modules = ["app", "cardmodem", "card_views", "card_backends"]

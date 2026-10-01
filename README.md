@@ -19,6 +19,10 @@ The app supports:
 - Local card and QSO storage
 - CAT/PTT through Hamlib
 
+## Experimental Data2G backend
+
+Install the optional modem with `uv sync --extra data2g`, then run `uv run --extra data2g python app.py`. The transmission menu then offers Data2G fast and robust choices within its 1.2 kHz band. Choose a Data2G option on both stations; either choice can receive both included Data2G submodes. The card, CQ/Exchange/73 stages, one-way copy count, and QSO log work the same way. A decoded Data2G burst contributes checked image fragments to the live card. Details are in [DATA2G-BACKEND.md](DATA2G-BACKEND.md).
+
 ## Test with two stations
 
 ```sh

@@ -763,16 +763,24 @@ data2g = [
 loopback = [
     { name = "sounddevice" },
 ]
+weak-signal = [
+    { name = "data2g" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "data2g", marker = "extra == 'data2g'", git = "https://github.com/arodland/Data2G.git?rev=e5452ec185e4f864a716d3682a2ab1a90af3a951" },
+    { name = "data2g", marker = "extra == 'weak-signal'", git = "https://github.com/arodland/Data2G.git?rev=e5452ec185e4f864a716d3682a2ab1a90af3a951" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "pyside6", specifier = ">=6.6" },
+    { name = "scipy", marker = "extra == 'weak-signal'", specifier = ">=1.10" },
     { name = "sounddevice", marker = "extra == 'loopback'", specifier = ">=0.4.6" },
     { name = "torch", marker = "extra == 'data2g'", specifier = ">=2.13" },
 ]
-provides-extras = ["loopback", "data2g"]
+provides-extras = ["loopback", "data2g", "weak-signal"]
 
 [[package]]
 name = "pycparser"

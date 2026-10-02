@@ -63,9 +63,10 @@ class ArtworkView(QLabel):
 
 class DeckDialog(QDialog):
     """Open a contact as a large card with a browsable chronological hand."""
-    def __init__(self, entry, image_for_card, parent=None):
+    def __init__(self, entry, image_for_card, add_received_card=None, parent=None):
         super().__init__(parent)
         self.events = deck_events(entry); self.image_for_card = image_for_card
+        self.add_received_card = add_received_card
         self.setWindowTitle(f"Contact with {entry.get('peer_callsign', 'Unknown')}")
         self.resize(780, 760)
         layout = QVBoxLayout(self); layout.setSpacing(12)
@@ -87,8 +88,25 @@ class DeckDialog(QDialog):
             item.setIcon(QIcon(card_art(image_for_card(card), label, size=QSize(80, 100))))
             item.setToolTip(label); self.strip.addItem(item)
         self.strip.currentRowChanged.connect(self.show_card); layout.addWidget(self.strip)
-        close = QPushButton('Close deck'); close.clicked.connect(self.accept); layout.addWidget(close)
+        actions = QHBoxLayout()
+        self.add_button = QPushButton('Add received card to My Cards')
+        self.add_button.clicked.connect(self._add_current_received)
+        actions.addWidget(self.add_button)
+        close = QPushButton('Close deck'); close.clicked.connect(self.accept); actions.addWidget(close)
+        layout.addLayout(actions)
         self.strip.setCurrentRow(0)
+
+    def _add_current_received(self):
+        index = self.strip.currentRow()
+        if self.add_received_card is None or not 0 <= index < len(self.events):
+            return
+        direction, card = self.events[index]
+        if direction != 'received_cards':
+            return
+        result = self.add_received_card(card)
+        if result:
+            self.add_button.setText('Already in My Cards' if result == 'already' else 'Added to My Cards')
+            self.add_button.setEnabled(False)
 
     def show_card(self, index):
         if not 0 <= index < len(self.events): return
@@ -97,5 +115,8 @@ class DeckDialog(QDialog):
         detail = 'Sent by you' if direction == 'sent_cards' else 'Received'
         if meta.get('snr_db') is not None: detail += f"  ·  Report {meta['snr_db']:+d} dB"
         self.details.setText(detail)
+        self.add_button.setVisible(direction == 'received_cards' and self.add_received_card is not None)
+        self.add_button.setText('Add received card to My Cards')
+        self.add_button.setEnabled(True)
         self.counter.setText(f'{index+1} / {len(self.events)}')
         self.previous.setEnabled(index > 0); self.next.setEnabled(index+1 < len(self.events))

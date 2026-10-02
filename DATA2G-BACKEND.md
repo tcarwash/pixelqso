@@ -1,6 +1,8 @@
 # Experimental Data2G backend
 
-PixelQSO can use [Data2G](https://github.com/arodland/Data2G) as an optional audio backend for the same indexed-color cards and CQ/Exchange/73 exchange. The dependency is pinned in `pyproject.toml` so the experiment uses a reproducible upstream revision. Install and run it with `uv sync --extra data2g` and `uv run --extra data2g python app.py`.
+PixelQSO can use [Data2G](https://github.com/arodland/Data2G) as an optional audio backend for the same indexed-color cards and CQ/Exchange/73 exchange. The dependency is pinned in `pyproject.toml` so the experiment uses a reproducible upstream revision. The ordinary install excludes Data2G, SciPy, and PyTorch. To opt in to the Data2G audio decoder, use `uv sync --extra data2g` and `uv run --extra data2g python app.py`. The `data2g` extra includes PyTorch and may download large platform-specific runtime packages; standard PixelQSO modes do not need it.
+
+The **Weak signal · 32×32 · experimental** modem shares Data2G's LDPC construction but uses its own CPU decoder. Install that experiment without PyTorch using `uv sync --extra weak-signal`, then run `uv run --extra weak-signal python app.py`. The `weak-signal` extra includes Data2G's NumPy/SciPy dependencies but not Torch.
 
 ## Backend boundary
 
@@ -27,6 +29,6 @@ Data2G's receiver listens continuously but delivers checked codewords after a co
 
 The experimental adapter decodes a rolling audio snapshot in a worker through Data2G's streaming `Receiver`. It can lock to a later full copy after the capture begins in the middle of an earlier one. A future implementation should keep the receiver state between audio callbacks to avoid re-decoding earlier audio. It should also compare fixed-copy fragment combining with Data2G's soft codeword combining on impaired paths.
 
-The currently pinned upstream wheel omits its `data2g/format/*.npz` frozen format tables. It can compute fallback format data, and a clean fast-mode source-to-wheel decode succeeded locally. Other submodes and release interoperability still need confirmation with the creator and an upstream packaging fix. `pixelqso.spec` collects Data2G's package data when the extra is installed. Data2G also uses PyTorch for decoding, so the optional build will be materially larger than the base app.
+The currently pinned upstream wheel omits its `data2g/format/*.npz` frozen format tables. It can compute fallback format data, and a clean fast-mode source-to-wheel decode succeeded locally. Other submodes and release interoperability still need confirmation with the creator and an upstream packaging fix. `pixelqso.spec` collects Data2G's package data when the extra is installed. A packaged Data2G build must be made from an environment synced with `--extra data2g`; it will be materially larger than the base app because it includes PyTorch. The weak-signal extra does not include Torch.
 
 This is an experimental format distinct from PixelQSO avatar wire version 3. It needs Data2G on both ends. Occupied bandwidth, RF reliability, and compatibility between packaged installs remain to be measured.

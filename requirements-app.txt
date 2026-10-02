@@ -1,2 +1,4 @@
+# Base desktop install only. Optional Data2G/PyTorch and weak-signal extras are
+# managed in pyproject.toml; see README.md for `uv sync --extra ...` commands.
 numpy>=1.24
 PySide6>=6.6

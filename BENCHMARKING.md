@@ -20,7 +20,7 @@ Compare all installed options across the full profile set:
   --output work/path-comparison
 ```
 
-Data2G requires the optional extra described in the README. Missing optional backends are listed in run metadata. Encoding/configuration failures stop the run; decoder exceptions become failed trials with their error text. Completed rows are reported even if a later operation fails. Runs are sequential and can take considerable time, especially with Data2G and large cards. Use a new output directory for each run.
+Data2G requires the heavyweight `data2g` extra described in the README; the experimental weak-signal modem can be installed separately with `uv sync --extra weak-signal` and does not install Torch. Missing optional backends are listed in run metadata. Encoding/configuration failures stop the run; decoder exceptions become failed trials with their error text. Completed rows are reported even if a later operation fails. Runs are sequential and can take considerable time, especially with Data2G and large cards. Use a new output directory for each run.
 
 The new `experimental_qpsk_5s` backend supports one 32×32 eight-color burst.
 Requested copy counts beyond a backend's declared maximum are explicitly

@@ -8,6 +8,7 @@ hidden = [
     "cardmodem",
     "card_backends",
     "weak_signal_modem",
+    "webserver",
     "PySide6.QtNetwork",
     "PySide6.QtMultimedia",
     "PySide6.QtMultimediaWidgets",

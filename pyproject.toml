@@ -19,4 +19,4 @@ weak-signal = ["data2g @ git+https://github.com/arodland/Data2G.git@e5452ec185e4
 pixel-qso = "app:main"
 
 [tool.setuptools]
-py-modules = ["app", "cardmodem", "card_views", "card_backends", "weak_signal_modem"]
+py-modules = ["app", "cardmodem", "card_views", "card_backends", "weak_signal_modem", "webserver"]

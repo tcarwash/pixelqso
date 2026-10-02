@@ -31,6 +31,18 @@ The app supports:
 - Local card and QSO storage
 - CAT/PTT through Hamlib
 
+## Mobile web app and control API
+
+Enable **Mobile control** in Station settings → Options. Pixel QSO starts an
+HTTP server on port 8765 (configurable there), reachable from devices on the
+same network at `http://<desktop-ip>:8765/`. It serves a touch drawing page,
+shows saved and exchanged cards, and can request transmission or stop an
+active transmission. The API is available at `/api/status`, `/api/cards`, and
+POST `/api/stage`, `/api/quickdraw`, `/api/transmit`, and `/api/stop`.
+
+The server listens on all network interfaces while enabled. Use it only on a
+trusted network; anyone who can reach it can request a transmission.
+
 ## Experimental Data2G backend
 
 Data2G is opt-in because its decoder needs PyTorch and can install large,

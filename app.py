@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QListWidget
 import cardmodem as modem
 from card_backends import BACKENDS, get_backend, is_card_backend, is_available
 from card_views import DeckDialog, card_art, deck_events
+from webserver import CompanionServer
 
 DATA = Path.home() / ".local" / "share" / "PixelQSO"
 AUTO_REPLY_GUARD_MS = 600
@@ -575,6 +576,10 @@ class EditorDialog(QDialog):
             super().reject()
 
 
+class WebCommandBridge(QObject):
+    requested = Signal(object)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -607,6 +612,15 @@ class MainWindow(QMainWindow):
                 Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)))
         DATA.mkdir(parents=True, exist_ok=True)
         self.settings = QSettings(str(DATA / "settings.ini"), QSettings.Format.IniFormat)
+        self.web_server = None
+        self.web_bridge = WebCommandBridge(self)
+        self.web_bridge.requested.connect(self._handle_web_command)
+        self.web_enabled = QCheckBox("Enable mobile web app and control API (LAN)")
+        self.web_enabled.setChecked(str(self.settings.value("options/web_enabled", "false")).lower() in {"1", "true", "yes", "on"})
+        self.web_port = QSpinBox(); self.web_port.setRange(1024, 65535)
+        self.web_port.setValue(int(self.settings.value("options/web_port", 8765)))
+        if self.web_enabled.isChecked():
+            QTimer.singleShot(0, self._start_web_server)
         saved_call = self.settings.value("station/callsign", "N0CALL")
         saved_grid = self.settings.value("station/grid", "AA00")
         test_mode = os.environ.get("PIXELQSO_AUDIO_TEST", str(self.settings.value("station/audio_test_mode", "false"))).lower() in {"1", "true", "yes", "on"}
@@ -1748,6 +1762,8 @@ class MainWindow(QMainWindow):
         options_form.addRow("My grid square", self.station_grid)
         options_form.addRow("Testing", self.audio_test_mode)
         options_form.addRow("Advanced modes", self.show_experimental_modes)
+        options_form.addRow("Mobile control", self.web_enabled)
+        options_form.addRow("Web port", self.web_port)
         layout.addWidget(options)
         station = QGroupBox("Radio and audio")
         station_form = QFormLayout(station)
@@ -1767,10 +1783,91 @@ class MainWindow(QMainWindow):
         self.settings.setValue("station/grid", grid)
         self.settings.setValue("station/audio_test_mode", self.audio_test_mode.isChecked())
         self.settings.setValue("options/show_experimental_modes", self.show_experimental_modes.isChecked())
+        self.settings.setValue("options/web_enabled", self.web_enabled.isChecked())
+        self.settings.setValue("options/web_port", self.web_port.value())
+        if self.web_server is not None:
+            self.web_server.close(); self.web_server = None
+        if self.web_enabled.isChecked():
+            try: self._start_web_server()
+            except OSError as exc: QMessageBox.warning(self, "Web server unavailable", str(exc))
         self._refresh_mode_options()
         if self.rx_timer.isActive():
             self._discard_receive_for_tx()
         QTimer.singleShot(250, self._ensure_session_receive)
+
+    def _start_web_server(self):
+        if self.web_server is None:
+            self.web_server = CompanionServer(self._web_dispatch, self.web_port.value())
+
+    def _web_dispatch(self, method, path, data):
+        import threading
+        request = {"method": method, "path": path, "data": data, "event": threading.Event()}
+        self.web_bridge.requested.emit(request)
+        if not request["event"].wait(8):
+            raise TimeoutError("Desktop app did not respond")
+        if "error" in request: raise ValueError(request["error"])
+        return request.get("result", {})
+
+    def _handle_web_command(self, request):
+        try:
+            method, path, data = request["method"], request["path"], request["data"]
+            if method == "GET" and path == "status":
+                import socket
+                addresses = sorted({address[4][0] for address in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+                                    if not address[4][0].startswith("127.")})
+                host = addresses[0] if addresses else "127.0.0.1"
+                request["result"] = {"callsign": self.station_call.text(), "grid": self.station_grid.text(),
+                    "server": f"http://{host}:{self.web_server.port}",
+                    "transmitting": bool(self.tx_audio or self.tx_timer.isActive()),
+                    "stage": str(self._outgoing_message_type())}
+            elif method == "GET" and path == "cards":
+                cards = []
+                for folder, source in ((DATA / "cards", "My Cards"), (DATA / "sent-cards", "Sent Cards")):
+                    for file in folder.glob("*.json"):
+                        try:
+                            d = json.loads(file.read_text()); cards.append({"source": source, **d})
+                        except (OSError, ValueError): pass
+                for file in self.qso_log_dir.glob("*.json"):
+                    try:
+                        entry=json.loads(file.read_text())
+                        for bucket in ("sent_cards", "received_cards"):
+                            for report in entry.get(bucket, []):
+                                meta=report.get("card") or {}
+                                if report.get("pixels") and meta.get("palette"):
+                                    pixels = report["pixels"]
+                                    if pixels and isinstance(pixels[0], list):
+                                        pixels = [value for row in pixels for value in row]
+                                    cards.append({"source": "QSO", "callsign": meta.get("callsign", ""),
+                                        "grid": meta.get("grid", ""), "width": meta.get("width",32),
+                                        "height": meta.get("height",32), "palette": meta["palette"],
+                                        "pixels": pixels, "message_type": meta.get("message_type", "card")})
+                    except (OSError, ValueError): pass
+                request["result"] = {"cards": cards}
+            elif method == "POST" and path == "stage":
+                stage = str(data.get("stage", ""))
+                if stage not in self.manual_stage_buttons: raise ValueError("Unknown transmit stage")
+                self.exchange_mode.setCurrentIndex(0); self.manual_stage_buttons[stage].setChecked(True)
+                request["result"] = {"stage": stage}
+            elif method == "POST" and path == "transmit":
+                if self.auto_armed: raise ValueError("Stop automatic exchange before remote manual transmit")
+                if self.tx_audio or self.tx_timer.isActive() or self.ptt_active: raise ValueError("A transmission is already active")
+                QTimer.singleShot(0, self.transmit_exchange)
+                request["result"] = {"accepted": True}
+            elif method == "POST" and path == "stop":
+                if self.tx_audio or self.tx_timer.isActive() or self.ptt_active: self._finish_tx("Transmit stopped by mobile operator; releasing PTT.")
+                request["result"] = {"stopped": True}
+            elif method == "POST" and path == "quickdraw":
+                card = modem.Card(str(data.get("callsign", self.station_call.text())).strip().upper(),
+                    str(data.get("grid", self.station_grid.text())).strip().upper(),
+                    [tuple(int(v) for v in color) for color in data["palette"]],
+                    [int(v) for v in data["pixels"]], int(time.time_ns() & 0xffff),
+                    int(data.get("width", 32)), int(data.get("height", 32)))
+                card.validate()
+                self.quick_reply_card = card
+                request["result"] = {"loaded": True, "card_id": card.card_id}
+            else: raise ValueError("Unknown API route")
+        except Exception as exc: request["error"] = str(exc)
+        finally: request["event"].set()
 
     def audio_test_mode_changed(self, enabled):
         if hasattr(self, "test_mode_banner"):
@@ -3212,6 +3309,11 @@ class MainWindow(QMainWindow):
                           "palette": [list(color) for color in card.palette],
                           "message_type": {"report73": "73", "final73": "73"}.get(message_type, message_type),
                           "snr_db": snr_db}, "pixels": pixels}
+
+    def closeEvent(self, event):
+        if self.web_server is not None:
+            self.web_server.close(); self.web_server = None
+        super().closeEvent(event)
 
 
 def main():

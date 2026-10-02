@@ -42,6 +42,14 @@ Builds are created in `dist/`. The same PySide6 application supports Linux, Wind
 
 ## Modem test
 
+For comparisons across modem backends, seeded path impairments, and recorded
+on-air WAVs, see [BENCHMARKING.md](BENCHMARKING.md). The benchmark generates
+trial CSVs, JSON results, and an HTML comparison report:
+
+```sh
+python tools/modem_benchmark.py --backends fast_avatar fast_avatar_fec --profiles clean awgn --snr-db 12 6 0 --repeats 1 3 --trials 5
+```
+
 ```sh
 python tools/two_client_loopback.py --mode resilient --canvas 16 --colors 16 --repeats 2
 ```
@@ -49,3 +57,9 @@ python tools/two_client_loopback.py --mode resilient --canvas 16 --colors 16 --r
 Use `--mode fast` to test the simpler unprotected burst mode.
 
 Synthetic and loopback tests verify software behavior only; they do not establish on-air performance or regulatory compliance.
+# Experimental weak-signal cards
+
+The optional **Weak signal · 32×32 · experimental** transmission type carries a
+checked 32×32 eight-color card in 4.622 seconds using shaped QPSK and LDPC.
+Install `uv sync --extra data2g` to enable it. See
+[the modem format, limits and measurements](WEAK-SIGNAL-MODEM.md).

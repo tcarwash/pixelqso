@@ -141,7 +141,7 @@ class DecodeWorker(QRunnable):
     def run(self):
         try:
             audio, sr = modem.read_wav(self.path)
-            if self.mode.startswith("data2g_"):
+            if is_card_backend(self.mode) and self.mode not in {"fast_avatar", "fast_avatar_fec"}:
                 self.signals.finished.emit((str(self.path), get_backend(self.mode).decode(audio, sr), None))
                 return
             try:
@@ -181,7 +181,7 @@ class LiveDecodeWorker(QRunnable):
     def run(self):
         try:
             audio = np.frombuffer(self.samples, dtype="<i2").astype(np.float32) / 32768.0
-            if self.mode.startswith("data2g_"):
+            if is_card_backend(self.mode) and self.mode not in {"fast_avatar", "fast_avatar_fec"}:
                 result = get_backend(self.mode).decode(audio, self.sample_rate)
                 card = result["card"]
                 self.signals.finished.emit((self.generation, {"valid_packet_count": 0,
@@ -1640,6 +1640,22 @@ class MainWindow(QMainWindow):
         self._refresh_transfer_summary()
 
     def _update_transfer_controls(self, *_):
+        if hasattr(self, "repeat_count"):
+            backend = get_backend(self.selected_mode()) if is_card_backend(self.selected_mode()) else None
+            maximum = getattr(backend, "max_repeats", 20)
+            if maximum == 1 and self.repeat_count.maximum() != 1:
+                self._normal_repeat_count = self.repeat_count.value()
+                with QSignalBlocker(self.repeat_count):
+                    self.repeat_count.setMaximum(1)
+            elif maximum != 1 and self.repeat_count.maximum() == 1:
+                with QSignalBlocker(self.repeat_count):
+                    self.repeat_count.setMaximum(maximum)
+                    self.repeat_count.setValue(getattr(self, "_normal_repeat_count", 3))
+            else:
+                self.repeat_count.setMaximum(maximum)
+            self.repeat_count.setToolTip("One complete checked 32×32 eight-color burst; additional copies exceed five seconds."
+                                        if self.selected_mode() == "experimental_qpsk_5s" else
+                                        "Repeat the same one-way burst. The receiver combines independently checked image blocks.")
         if hasattr(self, "profile_combo"):
             legacy = self.selected_mode() == "standard"
             self.profile_combo.setEnabled(not self.auto_armed and legacy)
@@ -1660,8 +1676,9 @@ class MainWindow(QMainWindow):
                 symbols, profile = self._card_tx_symbols(card)
                 total_seconds = len(symbols) / profile.baud
             self.transfer_summary.setText(f"{card.width}×{card.height} · {len(card.palette)} colors · {total_seconds:.1f}s")
-        except Exception:
-            self.transfer_summary.setText("Choose a card and burst type to see estimated send time.")
+        except Exception as exc:
+            self.transfer_summary.setText(str(exc) if self.selected_mode() == "experimental_qpsk_5s" else
+                                          "Choose a card and burst type to see estimated send time.")
 
     def _card_tx_audio(self, card, *, beacon=False):
         stage = "card" if beacon else self._outgoing_message_type()
@@ -1978,7 +1995,7 @@ class MainWindow(QMainWindow):
         if self.exchange_mode.currentIndex() != 1:
             QMessageBox.information(self, "Select automatic exchange", "Choose Automatic card exchange before starting.")
             return
-        if self.selected_mode() != "fast_avatar_fec" and not self.selected_mode().startswith("data2g_"):
+        if not is_card_backend(self.selected_mode()) or not get_backend(self.selected_mode()).checked:
             QMessageBox.warning(self, "Choose resilient burst", "Automatic CQ exchanges require resilient burst cards so the message type and integrity checks are available.")
             return
         link_ready = self.test_link_enabled and self.audio_test_mode.isChecked()
@@ -2433,7 +2450,8 @@ class MainWindow(QMainWindow):
             if not already_saved:
                 self._record_received_card(report)
         received_profile = report.get("receive_profile")
-        profile_label = ("Data2G" if str(received_profile).startswith("data2g:") else
+        profile_label = (get_backend(received_profile).label if is_card_backend(received_profile) else
+                         "Data2G" if str(received_profile).startswith("data2g:") else
                          "Card burst" if received_profile == modem.MINIMAL_AVATAR_PROFILE.key else
                          modem.resolve_profile(received_profile).label.split(" · ")[0]
                          if received_profile else "profile unknown")

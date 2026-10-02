@@ -17,4 +17,4 @@ data2g = ["data2g @ git+https://github.com/arodland/Data2G.git@e5452ec185e4f864a
 pixel-qso = "app:main"
 
 [tool.setuptools]
-py-modules = ["app", "cardmodem", "card_views", "card_backends"]
+py-modules = ["app", "cardmodem", "card_views", "card_backends", "weak_signal_modem"]

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -21,6 +22,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import cardmodem as modem
+from tools.synthetic_channel import ReceiveFilter, noise_sigma
 
 
 def load_card(path: Path) -> modem.Card:
@@ -47,8 +49,10 @@ def frequency_shift(samples: np.ndarray, rate: int, offset: float) -> np.ndarray
 
 
 def impair(samples: np.ndarray, *, snr_db: float | None, cfo_hz: float, clock_ppm: float,
-           drop_start: float, drop_end: float, seed: int) -> np.ndarray:
-    result = np.asarray(samples, dtype=np.float32)
+           drop_start: float, drop_end: float, seed: int, snr_reference_hz: float = 2500.,
+           rx_filter: ReceiveFilter | None = None) -> np.ndarray:
+    result = np.asarray(samples, dtype=np.float64).copy()
+    power = float(np.mean(result * result))
     if not (0 <= drop_start < 1 and 0 <= drop_end < 1 and drop_start + drop_end < 1):
         raise ValueError("drop-start/drop-end must be fractions whose sum is below 1")
     left = int(len(result) * drop_start)
@@ -60,10 +64,10 @@ def impair(samples: np.ndarray, *, snr_db: float | None, cfo_hz: float, clock_pp
         result = np.interp(source, np.arange(len(result)), result).astype(np.float32)
     result = frequency_shift(result, modem.SAMPLE_RATE, cfo_hz)
     if snr_db is not None:
-        power = float(np.mean(result * result))
-        noise = (power / (10 ** (snr_db / 10))) ** 0.5
-        result += np.random.default_rng(seed).normal(0, noise, len(result)).astype(np.float32)
-    return result
+        sigma = noise_sigma(snr_db, snr_reference_hz, modem.SAMPLE_RATE, power)
+        result += np.random.default_rng(seed).normal(0, sigma, len(result))
+    rx_filter = rx_filter or ReceiveFilter(modem.SAMPLE_RATE)
+    return rx_filter.apply(result).astype(np.float32)
 
 
 def card_with_identity(source: modem.Card, callsign: str, grid: str, card_id: int,
@@ -94,7 +98,8 @@ def transmit_receive(sender: modem.Card, receiver: modem.Card, *, mode: str, rep
         received = samples
     received = impair(received, snr_db=args.snr_db, cfo_hz=args.cfo_hz,
                       clock_ppm=args.clock_ppm, drop_start=args.drop_start,
-                      drop_end=args.drop_end, seed=seed)
+                      drop_end=args.drop_end, seed=seed,
+                      snr_reference_hz=args.snr_reference_hz, rx_filter=args.receive_filter)
     try:
         decoded_pixels, detail = modem.decode_minimal_avatar_audio_auto(received, modem.SAMPLE_RATE)
         exact = bool(detail.get("exact"))
@@ -128,7 +133,9 @@ def transmit_receive(sender: modem.Card, receiver: modem.Card, *, mode: str, rep
         "transfer_passed": bool(transfer_passed),
         "pixel_integrity": "checked" if detail.get("avatar_mode") == "fast_avatar_fec" else "unverified",
         "received_blocks": detail.get("received_blocks"),
-        "impairments": {"snr_db": args.snr_db, "cfo_hz": args.cfo_hz,
+        "impairments": {"snr_db": args.snr_db, "snr_reference_hz": args.snr_reference_hz,
+                        "snr_reference": "received waveform power before synthetic impairments",
+                        "receive_filter": args.receive_filter.spec, "cfo_hz": args.cfo_hz,
                         "clock_ppm": args.clock_ppm, "drop_start": args.drop_start,
                         "drop_end": args.drop_end},
         "decode_error": decode_error,
@@ -144,7 +151,11 @@ def main() -> int:
                         help="number of identical one-way burst copies (1..20)")
     parser.add_argument("--canvas", type=int, choices=(16, 32, 64), default=32)
     parser.add_argument("--colors", type=int, choices=(8, 16, 32), default=8)
-    parser.add_argument("--snr-db", type=float, default=None, help="synthetic AWGN SNR")
+    parser.add_argument("--snr-db", type=float, default=None, help="synthetic AWGN SNR in --snr-reference-hz")
+    parser.add_argument("--snr-reference-hz", type=float, default=2500)
+    parser.add_argument("--rx-low-hz", type=float, default=100)
+    parser.add_argument("--rx-high-hz", type=float, default=3100)
+    parser.add_argument("--rx-filter-taps", type=int, default=1025)
     parser.add_argument("--cfo-hz", type=float, default=0.0, help="synthetic carrier offset")
     parser.add_argument("--clock-ppm", type=float, default=0.0, help="synthetic sample-clock drift")
     parser.add_argument("--drop-start", type=float, default=0.0, help="fraction of the opening waveform missed")
@@ -156,9 +167,18 @@ def main() -> int:
     args = parser.parse_args()
     if not 1 <= args.repeats <= 20:
         parser.error("--repeats must be between 1 and 20")
+    try:
+        args.receive_filter = ReceiveFilter(modem.SAMPLE_RATE, args.rx_low_hz, args.rx_high_hz,
+                                            args.rx_filter_taps)
+        sigma = noise_sigma(args.snr_db, args.snr_reference_hz, modem.SAMPLE_RATE)
+        if args.snr_db is not None and not 0 < sigma < math.inf:
+            raise ValueError("SNR gives an unrepresentable noise amplitude")
+    except (ValueError, OverflowError) as exc:
+        parser.error(str(exc))
     if args.audio_loopback and (args.tx_device is None or args.rx_device is None):
         parser.error("--audio-loopback requires --tx-device and --rx-device")
-    source = load_card(ROOT / "examples" / "w7pxq-card.json")
+    example = ROOT / "examples" / "w7pxq-card.json"
+    source = load_card(example) if example.is_file() else modem.example_card()
     a = card_with_identity(source, "W7PXQ", "CN87", 0x51A7, args.canvas, args.colors)
     b = card_with_identity(source, "K6TEST", "CM87", 0x52A6, args.canvas, args.colors)
     transfers = [transmit_receive(a, b, mode=args.mode, repeats=args.repeats, args=args, seed=1),

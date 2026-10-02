@@ -7,6 +7,7 @@ hidden = [
     # when the spec is invoked from outside this folder.
     "cardmodem",
     "card_backends",
+    "weak_signal_modem",
     "PySide6.QtNetwork",
     "PySide6.QtMultimedia",
     "PySide6.QtMultimediaWidgets",

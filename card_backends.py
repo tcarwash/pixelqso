@@ -225,7 +225,36 @@ class Data2GBackend:
         return _report(pixels, metadata, sample_rate, f"data2g:{submode}")
 
 
+@dataclass(frozen=True)
+class WeakSignalBackend:
+    key: str = "experimental_qpsk_5s"
+    label: str = "Weak signal · 32×32 · experimental"
+    checked: bool = True
+    max_repeats: int = 1
+
+    def encode(self, card, repeats, message_type, snr_db):
+        import weak_signal_modem as weak
+        return weak.encode(card, repeats, message_type, snr_db)
+
+    def estimate_seconds(self, card, repeats):
+        import weak_signal_modem as weak
+        weak.packet(card)
+        if repeats != 1:
+            raise ValueError("Experimental five-second mode supports one burst")
+        return weak.seconds()
+
+    def minimum_audio_seconds(self):
+        import weak_signal_modem as weak
+        return weak.seconds() - .2
+
+    def decode(self, audio, sample_rate):
+        import weak_signal_modem as weak
+        pixels, metadata = weak.decode(audio, sample_rate)
+        return _report(pixels, metadata, sample_rate, self.key)
+
+
 BACKENDS: dict[str, CardBackend] = {
+    "experimental_qpsk_5s": WeakSignalBackend(),
     "fast_avatar": AvatarBackend("fast_avatar", "Fast · unverified", False),
     "fast_avatar_fec": AvatarBackend("fast_avatar_fec", "Resilient", True),
     "data2g_1200_robust": Data2GBackend("data2g_1200_robust", "Data2G 1.2 kHz · robust · experimental", "qpsk-r1/2"),
@@ -242,5 +271,8 @@ def is_card_backend(key: str) -> bool:
 
 
 def is_available(key: str) -> bool:
+    if key == "experimental_qpsk_5s":
+        return (importlib.util.find_spec("data2g") is not None
+                and importlib.util.find_spec("scipy") is not None)
     return not key.startswith("data2g_") or (importlib.util.find_spec("data2g") is not None
                                              and importlib.util.find_spec("torch") is not None)

@@ -1340,6 +1340,7 @@ def acquire(audio: np.ndarray, sample_rate: int, baud: int | None = None,
         raise ValueError("baud conflicts with selected modem profile")
     rate = selected.baud if profile is not None or baud is None else baud
     tones = selected.tones_hz if profile is not None or baud is None else TONES_HZ
+    narrow_avatar = len(tones) == 8 and rate <= 100
     sps = sample_rate // rate
     if len(audio) < sps * (len(FRAME_SYNC) + 1):
         return 0, 0.0, float(sps)
@@ -1374,7 +1375,10 @@ def acquire(audio: np.ndarray, sample_rate: int, baud: int | None = None,
             score = np.abs(corr[length-1:len(search)]) / np.sqrt(np.maximum(energy,1e-12)*length)
             score[energy < max(float(energy.max())*1e-6,1e-12)] = 0
             best = np.maximum(best,score)
-        peaks = np.flatnonzero(best >= float(best.max())*0.985)
+        # Slow avatar syncs give broad near-equal peaks; choosing an early
+        # shoulder can lock before the actual preamble after leading silence.
+        peak_floor = 0.9999 if narrow_avatar else 0.985
+        peaks = np.flatnonzero(best >= float(best.max()) * peak_floor)
         if len(peaks) and best.max() > 0.05:
             onset = int(peaks[0])*decimation
     candidates = range(max(0, onset - block), min(len(audio) - sps * len(PREAMBLE), onset + block + 1))
@@ -1440,14 +1444,19 @@ def acquire(audio: np.ndarray, sample_rate: int, baud: int | None = None,
     # The short sync has a flat clock peak. When the nominal sample clock
     # scores essentially as well, keep the exact generated rate; longer
     # packet anchors can subsequently track capture-device clock drift.
+    # At low tone frequencies, the energy-only coarse CFO estimate can
+    # miss the true carrier by more than the local refinement window.
+    nominal_shifts = np.arange(-20.0, 20.01, 0.25) if narrow_avatar else fine_shifts
     nominal = [(template_score(start, float(sps), float(carrier)), start, float(carrier))
-               for start in fine_starts for carrier in fine_shifts]
+               for start in fine_starts for carrier in nominal_shifts]
     nominal_score, nominal_start, nominal_shift = max(nominal)
     # Short syncs become much less informative about sub-sample timing at
     # high symbol rates. Their best isolated fit can be biased just enough to
     # walk out of a long card. Keep the known nominal sample clock when it is
     # close, then let the multi-frame anchor fit below track capture-clock drift.
-    nominal_floor = 0.95 if rate >= 300 else 0.999
+    # Slow avatars also need this tolerance: their short sync fit can bias
+    # timing enough to walk out of a long card at any audio placement.
+    nominal_floor = 0.95 if rate >= 300 or narrow_avatar else 0.999
     if nominal_score >= best_clock_score * nominal_floor:
         recovered_start, recovered_period, recovered_shift = nominal_start, float(sps), nominal_shift
     # Below the coherent matched-filter floor, a long search can fit a noise

@@ -16,6 +16,7 @@ import traceback
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from modem_benchmark import channel
+from synthetic_channel import ReceiveFilter
 import cardmodem as pixel
 import numpy as np
 
@@ -23,6 +24,10 @@ import numpy as np
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--combined', action='store_true', help='Exercise four-copy reception at -9 dB')
+    parser.add_argument('--narrow', choices=('100', '50', '25'), help='Exercise a narrow resilient mode')
+    parser.add_argument('--placement', choices=('near_carrier', 'centered', 'custom'), default='near_carrier')
+    parser.add_argument('--low-hz', type=int, default=300)
+    parser.add_argument('--single-mode', action='store_true', help='Receive only the selected narrow mode and placement')
     args = parser.parse_args()
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
     with tempfile.TemporaryDirectory(prefix='pixelqso-weak-app-') as directory:
@@ -51,6 +56,21 @@ def main():
             window.mode_combo.setCurrentIndex(window.mode_combo.findData('experimental_qpsk_5s'))
             windows.append(window)
         tx, rx = windows
+        if args.narrow:
+            tx.mode_combo.setCurrentIndex(tx.mode_combo.findData(f'resilient_{args.narrow}'))
+            tx.repeat_count.setValue(1)
+            tx.audio_placement_combo.setCurrentIndex(tx.audio_placement_combo.findData(args.placement))
+            tx.audio_low_hz.setValue(args.low_hz)
+            assert tx.audio_placement_combo.isEnabled()
+            assert tx.audio_low_hz.isEnabled() == (args.placement == 'custom')
+            assert tx.settings.value('transfer/audio_placement', 'near_carrier') == args.placement
+            assert int(tx.settings.value('transfer/audio_low_hz', 300)) == args.low_hz
+            rx.audio_placement_combo.setCurrentIndex(rx.audio_placement_combo.findData('near_carrier'))
+            rx.audio_low_hz.setValue(args.low_hz)
+            if args.placement == 'custom':
+                rx.audio_placement_combo.setCurrentIndex(rx.audio_placement_combo.findData('custom'))
+            expected_low = args.low_hz if args.placement == 'custom' else 1500-3.5*int(args.narrow) if args.placement == 'centered' else int(args.narrow)
+            assert f'{expected_low:g}–' in tx.transfer_summary.text()
         if args.combined:
             tx.mode_combo.setCurrentIndex(tx.mode_combo.findData('experimental_qpsk_combined'))
             tx.repeat_count.setValue(4)
@@ -58,10 +78,18 @@ def main():
         # Receive must not depend on the station's selected TX format.
         rx.mode_combo.setCurrentIndex(rx.mode_combo.findData('fast_avatar_fec'))
         rx.receive_all_modes.setChecked(True)
+        if args.single_mode:
+            assert args.narrow, '--single-mode requires --narrow'
+            rx.mode_combo.setCurrentIndex(rx.mode_combo.findData(f'resilient_{args.narrow}'))
+            rx.receive_all_modes.setChecked(False)
+            rx.audio_placement_combo.setCurrentIndex(rx.audio_placement_combo.findData(args.placement))
         card = pixel.example_card()
         clean = tx._card_tx_audio(card)
-        assert len(clean)/48000 == 4.622 * (4 if args.combined else 1)
-        received, measures = channel(clean, {}, -9 if args.combined else -3, 801)
+        from card_backends import get_backend
+        assert len(clean)/48000 == get_backend(tx.selected_mode(), tx.selected_audio_placement()).estimate_seconds(card, tx.repeat_count.value())
+        rx_filter = ReceiveFilter(48000, low_hz=0) if args.narrow else None
+        received, measures = channel(clean, {}, 6 if args.narrow else -9 if args.combined else -3, 801,
+                                     rx_filter=rx_filter)
         tx.tx_bytes = (np.clip(received,-1,1)*32767).astype('<i2').tobytes()
         tx.tx_offset = 0
         tx.tx_label = 'weak signal integration test'
@@ -69,7 +97,7 @@ def main():
         tx.tx_deadline = len(received)/48000 + 10
         rx.start_receive()
         tx._start_tx_audio()
-        deadline = time.monotonic()+40
+        deadline = time.monotonic()+len(received)/48000+40
         while time.monotonic() < deadline:
             qt.processEvents()
             if rx.seen_received_cards and not rx.live_decode_inflight and rx.decode_jobs == 0:
@@ -93,6 +121,18 @@ def main():
         if args.combined:
             assert any(report.get('card', {}).get('diagnostics', {}).get('combined_copies', 0) > 1
                        for report in found), 'Image was not recovered by soft combining'
+        if args.narrow:
+            # Exercise the independent file-decode worker with the same RX
+            # placement, including auto reception of a different TX preset.
+            path = Path(directory) / 'placement.wav'
+            pixel.write_wav(path, clean)
+            worker = app.DecodeWorker(path, Path(directory) / 'placement-state.json',
+                                      mode=rx.receive_mode(), audio_placement=rx.selected_audio_placement())
+            results = []
+            worker.signals.finished.connect(results.append)
+            worker.run()
+            assert results and results[0][2] is None, results
+            assert results[0][1]['card']['exact'] and results[0][1]['pixels'] == expected
         print(json.dumps(dict(result='PASS', snr_db_reference=measures['measured_snr_db_reference'],
                               waveform_seconds=len(clean)/48000, saved_exact_cards=len(found),
                               receive_status=rx.rx_status.text()), indent=2))

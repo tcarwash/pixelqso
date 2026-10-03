@@ -31,6 +31,28 @@ The app supports:
 - Local card and QSO storage
 - CAT/PTT through Hamlib
 
+Choose **Resilient · ≈900 Hz**, **≈450 Hz**, or **≈225 Hz** under
+Transmission type for narrower, longer 8-FSK bursts. Choose **Audio placement**
+independently: **Near carrier** (the default) uses tones at 100–800, 50–400,
+or 25–200 Hz, respectively; **Centered at 1500 Hz** moves the same signal
+into the middle of the audio passband; **Custom lowest tone** lets you set
+the bottom tone in Hz. Placement is saved separately from the modem type.
+The summary shows the actual tone range. On USB those tones are above the
+dial frequency; on LSB they are below it. Your radio's audio filters only
+need to pass that range; stations do not need identical filter widths.
+A 32×32 eight-color card takes 12.36, 24.72, or 49.44 seconds per copy,
+respectively (the original Resilient mode takes 3.09 seconds). Larger canvases,
+more colors, and extra copies increase the duration; the UI shows the total.
+These modes retain the existing block error protection and support automatic
+reception through **Receive all installed modem types**. Both stations need
+a version with these modes installed. Bandwidths are nominal estimates;
+live radio performance has not yet been measured. Automatic reception tries
+both placement presets and the configured custom range. With automatic
+reception off, RX uses the selected placement. For other custom placements,
+match the receiver's setting or tune the radio to align the received tones.
+This setting applies to the three narrow Resilient modes. Both stations need
+the corrected one-symbol-rate tone spacing introduced with these modes.
+
 ## Mobile web app and control API
 
 Enable **Mobile control** in Station settings → Options. Pixel QSO starts an

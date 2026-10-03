@@ -122,7 +122,7 @@ class DecodeSignals(QObject):
     finished = Signal(object)
 
 
-def decode_all_card_backends(audio, sample_rate):
+def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier"):
     """Try installed card formats; checked cards outrank unverified previews."""
     preview = None
     for key, backend in BACKENDS.items():
@@ -130,14 +130,17 @@ def decode_all_card_backends(audio, sample_rate):
             continue  # Raw/resilient avatars and single/combined QPSK share decoders.
         if len(audio) < backend.minimum_audio_seconds() * sample_rate:
             continue
-        try:
-            report = backend.decode(audio, sample_rate)
-        except ValueError:
-            continue  # No matching frame in this snapshot.
-        if report["card"].get("exact"):
-            return report
-        if preview is None:
-            preview = report
+        placements = (list(dict.fromkeys((audio_placement, "near_carrier", "centered")))
+                      if key.startswith("resilient_") else [audio_placement])
+        for placement in placements:
+            try:
+                report = get_backend(key, placement).decode(audio, sample_rate)
+            except ValueError:
+                continue  # No matching frame in this snapshot.
+            if report["card"].get("exact"):
+                return report
+            if preview is None:
+                preview = report
     return preview
 
 
@@ -151,24 +154,25 @@ def decode_avatar_report(audio, sample_rate):
 
 
 class DecodeWorker(QRunnable):
-    def __init__(self, path: Path, state_path: Path, profile="auto", mode="standard"):
+    def __init__(self, path: Path, state_path: Path, profile="auto", mode="standard", audio_placement="near_carrier"):
         super().__init__()
         self.path = path
         self.state_path = state_path
         self.profile = profile
         self.mode = mode
+        self.audio_placement = audio_placement
         self.signals = DecodeSignals()
 
     def run(self):
         try:
             audio, sr = modem.read_wav(self.path)
             if self.mode == "auto":
-                result = decode_all_card_backends(audio, sr)
+                result = decode_all_card_backends(audio, sr, self.audio_placement)
                 if result is not None:
                     self.signals.finished.emit((str(self.path), result, None))
                     return
             if is_card_backend(self.mode) and self.mode not in {"fast_avatar", "fast_avatar_fec"}:
-                self.signals.finished.emit((str(self.path), get_backend(self.mode).decode(audio, sr), None))
+                self.signals.finished.emit((str(self.path), get_backend(self.mode, self.audio_placement).decode(audio, sr), None))
                 return
             try:
                 result = decode_avatar_report(audio, sr)
@@ -195,27 +199,28 @@ class DecodeWorker(QRunnable):
 
 class LiveDecodeWorker(QRunnable):
     """Decode a snapshot of the in-memory receive buffer while it is recording."""
-    def __init__(self, samples: bytes, sample_rate: int, profile: str, generation: int, mode="standard"):
+    def __init__(self, samples: bytes, sample_rate: int, profile: str, generation: int, mode="standard", audio_placement="near_carrier"):
         super().__init__()
         self.samples = samples
         self.sample_rate = sample_rate
         self.profile = profile
         self.generation = generation
         self.mode = mode
+        self.audio_placement = audio_placement
         self.signals = DecodeSignals()
 
     def run(self):
         try:
             audio = np.frombuffer(self.samples, dtype="<i2").astype(np.float32) / 32768.0
             if self.mode == "auto":
-                result = decode_all_card_backends(audio, self.sample_rate)
+                result = decode_all_card_backends(audio, self.sample_rate, self.audio_placement)
                 if result is not None:
                     result["valid_packet_count"] = 0
                     self.signals.finished.emit((self.generation, result,
                                                 bool(result["card"].get("exact")), None))
                     return
             if is_card_backend(self.mode) and self.mode not in {"fast_avatar", "fast_avatar_fec"}:
-                result = get_backend(self.mode).decode(audio, self.sample_rate)
+                result = get_backend(self.mode, self.audio_placement).decode(audio, self.sample_rate)
                 card = result["card"]
                 self.signals.finished.emit((self.generation, {"valid_packet_count": 0,
                     "card": card, "pixels": result["pixels"], "fresh_packets": [],
@@ -1636,6 +1641,22 @@ class MainWindow(QMainWindow):
         self.mode_combo.currentIndexChanged.connect(self._update_transfer_controls)
         self.mode_combo.currentIndexChanged.connect(self._refresh_transfer_summary)
         mode_form = QFormLayout(); mode_form.addRow("Transmission type", self.mode_combo)
+        self.audio_placement_combo = QComboBox()
+        for label, value in (("Near carrier", "near_carrier"), ("Centered at 1500 Hz", "centered"),
+                             ("Custom lowest tone", "custom")):
+            self.audio_placement_combo.addItem(label, value)
+        placement_index = self.audio_placement_combo.findData(self.settings.value("transfer/audio_placement", "near_carrier"))
+        self.audio_placement_combo.setCurrentIndex(max(0, placement_index))
+        self.audio_low_hz = QSpinBox()
+        self.audio_low_hz.setRange(25, 2200)
+        self.audio_low_hz.setSuffix(" Hz")
+        self.audio_low_hz.setValue(int(self.settings.value("transfer/audio_low_hz", 300)))
+        self.audio_placement_combo.setToolTip("Place the narrow signal inside your radio's usable audio passband. Bandwidth and send time stay the same.")
+        self.audio_low_hz.setToolTip("Lowest of the eight tones. For custom placement, use the same setting at the receiver or tune the radio to align the signal.")
+        self.audio_placement_combo.currentIndexChanged.connect(self._audio_placement_changed)
+        self.audio_low_hz.valueChanged.connect(self._audio_placement_changed)
+        mode_form.addRow("Audio placement", self.audio_placement_combo)
+        mode_form.addRow("Lowest tone", self.audio_low_hz)
         self.receive_all_modes = QCheckBox("Receive all installed modem types")
         self.receive_all_modes.setChecked(self.settings.value("transfer/receive_all", True, type=bool))
         self.receive_all_modes.toggled.connect(lambda value: self.settings.setValue("transfer/receive_all", value))
@@ -1972,6 +1993,16 @@ class MainWindow(QMainWindow):
     def selected_mode(self):
         return self.mode_combo.currentData() or "standard"
 
+    def selected_audio_placement(self):
+        placement = self.audio_placement_combo.currentData()
+        return self.audio_low_hz.value() if placement == "custom" else placement
+
+    def _audio_placement_changed(self, *_):
+        self.settings.setValue("transfer/audio_placement", self.audio_placement_combo.currentData())
+        self.settings.setValue("transfer/audio_low_hz", self.audio_low_hz.value())
+        self._update_transfer_controls()
+        self._refresh_transfer_summary()
+
     def receive_mode(self):
         return "auto" if self.receive_all_modes.isChecked() else self.selected_mode()
 
@@ -2012,6 +2043,11 @@ class MainWindow(QMainWindow):
         self._refresh_transfer_summary()
 
     def _update_transfer_controls(self, *_):
+        if hasattr(self, "audio_placement_combo"):
+            narrow = self.selected_mode().startswith("resilient_")
+            self.audio_placement_combo.setEnabled(narrow and not self.auto_armed)
+            self.audio_low_hz.setEnabled(narrow and not self.auto_armed and
+                                         self.audio_placement_combo.currentData() == "custom")
         if hasattr(self, "repeat_count"):
             backend = get_backend(self.selected_mode()) if is_card_backend(self.selected_mode()) else None
             maximum = getattr(backend, "max_repeats", 20)
@@ -2045,11 +2081,15 @@ class MainWindow(QMainWindow):
         try:
             card = self._chosen_card()
             if is_card_backend(self.selected_mode()):
-                total_seconds = get_backend(self.selected_mode()).estimate_seconds(card, self.repeat_count.value())
+                backend = get_backend(self.selected_mode(), self.selected_audio_placement())
+                total_seconds = backend.estimate_seconds(card, self.repeat_count.value())
             else:
                 symbols, profile = self._card_tx_symbols(card)
                 total_seconds = len(symbols) / profile.baud
             self.transfer_summary.setText(f"{card.width}×{card.height} · {len(card.palette)} colors · {total_seconds:.1f}s")
+            if self.selected_mode().startswith("resilient_"):
+                tones = backend.profile.tones_hz
+                self.transfer_summary.setText(self.transfer_summary.text() + f" · {tones[0]:g}–{tones[-1]:g} Hz audio")
         except Exception as exc:
             self.transfer_summary.setText(str(exc) if self.selected_mode() == "experimental_qpsk_5s" else
                                           "Choose a card and burst type to see estimated send time.")
@@ -2060,7 +2100,7 @@ class MainWindow(QMainWindow):
         snr_db = self.tx_snr_db if stage in {"exchange", "report73"} else None
         mode = self.selected_mode()
         if is_card_backend(mode):
-            return get_backend(mode).encode(card, self.repeat_count.value(), wire_type, snr_db)
+            return get_backend(mode, self.selected_audio_placement()).encode(card, self.repeat_count.value(), wire_type, snr_db)
         symbols, profile = self._card_tx_symbols(card, beacon=beacon)
         return modem.synthesize(symbols, profile=profile)
 
@@ -2450,6 +2490,7 @@ class MainWindow(QMainWindow):
                        self.rig_host, self.rig_port, self.rig_button, self.rig_refresh, self.output_device,
                        self.input_device, self.station_call, self.station_grid, self.audio_test_mode):
             widget.setEnabled(False)
+        self._update_transfer_controls()
         self.exchange_log.append(f"Automatic {self.auto_role} flow armed.")
         if self.auto_role == "caller": self.transmit_exchange()
         else: self.start_receive()
@@ -2478,6 +2519,7 @@ class MainWindow(QMainWindow):
                        self.rig_host, self.rig_port, self.rig_button, self.rig_refresh, self.output_device,
                        self.input_device, self.station_call, self.station_grid, self.audio_test_mode):
             widget.setEnabled(True)
+        self._update_transfer_controls()
         if self.rx_timer.isActive():
             self.rx_timer.stop()
             if self.rx_audio: self.rx_audio.stop()
@@ -2839,7 +2881,7 @@ class MainWindow(QMainWindow):
     def start_decode(self, path, profile="auto"):
         self.rx_status.setText(f"Decoding {path.name} in the background…")
         self.decode_jobs += 1
-        worker = DecodeWorker(path, Path(self.combine.text()), profile, self.receive_mode())
+        worker = DecodeWorker(path, Path(self.combine.text()), profile, self.receive_mode(), self.selected_audio_placement())
         worker.signals.finished.connect(self.decode_finished)
         self.decode_pool.start(worker)
 
@@ -3032,8 +3074,9 @@ class MainWindow(QMainWindow):
                     else:
                         self.test_rx_expected = next_sequence
         # Keep receive memory bounded during long quiet sessions. The window
-        # is much longer than a normal card burst and is cleared after a card.
-        max_rx_bytes = self.rx_rate * 180 * 2
+        # fits a full 64x64/32-color burst at 25 baud (301.52 seconds),
+        # with room for leading silence, and is cleared after a card.
+        max_rx_bytes = self.rx_rate * 360 * 2
         if len(self.rx_bytes) > max_rx_bytes:
             trim_bytes = len(self.rx_bytes) - max_rx_bytes
             trim_bytes -= trim_bytes % 2
@@ -3060,7 +3103,7 @@ class MainWindow(QMainWindow):
         self.test_rx_final_pending = False
         snapshot = bytes(self.rx_bytes)
         worker = LiveDecodeWorker(snapshot, self.rx_rate, self.rx_live_profile or "auto", self.auto_generation,
-                                  self.receive_mode())
+                                  self.receive_mode(), self.selected_audio_placement())
         worker.signals.finished.connect(self._live_decode_finished)
         self.live_decode_inflight = True
         self.decode_pool.start(worker)

@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 import importlib.util
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 import numpy as np
@@ -39,24 +39,38 @@ class AvatarBackend:
     key: str
     label: str
     checked: bool
+    profile: pixel.ModemProfile = pixel.MINIMAL_AVATAR_PROFILE
 
     def encode(self, card, repeats, message_type, snr_db):
         cycle = (pixel.minimal_avatar_resilient_cycle_symbols(card, message_type=message_type, snr_db=snr_db)
                  if self.checked else pixel.minimal_avatar_symbols(card, message_type=message_type, snr_db=snr_db))
-        return pixel.synthesize(pixel.repeat_symbol_stream(cycle, repeats), profile=pixel.MINIMAL_AVATAR_PROFILE)
+        return pixel.synthesize(pixel.repeat_symbol_stream(cycle, repeats), profile=self.profile)
 
     def estimate_seconds(self, card, repeats):
         duration = (pixel.minimal_avatar_resilient_duration(card=card) if self.checked
                     else pixel.minimal_avatar_duration(card=card))
-        return repeats * duration
+        return repeats * duration * pixel.MINIMAL_AVATAR_PROFILE.baud / self.profile.baud
 
     def decode(self, audio, sample_rate):
-        pixels, decoded = pixel.decode_minimal_avatar_audio_auto(audio, sample_rate)
-        return _report(pixels, decoded, sample_rate, pixel.MINIMAL_AVATAR_PROFILE.key)
+        if self.profile.baud < pixel.MINIMAL_AVATAR_PROFILE.baud and sample_rate == AUDIO_RATE:
+            # Narrow modes fit comfortably in 8 kHz audio. Filter before
+            # decimation so acquisition does not scan long 48 kHz symbols.
+            taps = np.arange(-48, 49)
+            kernel = np.sinc(taps / 8) * np.hamming(len(taps))
+            kernel /= kernel.sum()
+            audio = np.convolve(np.asarray(audio), kernel, mode="same")[::6]
+            decode_rate = 8000
+        else:
+            decode_rate = sample_rate
+        pixels, decoded = pixel.decode_minimal_avatar_audio_auto(audio, decode_rate, profile=self.profile)
+        if self.profile != pixel.MINIMAL_AVATAR_PROFILE:
+            decoded["avatar_mode"] = self.key
+            decoded["audio_tones_hz"] = list(self.profile.tones_hz)
+        return _report(pixels, decoded, sample_rate, self.profile.key)
 
     def minimum_audio_seconds(self):
         symbols = len(pixel.FRAME_SYNC) + pixel.AVATAR_META_TONE_COUNT + (132 if self.checked else 32)
-        return symbols / pixel.MINIMAL_AVATAR_PROFILE.baud
+        return symbols / self.profile.baud
 
 
 # One independently CRC-checked Data2G codeword carries one card fragment.
@@ -278,13 +292,31 @@ BACKENDS: dict[str, CardBackend] = {
     "experimental_qpsk_combined": WeakSignalCombinedBackend(),
     "fast_avatar": AvatarBackend("fast_avatar", "Fast · unverified", False),
     "fast_avatar_fec": AvatarBackend("fast_avatar_fec", "Resilient", True),
+    **{f"resilient_{baud}": AvatarBackend(
+        f"resilient_{baud}", f"Resilient · ≈{9 * baud} Hz · {baud} baud", True,
+        pixel.ModemProfile(f"avatar-{baud}", f"Narrow avatar · {baud} baud", baud,
+                           tuple((i + 1) * baud for i in range(8)), 9 * baud))
+       for baud in (100, 50, 25)},
     "data2g_1200_robust": Data2GBackend("data2g_1200_robust", "Data2G 1.2 kHz · robust · experimental", "qpsk-r1/2"),
     "data2g_1200_fast": Data2GBackend("data2g_1200_fast", "Data2G 1.2 kHz · fast · experimental", "16qam-r1/2"),
 }
 
 
-def get_backend(key: str) -> CardBackend:
-    return BACKENDS[key]
+def get_backend(key: str, audio_placement: str | float = "near_carrier") -> CardBackend:
+    backend = BACKENDS[key]
+    if not key.startswith("resilient_"):
+        return backend
+    baud = backend.profile.baud
+    if audio_placement == "near_carrier":
+        low = baud
+    elif audio_placement == "centered":
+        low = 1500 - 3.5 * baud
+    else:
+        low = float(audio_placement)
+    if not math.isfinite(low) or not 25 <= low <= 3000 - 8 * baud:
+        raise ValueError("Audio placement must keep the narrow signal between 25 and 3000 Hz")
+    profile = replace(backend.profile, tones_hz=tuple(low + i * baud for i in range(8)))
+    return replace(backend, profile=profile)
 
 
 def is_card_backend(key: str) -> bool:

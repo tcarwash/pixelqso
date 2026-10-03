@@ -26,14 +26,14 @@ class CompanionServer:
             def do_GET(self):
                 if self.path == "/" or self.path.startswith("/app"):
                     self.reply(200, PAGE, "text/html")
-                elif self.path.startswith("/api/"): self.command("GET", self.path[5:], {})
+                elif self.path.startswith("/api/"): self.dispatch_api("GET", self.path[5:], {})
                 else: self.reply(404, {"error":"Not found"})
             def do_POST(self):
                 if not self.path.startswith("/api/"): return self.reply(404,{"error":"Not found"})
                 try: data=json.loads(self.rfile.read(int(self.headers.get("Content-Length",0)) or 0) or b"{}")
                 except (ValueError, json.JSONDecodeError): return self.reply(400,{"error":"Invalid JSON"})
-                self.command("POST",self.path[5:],data)
-            def command(self,method,path,data):
+                self.dispatch_api("POST",self.path[5:],data)
+            def dispatch_api(self,method,path,data):
                 try: self.reply(200,owner.dispatch(method,path,data))
                 except TimeoutError as e: self.reply(504,{"error":str(e)})
                 except (ValueError,KeyError) as e: self.reply(400,{"error":str(e)})

@@ -253,8 +253,29 @@ class WeakSignalBackend:
         return _report(pixels, metadata, sample_rate, self.key)
 
 
+@dataclass(frozen=True)
+class WeakSignalCombinedBackend(WeakSignalBackend):
+    key: str = "experimental_qpsk_combined"
+    label: str = "Weak signal · combined copies · experimental"
+    max_repeats: int = 8
+
+    def encode(self, card, repeats, message_type, snr_db):
+        import weak_signal_modem as weak
+        if not 1 <= repeats <= self.max_repeats:
+            raise ValueError("Combined weak-signal mode supports 1..8 copies")
+        return np.tile(weak.encode(card, 1, message_type, snr_db), repeats)
+
+    def estimate_seconds(self, card, repeats):
+        import weak_signal_modem as weak
+        weak.packet(card)
+        if not 1 <= repeats <= self.max_repeats:
+            raise ValueError("Combined weak-signal mode supports 1..8 copies")
+        return repeats * weak.seconds()
+
+
 BACKENDS: dict[str, CardBackend] = {
     "experimental_qpsk_5s": WeakSignalBackend(),
+    "experimental_qpsk_combined": WeakSignalCombinedBackend(),
     "fast_avatar": AvatarBackend("fast_avatar", "Fast · unverified", False),
     "fast_avatar_fec": AvatarBackend("fast_avatar_fec", "Resilient", True),
     "data2g_1200_robust": Data2GBackend("data2g_1200_robust", "Data2G 1.2 kHz · robust · experimental", "qpsk-r1/2"),
@@ -271,7 +292,7 @@ def is_card_backend(key: str) -> bool:
 
 
 def is_available(key: str) -> bool:
-    if key == "experimental_qpsk_5s":
+    if key in {"experimental_qpsk_5s", "experimental_qpsk_combined"}:
         return (importlib.util.find_spec("data2g") is not None
                 and importlib.util.find_spec("scipy") is not None)
     return not key.startswith("data2g_") or (importlib.util.find_spec("data2g") is not None

@@ -124,6 +124,10 @@ Synthetic and loopback tests verify software behavior only; they do not establis
 
 The optional **Weak signal · 32×32 · experimental** transmission type carries a
 checked 32×32 eight-color card in 4.622 seconds using shaped QPSK and LDPC.
+For weaker signals, **Weak signal · combined copies · experimental** sends
+1–8 identical bursts and combines soft bit evidence at the receiver. Start with
+four copies (18.488 seconds of audio). Both formats require the `weak-signal`
+extra and retain whole-card integrity checks; neither provides partial images.
 Install `uv sync --extra weak-signal` to enable it without installing
 PyTorch. See
 [the modem format, limits and measurements](WEAK-SIGNAL-MODEM.md).

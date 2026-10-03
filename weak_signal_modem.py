@@ -10,7 +10,7 @@ import struct
 import zlib
 
 import numpy as np
-from scipy.signal import fftconvolve, resample_poly
+from scipy.signal import fftconvolve, resample_poly, find_peaks
 import cardmodem as pixel
 
 FS = 8000
@@ -134,10 +134,11 @@ def unpack(bits, diagnostics):
     return pixels, metadata
 
 
-def decode(audio, sample_rate=48000):
-    training, pilots, permutation, _, h = constants()
-    divisor = math.gcd(sample_rate, FS)
-    source = resample_poly(np.asarray(audio, float), FS//divisor, sample_rate//divisor)
+def acquire(source):
+    """Find nonoverlapping bursts without assuming their spacing or identity."""
+    training, _, _, _, h = constants()
+    if len(source) < PREAMBLE*SPS:
+        raise ValueError('Incomplete experimental burst')
     time = np.arange(len(source))/FS
     base = np.sqrt(2)*source*np.exp(-2j*np.pi*CARRIER*time)
     matched = fftconvolve(base, h)
@@ -150,11 +151,33 @@ def decode(audio, sample_rate=48000):
             shifted = samples*np.exp(-2j*np.pi*offset*np.arange(len(samples))/2000)
             corr = fftconvolve(shifted, training[::-1].conj(), 'valid')
             score = abs(corr)**2 / np.maximum(energy*PREAMBLE, 1e-20)
-            position = int(np.argmax(score))
-            candidates.append((score[position], position*SPS+phase, offset))
-    score, start, offset = max(candidates)
-    if score < .12:
+            positions, _ = find_peaks(score, height=.08, distance=PREAMBLE)
+            for position in positions:
+                candidates.append((score[position], int(position)*SPS+phase, offset))
+    if not candidates:
         raise ValueError('No experimental preamble acquired')
+    selected = []
+    frame_samples = (PREAMBLE + BLOCKS*(PILOTS+DATA))*SPS
+    for candidate in sorted(candidates, reverse=True):
+        if all(abs(candidate[1]-other[1]) >= frame_samples for other in selected):
+            selected.append(candidate)
+        if len(selected) >= 20:
+            break
+    return sorted(selected, key=lambda item: item[1])
+
+
+def soft_frame(source, candidate):
+    """Return noise-weighted bit evidence; never release unchecked pixels."""
+    training, pilots, permutation, _, h = constants()
+    score, start, offset = candidate
+    capture_start = start
+    first = max(0, start - len(h)*2)
+    last = start + (PREAMBLE + BLOCKS*(PILOTS+DATA))*SPS + len(h)*2
+    source = source[first:last]
+    start -= first
+    time = np.arange(len(source))/FS
+    base = np.sqrt(2)*source*np.exp(-2j*np.pi*CARRIER*time)
+    matched = fftconvolve(base, h)
     # Refine frequency coherently against the full training sequence.
     positions = start + np.arange(PREAMBLE)*SPS
     best = None
@@ -196,10 +219,45 @@ def decode(audio, sample_rate=48000):
     llr[1::2] = 2*math.sqrt(2)*values.imag.ravel()/max(variance,1e-10)
     ordered = np.empty(N)
     ordered[permutation] = llr
-    bits, iterations = decode_ldpc(ordered)
-    pixels, metadata = unpack(bits, dict(acquisition_score=float(score), carrier_offset_hz=float(offset),
-                                        clock_ppm=(step/SPS-1)*1e6, ldpc_iterations=iterations))
     estimated_snr = 10*np.log10(max(float(np.mean(abs(smooth)**2)), 1e-20)/max(variance,1e-20)*2000/2500)
-    metadata['measured_snr_db'] = max(-127, min(127, round(estimated_snr)))
-    metadata['diagnostics']['estimated_snr_db_2500'] = float(estimated_snr)
-    return pixels, metadata
+    return ordered, dict(acquisition_score=float(score), carrier_offset_hz=float(offset),
+                         clock_ppm=(step/SPS-1)*1e6,
+                         start_seconds=capture_start/FS,
+                         estimated_snr_db_2500=float(estimated_snr))
+
+
+def decode(audio, sample_rate=48000):
+    divisor = math.gcd(sample_rate, FS)
+    source = resample_poly(np.asarray(audio, float), FS//divisor, sample_rate//divisor)
+    frames = []
+    error = ValueError('Incomplete experimental burst')
+    for candidate in acquire(source):
+        try:
+            frames.append(soft_frame(source, candidate))
+        except ValueError as exc:
+            error = exc
+    if not frames:
+        raise error
+    # Try the strongest individual frame first, then accumulate evidence.
+    # Different payloads must still pass whole-card CRC; no pixel guess is saved.
+    frames.sort(key=lambda item: item[1]['acquisition_score'], reverse=True)
+    attempts = [(frames[0][0], frames[:1])]
+    for count in range(2, len(frames)+1):
+        attempts.append((np.sum([frame[0] for frame in frames[:count]], axis=0), frames[:count]))
+    attempts.extend((frame[0], [frame]) for frame in frames[1:])
+    for llrs, used in attempts:
+        try:
+            bits, iterations = decode_ldpc(llrs)
+            diagnostics = dict(used[0][1], ldpc_iterations=iterations,
+                               combined_copies=len(used), acquired_copies=len(frames),
+                               copy_diagnostics=[frame[1] for frame in used])
+            pixels, metadata = unpack(bits, diagnostics)
+        except ValueError as exc:
+            error = exc
+            continue
+        metadata['received_copies'] = len(used)
+        metadata['color_stage'] = f'CRC checked card · {len(used)} combined copies'
+        snr = np.mean([frame[1]['estimated_snr_db_2500'] for frame in used])
+        metadata['measured_snr_db'] = max(-127, min(127, round(snr)))
+        return pixels, metadata
+    raise error

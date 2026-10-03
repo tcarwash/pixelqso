@@ -122,6 +122,25 @@ class DecodeSignals(QObject):
     finished = Signal(object)
 
 
+def decode_all_card_backends(audio, sample_rate):
+    """Try installed card formats; checked cards outrank unverified previews."""
+    preview = None
+    for key, backend in BACKENDS.items():
+        if key in {"fast_avatar", "experimental_qpsk_combined"} or not is_available(key):
+            continue  # Raw/resilient avatars and single/combined QPSK share decoders.
+        if len(audio) < backend.minimum_audio_seconds() * sample_rate:
+            continue
+        try:
+            report = backend.decode(audio, sample_rate)
+        except ValueError:
+            continue  # No matching frame in this snapshot.
+        if report["card"].get("exact"):
+            return report
+        if preview is None:
+            preview = report
+    return preview
+
+
 def decode_avatar_report(audio, sample_rate):
     pixels, decoded = modem.decode_minimal_avatar_audio_auto(audio, sample_rate)
     card = {**decoded, "palette": decoded.get("palette") or
@@ -143,6 +162,11 @@ class DecodeWorker(QRunnable):
     def run(self):
         try:
             audio, sr = modem.read_wav(self.path)
+            if self.mode == "auto":
+                result = decode_all_card_backends(audio, sr)
+                if result is not None:
+                    self.signals.finished.emit((str(self.path), result, None))
+                    return
             if is_card_backend(self.mode) and self.mode not in {"fast_avatar", "fast_avatar_fec"}:
                 self.signals.finished.emit((str(self.path), get_backend(self.mode).decode(audio, sr), None))
                 return
@@ -183,6 +207,13 @@ class LiveDecodeWorker(QRunnable):
     def run(self):
         try:
             audio = np.frombuffer(self.samples, dtype="<i2").astype(np.float32) / 32768.0
+            if self.mode == "auto":
+                result = decode_all_card_backends(audio, self.sample_rate)
+                if result is not None:
+                    result["valid_packet_count"] = 0
+                    self.signals.finished.emit((self.generation, result,
+                                                bool(result["card"].get("exact")), None))
+                    return
             if is_card_backend(self.mode) and self.mode not in {"fast_avatar", "fast_avatar_fec"}:
                 result = get_backend(self.mode).decode(audio, self.sample_rate)
                 card = result["card"]
@@ -1605,6 +1636,10 @@ class MainWindow(QMainWindow):
         self.mode_combo.currentIndexChanged.connect(self._update_transfer_controls)
         self.mode_combo.currentIndexChanged.connect(self._refresh_transfer_summary)
         mode_form = QFormLayout(); mode_form.addRow("Transmission type", self.mode_combo)
+        self.receive_all_modes = QCheckBox("Receive all installed modem types")
+        self.receive_all_modes.setChecked(self.settings.value("transfer/receive_all", True, type=bool))
+        self.receive_all_modes.toggled.connect(lambda value: self.settings.setValue("transfer/receive_all", value))
+        mode_form.addRow("Receive", self.receive_all_modes)
         self.repeat_count = QSpinBox(); self.repeat_count.setRange(1, 20); self.repeat_count.setValue(int(self.settings.value("transfer/repeats", 3)))
         self.repeat_count.setToolTip("Repeat the same one-way burst. The receiver combines independently checked image blocks.")
         self.repeat_count.valueChanged.connect(lambda value: self.settings.setValue("transfer/repeats", value))
@@ -1937,6 +1972,9 @@ class MainWindow(QMainWindow):
     def selected_mode(self):
         return self.mode_combo.currentData() or "standard"
 
+    def receive_mode(self):
+        return "auto" if self.receive_all_modes.isChecked() else self.selected_mode()
+
     def _save_auto_stage_cards(self, *_):
         for stage, combo in getattr(self, "stage_card_combos", {}).items():
             path = combo.currentData()
@@ -1989,6 +2027,8 @@ class MainWindow(QMainWindow):
                 self.repeat_count.setMaximum(maximum)
             self.repeat_count.setToolTip("One complete checked 32×32 eight-color burst; additional copies exceed five seconds."
                                         if self.selected_mode() == "experimental_qpsk_5s" else
+                                        "Combine soft evidence from repeated 4.622-second bursts; 4 copies take 18.488 seconds."
+                                        if self.selected_mode() == "experimental_qpsk_combined" else
                                         "Repeat the same one-way burst. The receiver combines independently checked image blocks.")
         if hasattr(self, "profile_combo"):
             legacy = self.selected_mode() == "standard"
@@ -2799,7 +2839,7 @@ class MainWindow(QMainWindow):
     def start_decode(self, path, profile="auto"):
         self.rx_status.setText(f"Decoding {path.name} in the background…")
         self.decode_jobs += 1
-        worker = DecodeWorker(path, Path(self.combine.text()), profile, self.selected_mode())
+        worker = DecodeWorker(path, Path(self.combine.text()), profile, self.receive_mode())
         worker.signals.finished.connect(self.decode_finished)
         self.decode_pool.start(worker)
 
@@ -2957,7 +2997,7 @@ class MainWindow(QMainWindow):
                 receive_error("Audio failed", "Not listening · could not open the selected audio input.")
                 return
         self.rx_bytes.clear()
-        self.rx_live_profile = self.selected_profile() if (self.test_link_enabled or is_card_backend(self.selected_mode())) else None
+        self.rx_live_profile = None if self.receive_mode() == "auto" else self.selected_profile() if (self.test_link_enabled or is_card_backend(self.selected_mode())) else None
         self.live_decode_inflight = False; self.live_decode_samples = 0; self.rx_timer.start()
         self.auto_receive_timer.stop()
         self.listen_indicator.setText("● LISTENING")
@@ -3002,7 +3042,10 @@ class MainWindow(QMainWindow):
         if not self.rx_timer.isActive() or self.live_decode_inflight:
             return
         sample_count = len(self.rx_bytes) // 2
-        if is_card_backend(self.selected_mode()):
+        if self.receive_mode() == "auto":
+            minimum_samples = self.rx_rate
+            interval = self.rx_rate
+        elif is_card_backend(self.selected_mode()):
             backend = get_backend(self.selected_mode())
             minimum_samples = int(backend.minimum_audio_seconds() * self.rx_rate)
             interval = max(1, int((1.0 if self.selected_mode().startswith("data2g_") else 0.5) * self.rx_rate))
@@ -3017,7 +3060,7 @@ class MainWindow(QMainWindow):
         self.test_rx_final_pending = False
         snapshot = bytes(self.rx_bytes)
         worker = LiveDecodeWorker(snapshot, self.rx_rate, self.rx_live_profile or "auto", self.auto_generation,
-                                  self.selected_mode())
+                                  self.receive_mode())
         worker.signals.finished.connect(self._live_decode_finished)
         self.live_decode_inflight = True
         self.decode_pool.start(worker)
@@ -3096,7 +3139,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._drain_rx)
             return
         card = report.get("card") or {}
-        if card.get("card_id") is not None:
+        if card.get("card_id") is not None and self.receive_mode() != "auto":
             self.rx_live_profile = report.get("receive_profile")
         report, improved = self._merge_live_preview(report)
         card = report.get("card") or {}

@@ -8,10 +8,10 @@ Torch kept out of the runtime install. Synthetic Qt, protocol, and weak-signal
 compatibility tests pass. Isolated native and pinned Python two-host KISS/card
 loopbacks pass; standard and weak-signal Linux frozen builds pass their
 bundled-host checks, and the packaged UI connects to the managed host. Live
-radio/on-air testing remains. The operator's Data2G GUI is
-in use, so its single-client ARQ
-command and data ports must not be probed by opening a replacement command
-client that could interrupt that session.
+radio/on-air testing remains. The full Python suite passes 70 tests and 34
+subtests. The operator's Data2G GUI is in use, so its single-client ARQ command
+and data ports must not be probed by opening a replacement command client that
+could interrupt that session.
 
 ## Target behavior
 
@@ -146,9 +146,12 @@ tags, interleaved command statuses, reconnects, bounded queues, and timeouts.
 Do not automatically replay outstanding frames after reconnect: their actual
 transmission status may be unknown.
 
-Acceptance: a protocol fake covers split/coalesced reads, escaped bytes,
-non-default ports, refused modes, disconnects, missing ACKs, and loss/drop statuses.
-The pinned Python host and native host both pass command and KISS interoperability tests.
+Validation: protocol tests cover split/coalesced reads, escaped bytes,
+non-default ports, refused modes, disconnects, missing ACKs, loss/drop statuses,
+and delayed managed-host listeners. The pinned Python-host and native-host
+two-client tests both transferred a CRC-verified card through the supported
+command/KISS APIs. Do not probe the operator's active command port for another
+interoperability test.
 
 ## Step 3 — Separate card framing from waveform generation
 
@@ -164,29 +167,20 @@ plus whole-raster CRC32.
 The compact RX preview has a progress bar below the card; it shows provisional
 pixel coverage and changes to “CRC verified” at full integrity.
 
-Extract the existing card serialization/reassembly responsibilities from
-`Data2GBackend` in `card_backends.py` into a transport-independent card protocol.
-Keep callsign/grid, message stage, dimensions, palette, card identity, fragment
-index/count, duplicate suppression, and whole-image integrity checks in PixelQSO.
+Implementation notes: Pixel QSO owns callsign/grid, message stage, dimensions,
+palette, card and image identity, byte offsets, duplicate suppression, and the
+whole-raster checksum. Assemblies are retained per sender/image; a later CQ can
+refine the same content, a new image becomes the active preview, and returning to
+an earlier image resumes its progress. Data2G delivers complete checked KISS
+frames, so preview granularity is one application fragment rather than partial
+symbols from a failed PHY codeword. The application frame size is tested through
+both native and Python hosts and is not assumed to match one PHY codeword.
 
-Define a versioned KISS frame payload with a magic/application version and an
-image-content identity. Make fragment sizes fit the actual host's accepted frame
-limits; `MODES` bytes-per-codeword alone is not a complete KISS frame-size contract.
-Test host overhead and limits rather than assuming one application fragment must
-always equal one PHY codeword.
-
-Cache assemblies by image content and sender. A later CQ with the same image can
-refine its existing assembly even when a transmission/session identifier changes.
-A different image switches the compact RX preview to the newest assembly; returning
-to an earlier image resumes its retained progress. Keep incomplete cards clearly
-provisional and publish a fully accepted card only after complete integrity checks.
-The supported KISS API supplies received frames, not arbitrary partial pixels from
-failed Data2G codewords: preview granularity is therefore application fragments.
-
-Acceptance: out-of-order, duplicate, missing, corrupted, restarted, and interleaved
+Validation: out-of-order, duplicate, missing, corrupted, restarted, and interleaved
 image transfers preserve identity and never promote an incomplete card to verified.
-Decide explicitly whether old `PQD2` application frames need read compatibility;
-that does not make the old PHY compatible with the new host's broadcasts.
+Compatibility decision: old `PQD2` PCM waveform frames are not accepted by the
+new Data2G KISS path; no legacy waveform reader is retained. This does not affect
+saved card JSON or the independent local audio modem formats.
 
 ## Step 4 — Integrate host operation into the app
 
@@ -218,34 +212,16 @@ fast preset, and shut down cleanly when the smoke test ended. The operator
 confirmed the connection UI now reports connected. No over-air card transfer
 has yet been verified.
 
-Add Data2G connection configuration and clear connected/unsupported/disconnected
-status in Options. Discover the host's modes when connecting, and surface useful
-bandwidth and timing information in the transmission UI.
-
-Replace the current Data2G `encode/decode PCM` branch with frame submission and
-frame/status callbacks. Track queued, transmitted, partial receive, and verified
-receive separately. Implement repeats as fresh application-frame submissions;
-ACKMODE completes each local send, and an operator reply remains the remote receipt.
-
-When Data2G is active, release PixelQSO's radio audio and CAT/PTT ownership before
-the host uses them. Local 100/50/25-baud operation retains PixelQSO's remembered device
-settings. Switching execution paths must stop/release the previous owner first.
-Use supported host radio controls where available; do not invent a CAT or tuning
-command that PR #37 does not provide.
-
-Audit stop/cancel behavior against the real host. Its ARQ `ABORT` command must not
-be assumed to cancel broadcast queues. Test port-close/drop behavior, show pending
-or unknown status honestly, and document what an already-started burst can do.
-
-Preserve the compact newest-image preview and session wall. Keep the waterfall
-for local audio modes. For host Data2G, only display audio/signal diagnostics that
-a documented host recording or telemetry interface actually supplies. Do not
-retain internal DSP imports merely to populate the old waterfall or SNR fields.
-
-Acceptance: protocol fakes cover manual and automatic host transfer; two real
-host-backed clients must still exchange cards. Mode switches cannot produce
-simultaneous audio/PTT owners; disconnect and cancel handling leave UI and
-transport state consistent. Exercise the real Qt and phone/API paths.
+Validation: the headless Qt/API test covers manual and automatic host transfer,
+the full CQ/exchange/73/final-73 flow, stop behavior, and CAT handoff. Data2G
+mode selection releases PixelQSO's receive/CAT path; the host remains the only
+Data2G audio/PTT owner. The connection UI has now been confirmed working by the
+operator. On real hardware, verify ownership while transmitting and receiving,
+including what an already-started host burst does when PixelQSO closes a group.
+The host exposes burst recordings, not the old in-process waterfall/SNR stream;
+keep host signal data unknown unless a documented host interface provides it.
+The remaining acceptance gate is live equipment and on-air operation, not
+another synthetic Qt path.
 
 ## Step 5 — Remove Data2G code dependencies
 
@@ -264,15 +240,15 @@ encoder/table and SciPy. Desktop CI now builds both variants on its Linux,
 Windows, and macOS runners; only the Linux variants have been built and checked
 locally in this workspace.
 
-Acceptance: focused modem tests pass and deterministic bits match the old
-construction. The wheel includes the generated table module and declares the pinned Data2G host runtime but no Torch dependency. Rebuild
-and inspect the standard and weak-signal frozen apps with the bundled host. Recursive archive inspection confirms
-the standard Linux one-file build includes Data2G/SciPy and PyAudio for managed
-hosting. Its frozen host CLI lists modes successfully, and archive inspection
-found no Torch, Triton, or NVIDIA packages. Rebuild and inspect the weak-signal
-variant on each supported target OS. Native host
-interoperability is covered by the two-host loopback described in Step 2; radio
-and RF interoperability remain to be checked.
+Validation: focused modem tests pass and deterministic bits match the previous
+construction. The wheel contains the generated table module and declares the
+pinned Data2G host runtime without a Torch dependency. Both Linux one-file
+variants include the Data2G host CLI and icon; the standard variant omits the
+weak-signal modules, and neither archive contains Torch, Triton, or NVIDIA
+packages. The standard frozen CLI enumerates the configured USB device under
+its PortAudio ID; both frozen CLIs enumerate host modes. CI now builds both
+variants on each supported OS, but Windows and macOS results still need a CI
+run. Radio and RF interoperability remain to be checked.
 
 ## Step 6 — Update on-air tools and documentation
 
@@ -286,27 +262,14 @@ the event hooks and raster matching. Audio benchmark and replay CLIs now exclude
 host modes, which accept KISS frames rather than local PCM. Real WebSDR/host
 measurements remain.
 
-Teach `on_air.py`, `tools/on_air_test.py`, and `tools/open_two_clients.py` about
-host command/KISS events and application fragment traffic. Log discovered modes,
-queued tags, transmission ACKs, loss/drop notices, and verified image hashes.
-Preserve the existing local two-window WebSDR workflow for 100/50/25-baud tests.
-For Data2G WebSDR tests, route browser audio into the receiving Data2G host and
-connect PixelQSO to that host; PixelQSO no longer decodes Data2G WAVs itself.
-
-Use supported upstream recording/replay facilities for Data2G PCM analysis, or
-report their absence as a limitation. Keep recorded audio and sensitive connection
-configuration out of committed fixtures. UTC event proximity alone must not be
-presented as a matched on-air transfer; use sender/image identity and raster hashes.
-
-Update `README.md`, `ON-AIR-TESTING.md`, packaging instructions, and benchmark tools.
-Document the external host installation, radio ownership, group name, mode policy,
-300-Hz lowest-tone setting for local narrow modes, and version-2 migration.
-Data2G audio placement comes from host capabilities/configuration; do not promise
-that the local narrow-mode 300-Hz control configures Data2G.
-
-Acceptance: documented fresh-install commands work; the launch script uses AG7SU /
-CN85 as requested; reports distinguish synthetic tests, replay, live host operation,
-and verified on-air recovery.
+The README and on-air guide document the pinned host runtime, managed/remote
+setup, radio ownership, `PIXELQSO` group, normal/experimental mode policy,
+AG7SU/CN85 test defaults, and the 300-Hz local narrow-mode placement. Data2G's
+own audio placement remains host-configured. `tools/on_air_test.py` and the
+two-window launcher expose the host-event and capture/report flows; their help
+commands and Qt event-hook tests pass. The host stores its own per-burst audio;
+Pixel QSO does not claim access to private host decoder internals. Real WebSDR
+and RF measurements remain pending.
 
 ## Step 7 — Clean up after the replacement passes
 

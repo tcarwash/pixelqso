@@ -1,9 +1,10 @@
 # Previous direct Data2G PCM backend (removed)
 
 This document described the old in-process adapter that imported Data2G's Python
-modem and exchanged audio samples. That adapter, its package dependency, and its
-PCM benchmark path have been removed. PixelQSO now connects to a separately
-running Data2G host through its supported command and KISS interfaces.
+modem and exchanged audio samples. That adapter and its PCM benchmark path have
+been removed. Data2G remains a pinned standard-install dependency because the
+managed child host uses its supported command and KISS interfaces; PixelQSO
+does not call Data2G modem functions in-process.
 
 See [the current migration plan](docs/DATA2G-INTEGRATION-PLAN.md) for mode policy,
 frame format, host operation, and verification status, and

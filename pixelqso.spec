@@ -1,8 +1,5 @@
 # PyInstaller spec. Build this file on each target OS; binaries are native to
 # the build host, so a Windows executable cannot be produced from Linux.
-import os
-
-include_weak_signal = os.environ.get("PIXELQSO_FREEZE_WEAK_SIGNAL") == "1"
 include_data2g_host = True
 bundled_datas = [(os.path.join(SPECPATH, "icon.png"), ".")]
 bundled_binaries = []
@@ -21,13 +18,14 @@ hidden = [
     "data2g_transport",
     "data2g_runtime",
     "card_transfer",
+    "weak_signal_modem",
+    "weak_signal_ldpc",
+    "weak_signal_ldpc_data",
     "webserver",
     "PySide6.QtNetwork",
     "PySide6.QtMultimedia",
     "PySide6.QtMultimediaWidgets",
 ]
-if include_weak_signal:
-    hidden.extend(["weak_signal_modem", "weak_signal_ldpc", "weak_signal_ldpc_data"])
 hidden.extend(bundled_hidden)
 
 a = Analysis(
@@ -39,11 +37,9 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # Never bundle heavyweight training/GPU runtimes. The base frozen app
-    # includes the supported Data2G host runtime, but excludes its optional
-    # training/GPU dependencies and the optional weak-signal modules.
-    excludes=["torch", "triton", "nvidia"] + ([] if include_weak_signal else [
-        "weak_signal_modem", "weak_signal_ldpc", "weak_signal_ldpc_data"]),
+    # CPU experimental modes ship in this single app and remain UI-gated.
+    # Never bundle heavyweight Data2G training/GPU runtimes.
+    excludes=["torch", "triton", "nvidia"],
     noarchive=False,
     optimize=1,
 )

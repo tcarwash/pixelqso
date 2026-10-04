@@ -83,6 +83,5 @@ Still to verify with live equipment:
 
 Incremental redundancy remains a separate future protocol feature. It is not
 part of the merged broadcast API and Pixel QSO does not claim soft combining
-across Data2G broadcast copies. See [ON-AIR-TESTING.md](ON-AIR-TESTING.md) for
-test setup and [the integration plan](docs/DATA2G-INTEGRATION-PLAN.md) for the
-full status and acceptance criteria.
+across Data2G broadcast copies. Audio/PTT ownership and live RF performance
+depend on the connected host and radio setup.

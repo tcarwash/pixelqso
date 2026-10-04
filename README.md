@@ -31,12 +31,8 @@ and local card and QSO storage.
 Resilient 100, 50, and 25 baud are normal modes. Resilient 100 is the default
 when no compatible Data2G host mode is selected. Higher-speed Resilient, Fast,
 Weak signal, and legacy modes are under **Show experimental modem modes** in
-Station settings. Weak signal is optional and uses SciPy without PyTorch:
-
-```sh
-uv sync --extra weak-signal
-uv run --extra weak-signal python app.py
-```
+Station settings. CPU weak-signal modes ship in the same app. They need no
+PyTorch or GPU packages; SciPy is included by the Data2G runtime.
 
 Data2G Robust and Fast become available after Pixel QSO discovers compatible
 modes from a Data2G host. Robust is preferred for a new selection when the host
@@ -60,40 +56,18 @@ owned by its GUI; use the managed host or a separate host instance instead.
 ACKMODE confirms that a local frame finished transmitting; it does not confirm
 that another station received the card. Group names and CRC masks are not
 encryption or privacy. See [the host protocol notes](DATA2G-BROADCAST-NOTES.md)
-and [on-air testing guide](ON-AIR-TESTING.md).
-
-## Two-client software test
-
-Run two isolated windows linked by simulated audio. This does not use radio,
-CAT, PTT, or physical audio devices:
-
-```sh
-uv run python tools/open_two_clients.py
-```
-
-For WebSDR, radio, or Data2G host tests, follow [ON-AIR-TESTING.md](ON-AIR-TESTING.md).
-For controlled modem comparisons and recorded captures, see
-[BENCHMARKING.md](BENCHMARKING.md). Synthetic results do not establish live RF
-performance.
+for details on group and frame behavior.
 
 ## Build
 
-The default frozen app includes the managed Data2G host runtime and excludes
-PyTorch, GPU packages, and Pixel QSO's optional Weak signal modem:
+The frozen app includes the managed Data2G host runtime and experimental CPU
+modems, while excluding PyTorch and GPU packages:
 
 ```sh
 python -m pip install . PyInstaller
 python -m PyInstaller --clean --noconfirm pixelqso.spec
 ```
 
-Build the optional Weak signal variant with SciPy using:
-
-```sh
-python -m pip install '.[weak-signal]' PyInstaller
-PIXELQSO_FREEZE_WEAK_SIGNAL=1 python -m PyInstaller --clean --noconfirm pixelqso.spec
-```
-
-Both builds contain `icon.png`. Build on each target operating system; the
-desktop CI matrix builds standard and Weak signal packages for Linux, Windows,
-and macOS. Linux smoke tests and bundled Data2G host checks are tracked in
-[the integration plan](docs/DATA2G-INTEGRATION-PLAN.md).
+The one build contains `icon.png` and all CPU modes. Build on each target
+operating system; desktop CI builds one package for Linux, Windows, and macOS.
+The managed Data2G host is bundled in each platform build.

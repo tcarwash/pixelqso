@@ -374,21 +374,15 @@ dependencies = [
 loopback = [
     { name = "sounddevice" },
 ]
-weak-signal = [
-    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
-    { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "data2g", extras = ["tnc"], git = "https://github.com/arodland/Data2G.git?rev=20bdb05c3cbb24d7d28b613a86841f51c00ba8f9" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "pyside6", specifier = ">=6.6" },
-    { name = "scipy", marker = "extra == 'weak-signal'", specifier = ">=1.10" },
     { name = "sounddevice", marker = "extra == 'loopback'", specifier = ">=0.4.6" },
 ]
-provides-extras = ["loopback", "weak-signal"]
+provides-extras = ["loopback"]
 
 [[package]]
 name = "pyaudio"

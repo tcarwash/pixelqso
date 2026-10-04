@@ -31,13 +31,9 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install build dependencies
-        run: python -m pip install --upgrade pip PyInstaller '.[weak-signal]'
-      - name: Build standard native application
-        run: python -m PyInstaller --clean --noconfirm --distpath dist/standard --workpath build/standard pixelqso.spec
-      - name: Build weak-signal native application
-        env:
-          PIXELQSO_FREEZE_WEAK_SIGNAL: "1"
-        run: python -m PyInstaller --clean --noconfirm --distpath dist/weak-signal --workpath build/weak-signal pixelqso.spec
+        run: python -m pip install --upgrade pip PyInstaller .
+      - name: Build desktop application
+        run: python -m PyInstaller --clean --noconfirm pixelqso.spec
       - name: Package Linux / Windows output
         if: runner.os != 'macOS'
         shell: bash
@@ -46,19 +42,16 @@ jobs:
           from pathlib import Path
           import zipfile
           with zipfile.ZipFile('${{ matrix.artifact }}.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
-              for label, root in [('standard', Path('dist/standard')),
-                                  ('weak-signal', Path('dist/weak-signal'))]:
-                  for path in root.rglob('*'):
-                      if path.is_file():
-                          archive.write(path, f"{label}/{path.relative_to(root).as_posix()}")
+              for path in Path('dist').rglob('*'):
+                  if path.is_file():
+                      archive.write(path, path.relative_to('dist').as_posix())
           PY
       - name: Package macOS applications
         if: runner.os == 'macOS'
         run: |
-          ditto -c -k --sequesterRsrc --keepParent dist/standard/PixelQSO.app ${{ matrix.artifact }}-standard.zip
-          ditto -c -k --sequesterRsrc --keepParent dist/weak-signal/PixelQSO.app ${{ matrix.artifact }}-weak-signal.zip
+          ditto -c -k --sequesterRsrc --keepParent dist/PixelQSO.app ${{ matrix.artifact }}.zip
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}*.zip
+          path: ${{ matrix.artifact }}.zip
           if-no-files-found: error

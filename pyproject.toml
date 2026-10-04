@@ -14,9 +14,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Keep radio/GPU extras out of the default desktop install.
+# Loopback audio is optional; Data2G supplies SciPy for the bundled CPU modem.
 loopback = ["sounddevice>=0.4.6"]
-weak-signal = ["scipy>=1.10"]
 
 [project.scripts]
 pixel-qso = "app:main"

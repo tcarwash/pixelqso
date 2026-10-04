@@ -13,3 +13,18 @@ __pycache__/
 # Local runtime data and audio captures
 .pytest_cache/
 .ruff_cache/
+
+# Local-only modem research tools and operator-specific on-air tooling
+/tools/test_*.py
+/tools/modem_benchmark.py
+/tools/summarize_weak_signal.py
+/tools/synthetic_channel.py
+/tools/weak_signal_campaign.py
+/tools/on_air_test.py
+/tools/open_two_clients.py
+/tools/two_client_loopback.py
+/tools/websdr_loopback.py
+/ON-AIR-TESTING.md
+/WEAK-SIGNAL-MODEM.md
+/BENCHMARKING.md
+/docs/DATA2G-INTEGRATION-PLAN.md

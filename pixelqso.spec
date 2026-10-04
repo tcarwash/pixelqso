@@ -1,37 +1,54 @@
-from PyInstaller.utils.hooks import collect_data_files
-
 # PyInstaller spec. Build this file on each target OS; binaries are native to
 # the build host, so a Windows executable cannot be produced from Linux.
+import os
+import sys
+
+platform_icon = None
+if sys.platform == "win32":
+    platform_icon = os.path.join(SPECPATH, "icon.ico")
+elif sys.platform == "darwin":
+    platform_icon = os.path.join(SPECPATH, "icon.icns")
+
+include_data2g_host = True
+bundled_datas = [(os.path.join(SPECPATH, "icon.png"), ".")]
+bundled_binaries = []
+bundled_hidden = []
+if include_data2g_host:
+    from PyInstaller.utils.hooks import collect_all
+    data2g_datas, data2g_binaries, data2g_hidden = collect_all("data2g")
+    bundled_datas.extend(data2g_datas)
+    bundled_binaries.extend(data2g_binaries)
+    bundled_hidden.extend(data2g_hidden)
 hidden = [
     # Local modules are not reliably discovered by the frozen app analysis
     # when the spec is invoked from outside this folder.
     "cardmodem",
     "card_backends",
+    "data2g_transport",
+    "data2g_runtime",
+    "card_transfer",
     "weak_signal_modem",
+    "weak_signal_ldpc",
+    "weak_signal_ldpc_data",
+    "webserver",
     "PySide6.QtNetwork",
     "PySide6.QtMultimedia",
     "PySide6.QtMultimediaWidgets",
 ]
-
-data2g_data = []
-try:
-    import data2g
-except ImportError:
-    pass
-else:
-    hidden.append("data2g")
-    data2g_data = collect_data_files("data2g")
+hidden.extend(bundled_hidden)
 
 a = Analysis(
     ["app.py"],
     pathex=[SPECPATH],
-    binaries=[],
-    datas=data2g_data,
+    binaries=bundled_binaries,
+    datas=bundled_datas,
     hiddenimports=hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # CPU experimental modes ship in this single app and remain UI-gated.
+    # Never bundle heavyweight Data2G training/GPU runtimes.
+    excludes=["torch", "triton", "nvidia"],
     noarchive=False,
     optimize=1,
 )
@@ -51,14 +68,16 @@ exe = EXE(
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
+    icon=platform_icon,
     codesign_identity=None,
     entitlements_file=None,
 )
 
-if __import__("sys").platform == "darwin":
+if sys.platform == "darwin":
     app = BUNDLE(
         exe,
         name="PixelQSO.app",
+        icon=platform_icon,
         bundle_identifier="org.pixelqso.desktop",
         info_plist={"NSHighResolutionCapable": "True"},
     )

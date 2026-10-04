@@ -1,0 +1,11 @@
+This distribution includes the 5G NR BG2 base-graph table from Sionna v2.1.0:
+src/sionna/phy/fec/ldpc/codes/5G_bg2.csv
+
+The table is specified by 3GPP TS 38.212, Tables 5.3.2-2 and 5.3.2-3.
+Copyright (c) 2021-2026 NVIDIA CORPORATION & AFFILIATES.
+The table is licensed under Apache License 2.0; see Apache-2.0.txt.
+Source: https://github.com/NVlabs/sionna/tree/v2.1.0/src/sionna/phy/fec/ldpc/codes
+
+The PixelQSO fixed LDPC matrix is generated from this standards table for the
+experimental 3376/14080, BG2 configuration. No Data2G Python implementation is
+included in this artifact.

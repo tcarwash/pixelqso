@@ -3,7 +3,10 @@ name: Build desktop applications
 on:
   workflow_dispatch:
   push:
+    branches: [main, data2g_integration]
     tags: ["v*"]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
@@ -27,18 +30,34 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+      - name: Install PortAudio development headers on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev
+      - name: Install PortAudio on macOS
+        if: runner.os == 'macOS'
+        run: brew install portaudio
       - name: Install build dependencies
         run: python -m pip install --upgrade pip PyInstaller .
-      - name: Build native application
+      - name: Build desktop application
         run: python -m PyInstaller --clean --noconfirm pixelqso.spec
       - name: Package Linux / Windows output
         if: runner.os != 'macOS'
         shell: bash
         run: |
-          python -c "import pathlib, zipfile; p=pathlib.Path('dist'); out=pathlib.Path('${{ matrix.artifact }}.zip'); z=zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED); [z.write(f,f.relative_to(p)) for f in p.rglob('*') if f.is_file()]; z.close()"
-      - name: Package macOS application
+          python - <<'PY'
+          from pathlib import Path
+          import zipfile
+          with zipfile.ZipFile('${{ matrix.artifact }}.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+              for path in Path('dist').rglob('*'):
+                  if path.is_file():
+                      archive.write(path, path.relative_to('dist').as_posix())
+          PY
+      - name: Package macOS applications
         if: runner.os == 'macOS'
-        run: ditto -c -k --sequesterRsrc --keepParent dist/PixelQSO.app ${{ matrix.artifact }}.zip
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent dist/PixelQSO.app ${{ matrix.artifact }}.zip
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

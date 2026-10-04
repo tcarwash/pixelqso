@@ -7,16 +7,18 @@ name = "pixel-qso"
 version = "0.3.0"
 description = "Repeated-burst digital radio image-card application"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.24", "PySide6>=6.6"]
+dependencies = [
+    "numpy>=1.24",
+    "PySide6>=6.6",
+    "data2g[tnc] @ git+https://github.com/arodland/Data2G.git@20bdb05c3cbb24d7d28b613a86841f51c00ba8f9",
+]
 
 [project.optional-dependencies]
-# Keep radio/GPU extras out of the default desktop install.
+# Loopback audio is optional; Data2G supplies SciPy for the bundled CPU modem.
 loopback = ["sounddevice>=0.4.6"]
-data2g = ["data2g @ git+https://github.com/arodland/Data2G.git@e5452ec185e4f864a716d3682a2ab1a90af3a951", "torch>=2.13"]
-weak-signal = ["data2g @ git+https://github.com/arodland/Data2G.git@e5452ec185e4f864a716d3682a2ab1a90af3a951", "scipy>=1.10"]
 
 [project.scripts]
 pixel-qso = "app:main"
 
 [tool.setuptools]
-py-modules = ["app", "cardmodem", "card_views", "card_backends", "weak_signal_modem"]
+py-modules = ["app", "cardmodem", "card_views", "card_backends", "card_transfer", "data2g_transport", "data2g_runtime", "weak_signal_modem", "weak_signal_ldpc", "weak_signal_ldpc_data", "webserver", "on_air"]

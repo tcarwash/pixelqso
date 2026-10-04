@@ -673,7 +673,58 @@ def minimal_avatar_resilient_duration(repeats: int = 1, card: Card | None = None
     return repeats * symbols / MINIMAL_AVATAR_PROFILE.baud
 
 
-def decode_minimal_avatar_resilient_symbols(symbols: Iterable[int], *, require_sync: bool = True) -> tuple[list[int], list[bool], int, dict]:
+def _decode_soft_avatar_block(codeword: list[int], received_tone_metrics: np.ndarray,
+                              expected_crc: int, shortened: int) -> tuple[list[int], bool] | None:
+    """Bounded Chase search for weak GF(64) symbols; CRC is the acceptance gate."""
+    def checked(candidate):
+        try:
+            values, corrected = _rs64_decode(candidate, shortened=shortened)
+        except ValueError:
+            return None
+        return (values, corrected) if crc16(_avatar_data_bytes(values)) == expected_crc else None
+
+    result = checked(codeword)
+    if result is not None or received_tone_metrics.shape[0] < len(codeword) * 2:
+        return result
+    metrics = np.asarray(received_tone_metrics[:len(codeword) * 2], dtype=np.float64)
+    metrics /= np.maximum(metrics.sum(axis=1, keepdims=True), 1e-12)
+    alternatives = []
+    for index, hard in enumerate(codeword):
+        pair = metrics[index * 2:index * 2 + 2]
+        likelihood = np.asarray([pair[0, value >> 3] + pair[1, value & 7]
+                                 for value in range(64)])
+        order = np.argsort(likelihood)[::-1]
+        # Keep the hard decisions in the received word as the baseline. Chase
+        # hypotheses only replace that symbol with one of its soft runners-up.
+        choices = [int(value) for value in order if int(value) != hard][:2]
+        if choices:
+            alternatives.append((float(likelihood[order[0]] - likelihood[order[1]]), index, choices))
+    alternatives.sort()
+    weakest = alternatives[:10]
+    for _, index, choices in weakest:
+        for value in choices:
+            candidate = codeword[:]
+            candidate[index] = value
+            result = checked(candidate)
+            if result is not None:
+                return result
+    # Let RS correct one additional symbol after hypothesizing two weak ones.
+    for left in range(min(6, len(weakest))):
+        for right in range(left + 1, min(6, len(weakest))):
+            _, i, a_values = weakest[left]
+            _, j, b_values = weakest[right]
+            for a in a_values:
+                for b in b_values:
+                    candidate = codeword[:]
+                    candidate[i], candidate[j] = a, b
+                    result = checked(candidate)
+                    if result is not None:
+                        return result
+    return None
+
+
+def decode_minimal_avatar_resilient_symbols(symbols: Iterable[int], *, require_sync: bool = True,
+                                             tone_metrics: np.ndarray | None = None) -> tuple[list[int], list[bool], int, dict]:
     tones = [int(value) for value in symbols]
     groups: dict[tuple, dict] = {}
     cursor = 0
@@ -699,7 +750,11 @@ def decode_minimal_avatar_resilient_symbols(symbols: Iterable[int], *, require_s
         pixels_per_block = (AVATAR_RS_K * 6) // bpp
         block_count = (pixel_count + pixels_per_block - 1) // pixels_per_block
         group = groups.setdefault(key, {"pixels": [0] * pixel_count, "received": [False] * block_count,
-                                        "corrected": 0, "metadata": metadata})
+                                        "block_checksums": [None] * block_count,
+                                        "coverage": [False] * pixel_count,
+                                        "votes": [[0] * (1 << bpp) for _ in range(pixel_count)],
+                                        "copies": 0, "corrected": 0, "metadata": metadata})
+        group["copies"] += 1
         block_start = meta_end
         for block_index in range(block_count):
             first_pixel = block_index * pixels_per_block
@@ -708,24 +763,52 @@ def decode_minimal_avatar_resilient_symbols(symbols: Iterable[int], *, require_s
             coded_tone_count = (data_count + 2) * 2
             tone_count = coded_tone_count + 6
             block_end = block_start + tone_count
-            if block_end > len(tones):
-                break
-            wire = tones[block_start:block_end]
             data_tone_count = coded_tone_count
-            try:
-                coded = _tones_to_gf64(wire[:data_tone_count])
-                shortened = AVATAR_RS_K - data_count
-                values, corrected = _rs64_decode(coded, shortened=shortened)
-                expected_crc = int.from_bytes(_tones_crc16(wire[data_tone_count:]), "big")
-                if crc16(_avatar_data_bytes(values)) != expected_crc:
-                    raise ValueError("avatar block checksum failed")
-                block_pixels = _gf64_to_pixels(values, current_pixel_count, bpp)
-                group["pixels"][first_pixel:first_pixel + current_pixel_count] = block_pixels
-                if not group["received"][block_index]:
-                    group["corrected"] += int(corrected)
-                group["received"][block_index] = True
-            except (ValueError, ZeroDivisionError):
-                pass
+            data_symbols_tones = tones[block_start:min(block_end, len(tones))]
+            minimum_data_tones = data_count * 2
+            if len(data_symbols_tones) >= minimum_data_tones:
+                # The shortened RS word is systematic: its first data_count
+                # GF(64) values already make a useful preview, even before
+                # parity and block CRC arrive. Keep this candidate explicitly
+                # provisional; a later checked copy replaces it.
+                raw_values = _tones_to_gf64(data_symbols_tones[:minimum_data_tones])
+                candidate_pixels = _gf64_to_pixels(raw_values, current_pixel_count, bpp)
+                first_pixel = block_index * pixels_per_block
+                for pixel_offset, value in enumerate(candidate_pixels):
+                    pixel_index = first_pixel + pixel_offset
+                    group["votes"][pixel_index][value] += 1
+                    group["coverage"][pixel_index] = True
+                    group["pixels"][pixel_index] = max(
+                        range(1 << bpp), key=group["votes"][pixel_index].__getitem__)
+
+            if block_end <= len(tones):
+                wire = tones[block_start:block_end]
+                try:
+                    coded = _tones_to_gf64(wire[:data_tone_count])
+                    shortened = AVATAR_RS_K - data_count
+                    expected_crc = int.from_bytes(_tones_crc16(wire[data_tone_count:]), "big")
+                    try:
+                        values, corrected = _rs64_decode(coded, shortened=shortened)
+                        if crc16(_avatar_data_bytes(values)) != expected_crc:
+                            raise ValueError("avatar block checksum failed")
+                    except ValueError:
+                        if tone_metrics is None:
+                            raise
+                        block_metrics = tone_metrics[block_start:block_start + data_tone_count]
+                        recovered = _decode_soft_avatar_block(coded, block_metrics,
+                                                              expected_crc, shortened)
+                        if recovered is None:
+                            raise
+                        values, corrected = recovered
+                    block_pixels = _gf64_to_pixels(values, current_pixel_count, bpp)
+                    group["pixels"][first_pixel:first_pixel + current_pixel_count] = block_pixels
+                    group["coverage"][first_pixel:first_pixel + current_pixel_count] = [True] * current_pixel_count
+                    if not group["received"][block_index]:
+                        group["corrected"] += int(corrected)
+                    group["received"][block_index] = True
+                    group["block_checksums"][block_index] = expected_crc
+                except (ValueError, ZeroDivisionError):
+                    pass
             block_start = block_end
         cursor = start + len(FRAME_SYNC)
     if require_sync and not saw_sync:
@@ -733,9 +816,84 @@ def decode_minimal_avatar_resilient_symbols(symbols: Iterable[int], *, require_s
     if not groups:
         raise ValueError("no valid avatar identity block received yet")
     best = max(groups.values(), key=lambda item: sum(item["received"]))
-    if not any(best["received"]):
-        raise ValueError("no complete, verified avatar image blocks received yet")
-    return best["pixels"], best["received"], best["corrected"], best["metadata"]
+    if not any(best["coverage"]):
+        raise ValueError("no avatar image symbols received yet")
+    return best["pixels"], best["received"], best["corrected"], {
+        **best["metadata"], "pixel_coverage": best["coverage"],
+        "received_copies": best["copies"],
+        "block_checksums": best["block_checksums"]}
+
+
+def _decode_repeated_avatar_header(audio: np.ndarray, sample_rate: int,
+                                   profile: ModemProfile, start: int, offset: float,
+                                   period: float) -> tuple[list[int], dict, int, dict, np.ndarray] | None:
+    """Soft-combine repeated default 32x32 resilient cycles before header CRC."""
+    cycle = FAST_AVATAR_RESILIENT_CYCLE_SYMBOLS
+    if period <= 0 or sample_rate / period <= 0:
+        return None
+    cycle_samples = cycle * period
+    available = int((len(audio) - start) // cycle_samples)
+    if available < 2:
+        return None
+    available = min(available, 10)
+    header_end = len(FRAME_SYNC) + AVATAR_META_TONE_COUNT
+    shifts = sorted({float(offset + delta) for delta in (-15, -10, -5, 0, 5, 10, 15)})
+    best = None
+    for delta_start in (-4, -2, 0, 2, 4):
+        for carrier in shifts:
+            copies = []
+            for index in range(available):
+                frame_start = int(round(start + delta_start + index * cycle_samples))
+                metrics = demodulate_metrics(audio, sample_rate,
+                    start_sample=frame_start, frequency_offset_hz=carrier,
+                    symbol_period_samples=period, profile=profile)[:cycle]
+                if len(metrics) < header_end:
+                    break
+                normalized = metrics / np.maximum(metrics.sum(axis=1, keepdims=True), 1e-12)
+                sync_score = float(np.mean(normalized[np.arange(len(FRAME_SYNC)),
+                    np.asarray(FRAME_SYNC)]))
+                copies.append((normalized, sync_score))
+                if index >= 1 and sync_score < 0.22:
+                    # A quiet gap marks the end of this burst. One weak cycle
+                    # is tolerated so a fade does not discard later copies.
+                    if index + 1 < available:
+                        next_start = int(round(start + delta_start + (index + 1) * cycle_samples))
+                        next_metrics = demodulate_metrics(audio, sample_rate,
+                            start_sample=next_start, frequency_offset_hz=carrier,
+                            symbol_period_samples=period, profile=profile)[:cycle]
+                        if len(next_metrics) >= header_end:
+                            next_norm = next_metrics / np.maximum(next_metrics.sum(axis=1, keepdims=True), 1e-12)
+                            next_score = float(np.mean(next_norm[np.arange(len(FRAME_SYNC)),
+                                np.asarray(FRAME_SYNC)]))
+                            if next_score < 0.22:
+                                break
+                        else:
+                            break
+            for count in range(2, len(copies) + 1):
+                selected = [item[0] for item in copies[:count] if item[1] >= 0.22]
+                if len(selected) < 2:
+                    continue
+                combined_header = np.sum([item[len(FRAME_SYNC):header_end]
+                                           for item in selected], axis=0)
+                header_symbols = np.argmax(combined_header, axis=1).astype(int).tolist()
+                try:
+                    metadata, _ = _decode_avatar_metadata_after(header_symbols, 0)
+                except (ValueError, UnicodeDecodeError, ZeroDivisionError):
+                    continue
+                if metadata.get("avatar_mode") != "fast_avatar_fec":
+                    continue
+                combined = np.sum(selected, axis=0)
+                symbols = np.argmax(combined, axis=1).astype(int).tolist()
+                symbols[:len(FRAME_SYNC)] = FRAME_SYNC
+                symbols[len(FRAME_SYNC):header_end] = header_symbols
+                candidate = (symbols, metadata, count,
+                    {"start_sample": start + delta_start, "sample_rate": sample_rate,
+                     "frequency_offset_hz": carrier, "symbol_period_samples": period,
+                     "clock_error_ppm": (period / (sample_rate / profile.baud) - 1) * 1e6,
+                     "combined_copies": len(selected)}, combined)
+                if best is None or len(selected) > best[2]:
+                    best = candidate
+    return best
 
 
 def minimal_avatar_duration(profile: str | ModemProfile | None = None, card: Card | None = None) -> float:
@@ -862,6 +1020,13 @@ def decode_minimal_avatar_audio_auto(audio: np.ndarray, sample_rate: int = SAMPL
                                  symbol_period_samples=period, profile=selected)
     symbols = np.argmax(metrics, axis=1).astype(int).tolist()
     measured_snr_db = _estimate_snr_db(audio, metrics, start, period, selected, offset)
+    ordered = np.sort(metrics, axis=1)
+    confidence = ((ordered[:, -1] - ordered[:, -2]) / np.maximum(ordered[:, -1], 1e-12))
+    acquisition = {"start_sample": start, "sample_rate": sample_rate,
+                   "frequency_offset_hz": offset, "symbol_period_samples": period,
+                   "clock_error_ppm": (period / (sample_rate / selected.baud) - 1) * 1e6,
+                   "symbol_confidence_median": float(np.median(confidence)) if len(confidence) else None,
+                   "symbol_confidence_p10": float(np.percentile(confidence, 10)) if len(confidence) else None}
     metadata = None
     cursor = 0
     while cursor <= len(symbols) - len(FRAME_SYNC):
@@ -877,26 +1042,40 @@ def decode_minimal_avatar_audio_auto(audio: np.ndarray, sample_rate: int = SAMPL
             pass
         cursor = sync_at + 1
     if metadata is None:
-        raise ValueError("no valid avatar identity header received yet")
+        repeated = _decode_repeated_avatar_header(audio, sample_rate, selected,
+                                                  start, offset, period)
+        if repeated is None:
+            raise ValueError("no valid avatar identity header received yet")
+        symbols, metadata, combined_copies, acquisition, combined_metrics = repeated
+    else:
+        combined_copies = 1
+        combined_metrics = metrics
     if metadata["avatar_mode"] == "fast_avatar_fec" or metadata["header_version"] == 1:
         try:
-            pixels, blocks, corrected, fec_metadata = decode_minimal_avatar_resilient_symbols(symbols)
+            pixels, blocks, corrected, fec_metadata = decode_minimal_avatar_resilient_symbols(
+                symbols, tone_metrics=combined_metrics)
             pixels_per_block = (AVATAR_RS_K * 6) // fec_metadata["bits_per_pixel"]
-            coverage = [present for index, present in enumerate(blocks)
+            coverage = fec_metadata.get("pixel_coverage") or [present for index, present in enumerate(blocks)
                         for _ in range(min(pixels_per_block,
                             fec_metadata["width"]*fec_metadata["height"]-index*pixels_per_block))]
+            received_copies = max(combined_copies, int(fec_metadata.get("received_copies", 1)))
+            checked = sum(blocks)
             return pixels, {**fec_metadata, "measured_snr_db": measured_snr_db,
+                            "acquisition": acquisition,
                             "avatar_mode": "fast_avatar_fec",
                             "avatar_burst": True, "exact": all(blocks),
                             "received_blocks": blocks, "pixel_coverage": coverage,
+                            "received_copies": received_copies,
                             "corrected_blocks": corrected,
-                            "color_stage": f"{sum(blocks)}/{len(blocks)} checked blocks" +
+                            "color_stage": f"{checked}/{len(blocks)} CRC-verified blocks · "
+                                           f"{sum(coverage)}/{len(coverage)} provisional pixels" +
                                            (f" · {corrected} corrected" if corrected else "")}
         except ValueError:
             if metadata["avatar_mode"] == "fast_avatar_fec":
                 raise
     pixels, present, copies, metadata = decode_minimal_avatar_symbols_progress(symbols)
     return pixels, {**metadata, "measured_snr_db": measured_snr_db,
+                    "acquisition": acquisition,
                     "raw_avatar": True, "exact": False,
                     "pixel_coverage": present, "received_copies": copies,
                     "color_stage": f"{sum(present)}/{metadata['width'] * metadata['height']} pixels · {copies} copies · unverified"}
@@ -1340,6 +1519,7 @@ def acquire(audio: np.ndarray, sample_rate: int, baud: int | None = None,
         raise ValueError("baud conflicts with selected modem profile")
     rate = selected.baud if profile is not None or baud is None else baud
     tones = selected.tones_hz if profile is not None or baud is None else TONES_HZ
+    narrow_avatar = len(tones) == 8 and rate <= 100
     sps = sample_rate // rate
     if len(audio) < sps * (len(FRAME_SYNC) + 1):
         return 0, 0.0, float(sps)
@@ -1351,10 +1531,11 @@ def acquire(audio: np.ndarray, sample_rate: int, baud: int | None = None,
     active = np.flatnonzero(rms >= peak * 0.12)
     onset = int(active[0] * block) if len(active) else 0
     # Recordings may begin inside a refinement. Locate the next preamble
-    # anywhere in the first 35 seconds, rather than assuming the audio onset
-    # itself is a frame boundary. FFT correlation keeps the search bounded.
+    # anywhere in the receive window, rather than assuming the audio onset
+    # itself is a frame boundary. Live reception bounds this window; restricting
+    # acquisition to its first 35 seconds misses later on-air transmissions.
     decimation = max(1, sample_rate // 8000)
-    search = np.asarray(audio[:35*sample_rate:decimation], dtype=np.float64)
+    search = np.asarray(audio[::decimation], dtype=np.float64)
     search_rate = sample_rate / decimation
     bounds = np.rint(np.arange(len(FRAME_SYNC)+1)*search_rate/rate).astype(int)
     length = int(bounds[-1])
@@ -1368,13 +1549,19 @@ def acquire(audio: np.ndarray, sample_rate: int, baud: int | None = None,
         best = np.zeros(len(search)-length+1)
         energy_sum = np.r_[0.0, np.cumsum(search*search)]
         energy = energy_sum[length:] - energy_sum[:-length]
-        for shift in np.arange(-20.0,20.1,2.0):
+        # A slow preamble loses correlation at offsets between coarse bins;
+        # over a long window this can let a payload pattern outrank the sync.
+        search_step = 0.5 if narrow_avatar else 2.0
+        for shift in np.arange(-20.0,20.1,search_step):
             reference = np.exp(1j*(phases+2*np.pi*shift*times))
             corr = np.fft.ifft(spectrum*np.fft.fft(np.conj(reference[::-1]),fft_size))
             score = np.abs(corr[length-1:len(search)]) / np.sqrt(np.maximum(energy,1e-12)*length)
             score[energy < max(float(energy.max())*1e-6,1e-12)] = 0
             best = np.maximum(best,score)
-        peaks = np.flatnonzero(best >= float(best.max())*0.985)
+        # Slow avatar syncs give broad near-equal peaks; choosing an early
+        # shoulder can lock before the actual preamble after leading silence.
+        peak_floor = 0.9999 if narrow_avatar else 0.985
+        peaks = np.flatnonzero(best >= float(best.max()) * peak_floor)
         if len(peaks) and best.max() > 0.05:
             onset = int(peaks[0])*decimation
     candidates = range(max(0, onset - block), min(len(audio) - sps * len(PREAMBLE), onset + block + 1))
@@ -1440,14 +1627,19 @@ def acquire(audio: np.ndarray, sample_rate: int, baud: int | None = None,
     # The short sync has a flat clock peak. When the nominal sample clock
     # scores essentially as well, keep the exact generated rate; longer
     # packet anchors can subsequently track capture-device clock drift.
+    # At low tone frequencies, the energy-only coarse CFO estimate can
+    # miss the true carrier by more than the local refinement window.
+    nominal_shifts = np.arange(-20.0, 20.01, 0.25) if narrow_avatar else fine_shifts
     nominal = [(template_score(start, float(sps), float(carrier)), start, float(carrier))
-               for start in fine_starts for carrier in fine_shifts]
+               for start in fine_starts for carrier in nominal_shifts]
     nominal_score, nominal_start, nominal_shift = max(nominal)
     # Short syncs become much less informative about sub-sample timing at
     # high symbol rates. Their best isolated fit can be biased just enough to
     # walk out of a long card. Keep the known nominal sample clock when it is
     # close, then let the multi-frame anchor fit below track capture-clock drift.
-    nominal_floor = 0.95 if rate >= 300 else 0.999
+    # Slow avatars also need this tolerance: their short sync fit can bias
+    # timing enough to walk out of a long card at any audio placement.
+    nominal_floor = 0.95 if rate >= 300 or narrow_avatar else 0.999
     if nominal_score >= best_clock_score * nominal_floor:
         recovered_start, recovered_period, recovered_shift = nominal_start, float(sps), nominal_shift
     # Below the coherent matched-filter floor, a long search can fit a noise

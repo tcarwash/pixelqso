@@ -83,6 +83,25 @@ class WeakSignalTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             weak.encode(card)
 
+    def test_soft_combining_recovers_below_single_burst_threshold(self):
+        audio, _ = channel(np.tile(self.audio, 4), PROFILES['tuning'], -9, 801)
+        actual, metadata = weak.decode(audio)
+        self.assertEqual(actual, self.expected)
+        self.assertTrue(metadata['exact'])
+        self.assertGreater(metadata['diagnostics']['combined_copies'], 1)
+        single, _ = channel(self.audio, PROFILES['tuning'], -9, 801)
+        with self.assertRaises(ValueError):
+            weak.decode(single)
+
+    def test_combining_does_not_accept_different_payloads_as_one_card(self):
+        other = pixel.example_card()
+        other.pixels = [(value + 1) % 8 for value in other.pixels]
+        other.card_id = (other.card_id + 1) & 65535
+        different = weak.encode(other, message_type='exchange', snr_db=-3)
+        audio, _ = channel(np.concatenate((self.audio, different)), {}, -9, 805)
+        with self.assertRaises(ValueError):
+            weak.decode(audio)
+
     def test_random_payload_ldpc(self):
         rng = np.random.default_rng(907)
         bits = rng.integers(0,2,weak.K,dtype=np.uint8)

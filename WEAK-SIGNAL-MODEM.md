@@ -1,16 +1,20 @@
 # Experimental weak-signal modem
 
 Select **Weak signal · 32×32 · experimental** in Transmission type. Install its
-lightweight dependencies with `uv sync --extra weak-signal`. The mode uses
-Data2G's pinned LDPC construction and encoder, NumPy for decoding, and SciPy
-for filtering/resampling. It does not use Data2G's OFDM waveform or Torch for
-decoding. Production Resilient remains the default.
+lightweight dependencies with `uv sync --extra weak-signal`. The mode uses an
+independent fixed encoder/decoder graph generated from the attributed 3GPP NR
+BG2 shift table in `licenses/weak-signal`; NumPy handles the code and SciPy
+handles filtering/resampling. It has no Data2G or Torch dependency. Production
+Resilient remains the default.
 
 This mode carries one complete **32×32 eight-color** card. Colors are mapped to
 the same shared palette used by production. Callsign, grid, card ID, message
 stage, optional signal report and all pixels share one codeword and CRC32.
-Unsupported sizes, color counts and multiple copies are rejected. The UI limits
-the copy count to one when this mode is selected. There is no partial preview:
+Unsupported sizes and color counts are rejected. The five-second mode limits
+the copy count to one. **Weak signal · combined copies · experimental** allows
+1–8 copies of the same frozen waveform, with receiver soft combining. Four
+copies take 18.488 seconds of audio; eight take 36.976 seconds, plus PTT lead.
+There is no partial preview:
 the card appears after its parity checks, CRC and metadata checks succeed.
 
 ## Waveform and duration
@@ -87,8 +91,19 @@ the benchmark's authoritative known-component measurement. Decoder diagnostics
 also include acquisition score, carrier offset, clock estimate and iteration
 count. Buffered acquisition is repeated for live snapshots in a Qt worker.
 
-The first implementation has no adaptive multipath equalizer, no combination
-of separate bursts, and no search beyond the stated carrier/clock bounds. Deep
+The receiver now acquires up to 20 nonoverlapping bursts from one capture,
+independently tracks their carrier/clock offsets, and adds noise-weighted bit
+likelihoods before LDPC decoding. It tries the strongest single burst, successive
+combinations, and the remaining individual bursts. This works with existing
+version-1 transmitters: no wire-format change or shared timing is needed. The
+acquisition coherence threshold is 0.08; CRC32 and structural checks remain
+mandatory. Repeated copies must carry exactly the same payload, including
+message stage and signal report. Failed combinations never yield saved pixels.
+Copies from different stations or different images cannot be assumed combinable;
+CRC rejection is an integrity gate, not an interference-cancellation algorithm.
+
+The receiver still has no adaptive multipath equalizer, no persistent soft state
+across separate captures, and no search beyond the stated carrier/clock bounds. Deep
 fades and severe mixed channels still require further work. Synthetic AWGN
 results do not establish real HF path performance.
 
@@ -97,8 +112,38 @@ results do not establish real HF path performance.
 ```sh
 OPENBLAS_NUM_THREADS=1 .venv/bin/python -m unittest discover -s tools -p test_weak_signal_modem.py -v
 OPENBLAS_NUM_THREADS=1 .venv/bin/python tools/test_weak_signal_app.py
+OPENBLAS_NUM_THREADS=1 .venv/bin/python tools/test_weak_signal_app.py --combined
 OPENBLAS_NUM_THREADS=1 .venv/bin/python tools/weak_signal_campaign.py --output work/new-weak-campaign
 ```
+
+## Below-noise combining experiments
+
+Use the combined mode and start with four copies. Tests use SNR referenced to
+2500 Hz, not unfiltered sample variance. Four equal-power copies provide four
+times the transmitted energy (an ideal 6.02 dB gain); this is an airtime tradeoff,
+not a claim of extra coding gain. Fading, interference and synchronization errors
+reduce that benefit. The full image remains 3376 information bits including
+identity and CRC, so FT8-like sensitivity with a five-second full-color burst is
+not a reasonable target for this format.
+
+Reproduce a matched single-versus-four-copy comparison:
+
+```sh
+OPENBLAS_NUM_THREADS=1 .venv/bin/python tools/modem_benchmark.py \
+  --backends experimental_qpsk_combined --profiles awgn --snr-db -9 \
+  --repeats 1 4 --trials 20 --output work/subnoise-new-awgn
+OPENBLAS_NUM_THREADS=1 .venv/bin/python tools/modem_benchmark.py \
+  --backends experimental_qpsk_combined --profiles fading mixed --snr-db -3 \
+  --repeats 4 8 --trials 5 --output work/subnoise-new-paths
+```
+
+Reports from the 2026-10-02 investigation are in
+`work/subnoise-baseline-20261002`, `work/subnoise-combining-pilot-20261002`,
+`work/subnoise-awgn-validation-20261002`, and
+`work/subnoise-path-validation-20261002`. These are synthetic channel tests;
+the Qt/UDP combined-mode test verifies application reception, rendering and
+exact-card saving at approximately -9 dB. Neither establishes on-air performance
+or responsiveness with a live sound device and radio.
 
 The app test exercises mode selection, the application's encoder, two windows'
 normal UDP audio timers, int16 audio, live decoding, the received image and the

@@ -1,37 +1,49 @@
-from PyInstaller.utils.hooks import collect_data_files
-
 # PyInstaller spec. Build this file on each target OS; binaries are native to
 # the build host, so a Windows executable cannot be produced from Linux.
+import os
+
+include_weak_signal = os.environ.get("PIXELQSO_FREEZE_WEAK_SIGNAL") == "1"
+include_data2g_host = True
+bundled_datas = [(os.path.join(SPECPATH, "icon.png"), ".")]
+bundled_binaries = []
+bundled_hidden = []
+if include_data2g_host:
+    from PyInstaller.utils.hooks import collect_all
+    data2g_datas, data2g_binaries, data2g_hidden = collect_all("data2g")
+    bundled_datas.extend(data2g_datas)
+    bundled_binaries.extend(data2g_binaries)
+    bundled_hidden.extend(data2g_hidden)
 hidden = [
     # Local modules are not reliably discovered by the frozen app analysis
     # when the spec is invoked from outside this folder.
     "cardmodem",
     "card_backends",
-    "weak_signal_modem",
+    "data2g_transport",
+    "data2g_runtime",
+    "card_transfer",
+    "webserver",
     "PySide6.QtNetwork",
     "PySide6.QtMultimedia",
     "PySide6.QtMultimediaWidgets",
 ]
-
-data2g_data = []
-try:
-    import data2g
-except ImportError:
-    pass
-else:
-    hidden.append("data2g")
-    data2g_data = collect_data_files("data2g")
+if include_weak_signal:
+    hidden.extend(["weak_signal_modem", "weak_signal_ldpc", "weak_signal_ldpc_data"])
+hidden.extend(bundled_hidden)
 
 a = Analysis(
     ["app.py"],
     pathex=[SPECPATH],
-    binaries=[],
-    datas=data2g_data,
+    binaries=bundled_binaries,
+    datas=bundled_datas,
     hiddenimports=hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # Never bundle heavyweight training/GPU runtimes. The base frozen app
+    # includes the supported Data2G host runtime, but excludes its optional
+    # training/GPU dependencies and the optional weak-signal modules.
+    excludes=["torch", "triton", "nvidia"] + ([] if include_weak_signal else [
+        "weak_signal_modem", "weak_signal_ldpc", "weak_signal_ldpc_data"]),
     noarchive=False,
     optimize=1,
 )

@@ -33,6 +33,10 @@ jobs:
       - name: Install PortAudio development headers on Linux
         if: runner.os == 'Linux'
         run: |
+          # The hosted image may include Microsoft's optional apt feed, which
+          # can return 403 and make apt-get update fail even though Ubuntu's
+          # repositories are healthy. This build only needs Ubuntu packages.
+          sudo grep -rlZ 'packages.microsoft.com' /etc/apt/sources.list.d | sudo xargs -0 -r rm
           sudo apt-get update
           sudo apt-get install -y portaudio19-dev
       - name: Install PortAudio on macOS

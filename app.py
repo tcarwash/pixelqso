@@ -1936,8 +1936,10 @@ class MainWindow(QMainWindow):
         self.audio_low_hz.valueChanged.connect(self._audio_placement_changed)
         mode_form.addRow("Audio placement", self.audio_placement_combo)
         mode_form.addRow("Lowest tone", self.audio_low_hz)
-        self.receive_all_modes = QCheckBox("Receive all installed modem types")
+        self.receive_all_modes = QCheckBox("Receive all local audio modem types")
         self.receive_all_modes.setChecked(self.settings.value("transfer/receive_all", True, type=bool))
+        self.receive_all_modes.setToolTip(
+            "This applies to Pixel QSO's local audio decoders. Data2G receives decoded card frames from its host.")
         self.receive_all_modes.toggled.connect(lambda value: self.settings.setValue("transfer/receive_all", value))
         mode_form.addRow("Receive", self.receive_all_modes)
         self.repeat_count = QSpinBox(); self.repeat_count.setRange(1, 20); self.repeat_count.setValue(int(self.settings.value("transfer/repeats", 3)))
@@ -2023,7 +2025,15 @@ class MainWindow(QMainWindow):
         view_heading.addWidget(self.listen_indicator)
         right_panel.addLayout(view_heading)
         self.rx_waterfall = RxAudioWaterfall()
-        right_panel.addWidget(self.rx_waterfall)
+        self.rx_visual_stack = QStackedWidget()
+        self.rx_waterfall_unavailable = QLabel(
+            "Audio waterfall unavailable · Data2G receives decoded frames from its host")
+        self.rx_waterfall_unavailable.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.rx_waterfall_unavailable.setStyleSheet(
+            "background:#0c110e;color:#809087;border:1px solid #2e3d45;border-radius:8px;padding:10px")
+        self.rx_visual_stack.addWidget(self.rx_waterfall)
+        self.rx_visual_stack.addWidget(self.rx_waterfall_unavailable)
+        right_panel.addWidget(self.rx_visual_stack)
         self.receive_stack = QStackedWidget()
         self.session_wall_page = QWidget()
         wall_layout = QHBoxLayout(self.session_wall_page); wall_layout.setContentsMargins(0, 0, 0, 0); wall_layout.setSpacing(10)
@@ -2130,10 +2140,22 @@ class MainWindow(QMainWindow):
         layout.addWidget(options)
         station = QGroupBox("Radio and audio")
         station_form = QFormLayout(station)
-        station_form.addRow("rigctld host", self.rig_host); station_form.addRow("Port", self.rig_port)
         station_form.addRow("Audio output", self.output_device); station_form.addRow("Audio input", self.input_device)
         layout.addWidget(station)
-        buttons = QHBoxLayout(); buttons.addWidget(self.rig_button); buttons.addWidget(self.rig_refresh); layout.addLayout(buttons)
+        self.cat_settings_group = QGroupBox("CAT / rigctld")
+        cat_form = QFormLayout(self.cat_settings_group)
+        cat_form.addRow("rigctld host", self.rig_host)
+        cat_form.addRow("Port", self.rig_port)
+        cat_buttons = QWidget(); cat_buttons_layout = QHBoxLayout(cat_buttons)
+        cat_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        cat_buttons_layout.addWidget(self.rig_button); cat_buttons_layout.addWidget(self.rig_refresh)
+        cat_form.addRow(cat_buttons)
+        self.cat_backend_note = QLabel("CAT/PTT is controlled by the selected Data2G host while a Data2G mode is active.")
+        self.cat_backend_note.setWordWrap(True)
+        self.cat_backend_note.setStyleSheet("color:#9eada3;padding:2px")
+        layout.addWidget(self.cat_settings_group)
+        layout.addWidget(self.cat_backend_note)
+        self._update_backend_ui()
         done = QPushButton("Done"); done.clicked.connect(self.save_station_settings); done.clicked.connect(dialog.accept); layout.addWidget(done)
         dialog.exec()
 
@@ -2150,6 +2172,7 @@ class MainWindow(QMainWindow):
         self.data2g_command_port.setEnabled(not busy)
         self.data2g_kiss_port.setEnabled(not busy)
         self.data2g_host_bandwidth.setEnabled(not remote and not busy)
+        self._update_backend_ui()
 
     def _start_local_data2g_host(self):
         if self.data2g_local_process and self.data2g_local_process.poll() is None:
@@ -2416,6 +2439,28 @@ class MainWindow(QMainWindow):
             import threading
             threading.Thread(target=session.close, daemon=True, name="data2g-close").start()
         self.refresh_tx_button()
+        self._update_backend_ui()
+
+    def _update_backend_ui(self):
+        """Make controls reflect which backend currently owns reception and CAT/PTT."""
+        if not hasattr(self, "receive_all_modes"):
+            return
+        backend = BACKENDS.get(self.selected_mode())
+        selected_data2g = isinstance(backend, Data2GHostBackend)
+        host_busy = bool(self.data2g_connecting or self.data2g_handoff_pending or
+                         (self.data2g_session and self.data2g_session.connected))
+        data2g_path = selected_data2g or host_busy
+        self.receive_all_modes.setEnabled(not selected_data2g)
+        if hasattr(self, "auto_connect_cat"):
+            self.auto_connect_cat.setEnabled(not data2g_path)
+            self.auto_connect_cat.setToolTip(
+                "Used by local modem modes; Data2G handles radio control while its backend is active.")
+        if hasattr(self, "rx_visual_stack"):
+            self.rx_visual_stack.setCurrentWidget(
+                self.rx_waterfall_unavailable if data2g_path else self.rx_waterfall)
+        if hasattr(self, "cat_settings_group"):
+            self.cat_settings_group.setEnabled(not data2g_path)
+            self.cat_backend_note.setVisible(data2g_path)
 
     def _data2g_rx_frame(self, port, frame):
         if not self.data2g_session or port != self.data2g_session.port:

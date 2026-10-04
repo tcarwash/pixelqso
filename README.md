@@ -5,6 +5,16 @@ identity, fragment transfer, image assembly, previews, and QSO stages. Modems
 with the Data2G label run through Data2G's supported host command and KISS
 interfaces.
 
+## Screenshots
+
+| QSO session | Card editor |
+| --- | --- |
+| <img src="screenshots/qso-session.png" alt="Pixel QSO session wall with staged cards and receive preview" width="480"> | <img src="screenshots/card-editor.png" alt="Pixel QSO card editor with drawing tools, palette, and card settings" width="480"> |
+
+Example cards made in the editor:
+
+![Starter cards showing sample QSO and signal artwork](screenshots/starter-cards.png)
+
 ## Install and run
 
 Python 3.10 or newer is required. The standard install includes the pinned
@@ -61,13 +71,17 @@ for details on group and frame behavior.
 ## Build
 
 The frozen app includes the managed Data2G host runtime and experimental CPU
-modems, while excluding PyTorch and GPU packages:
+modems, while excluding PyTorch and GPU packages. It uses `icon.png` for the
+app window, `icon.ico` for the Windows executable, and `icon.icns` for the macOS
+app bundle:
 
 ```sh
-python -m pip install . PyInstaller
-python -m PyInstaller --clean --noconfirm pixelqso.spec
+uv sync
+uv run --with PyInstaller python -m PyInstaller --clean --noconfirm pixelqso.spec
 ```
 
 The one build contains `icon.png` and all CPU modes. Build on each target
 operating system; desktop CI builds one package for Linux, Windows, and macOS.
-The managed Data2G host is bundled in each platform build.
+The managed Data2G host is bundled in each platform build. On Linux the output
+is `dist/PixelQSO`; on Windows it is `dist/PixelQSO.exe`; on macOS it is
+`dist/PixelQSO.app`.

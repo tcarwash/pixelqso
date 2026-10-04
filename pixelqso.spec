@@ -1,5 +1,14 @@
 # PyInstaller spec. Build this file on each target OS; binaries are native to
 # the build host, so a Windows executable cannot be produced from Linux.
+import os
+import sys
+
+platform_icon = None
+if sys.platform == "win32":
+    platform_icon = os.path.join(SPECPATH, "icon.ico")
+elif sys.platform == "darwin":
+    platform_icon = os.path.join(SPECPATH, "icon.icns")
+
 include_data2g_host = True
 bundled_datas = [(os.path.join(SPECPATH, "icon.png"), ".")]
 bundled_binaries = []
@@ -59,14 +68,16 @@ exe = EXE(
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
+    icon=platform_icon,
     codesign_identity=None,
     entitlements_file=None,
 )
 
-if __import__("sys").platform == "darwin":
+if sys.platform == "darwin":
     app = BUNDLE(
         exe,
         name="PixelQSO.app",
+        icon=platform_icon,
         bundle_identifier="org.pixelqso.desktop",
         info_plist={"NSHighResolutionCapable": "True"},
     )

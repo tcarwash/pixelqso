@@ -28,6 +28,7 @@ def main():
     parser.add_argument('--placement', choices=('near_carrier', 'centered', 'custom'), default='near_carrier')
     parser.add_argument('--low-hz', type=int, default=300)
     parser.add_argument('--single-mode', action='store_true', help='Receive only the selected narrow mode and placement')
+    parser.add_argument('--telemetry', action='store_true', help='Verify on-air recording hooks using synthetic UDP audio')
     args = parser.parse_args()
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
     with tempfile.TemporaryDirectory(prefix='pixelqso-weak-app-') as directory:
@@ -44,11 +45,27 @@ def main():
         sys.excepthook = lambda kind, value, trace: (errors.append(str(value)),
                                                     traceback.print_exception(kind, value, trace))
         qt = QApplication([])
+        collector = None
+        if args.telemetry:
+            from on_air import SessionCollector
+            from tools.on_air_test import token_file
+            credential = Path(directory) / 'session.token'
+            collector = SessionCollector(Path(directory) / 'collector', token_file(credential))
         windows = []
         for index in range(2):
             os.environ.update(PIXELQSO_TEST_RX_PORT=str(ports[index]),
                               PIXELQSO_TEST_TX_PORT=str(ports[1-index]))
+            if args.telemetry:
+                config_path = Path(directory) / f'client-{index}.json'
+                config_path.write_text(json.dumps({'session_id': 'synthetic-integration', 'station_id': f'client-{index}',
+                    'output_dir': str(Path(directory) / 'captures'), 'source': 'synthetic-software-link',
+                    'collector_url': f'http://127.0.0.1:{collector.port}', 'token_file': str(credential)}))
+                os.environ['PIXELQSO_ON_AIR_CONFIG'] = str(config_path)
+            else:
+                os.environ.pop('PIXELQSO_ON_AIR_CONFIG', None)
             window = app.MainWindow()
+            window.show_experimental_modes.setChecked(True)
+            window._refresh_mode_options()
             window.mode_combo.setCurrentIndex(window.mode_combo.findData('experimental_qpsk_5s'))
             assert window.repeat_count.maximum() == 1 and window.repeat_count.value() == 1
             window.mode_combo.setCurrentIndex(window.mode_combo.findData('fast_avatar_fec'))
@@ -84,6 +101,7 @@ def main():
             rx.receive_all_modes.setChecked(False)
             rx.audio_placement_combo.setCurrentIndex(rx.audio_placement_combo.findData(args.placement))
         card = pixel.example_card()
+        tx.tx_card = card
         clean = tx._card_tx_audio(card)
         from card_backends import get_backend
         assert len(clean)/48000 == get_backend(tx.selected_mode(), tx.selected_audio_placement()).estimate_seconds(card, tx.repeat_count.value())
@@ -143,6 +161,17 @@ def main():
             window.close()
         qt.processEvents()
         assert not errors, errors
+        if args.telemetry:
+            from tools.on_air_test import session_report
+            rows, matches = session_report(Path(directory) / 'captures', Path(directory) / 'review')
+            kinds = {event['kind'] for event in rows}
+            assert {'tx_start', 'tx_end', 'rx_audio', 'rx_decode', 'rx_verified_capture'} <= kinds, kinds
+            assert matches, 'No whole-card reference match in telemetry'
+            assert all(event['source'] == 'synthetic-software-link' for event in rows)
+            assert list((Path(directory) / 'captures').rglob('*.wav'))
+            assert all(window.on_air.errors == 0 and window.on_air.network_errors == 0 for window in windows)
+            collector.close()
+            print(json.dumps({'telemetry': 'PASS', 'events': len(rows), 'reference_matches': len(matches)}))
 
 
 if __name__ == '__main__':

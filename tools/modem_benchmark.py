@@ -18,7 +18,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import cardmodem as modem
-from card_backends import BACKENDS, is_available
+from card_backends import BACKENDS, audio_backend_keys, is_available
 from two_client_loopback import frequency_shift, load_card
 from tools.synthetic_channel import ReceiveFilter, noise_sigma
 
@@ -181,7 +181,7 @@ def report(rows, destination, metadata):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--backends", nargs="+", choices=list(BACKENDS), default=list(BACKENDS))
+    parser.add_argument("--backends", nargs="+", choices=audio_backend_keys(), default=audio_backend_keys())
     parser.add_argument("--profiles", nargs="+", choices=list(PROFILES), default=["clean", "awgn", "mixed"])
     parser.add_argument("--snr-db", nargs="+", type=float, default=[12, 6, 0, -6])
     parser.add_argument("--snr-reference-hz", type=float, default=2500,

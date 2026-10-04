@@ -1,12 +1,20 @@
 # Data2G broadcast integration notes
 
-These notes track how PixelQSO should integrate with Andrew's **draft**, not a released or frozen API. Source reviewed: [`docs/broadcast.md` at `0a9dd37a189a9f413eab0039e5d68f0edc1d570c`](https://github.com/arodland/Data2G/blob/0a9dd37a189a9f413eab0039e5d68f0edc1d570c/docs/broadcast.md). Recheck the draft and negotiate any changed behavior before implementing against a newer revision.
+The broadcast interface was accepted and merged in Data2G PR #37. These notes
+describe the supported API at [the merge commit](https://github.com/arodland/Data2G/blob/77856c901dd8db2642d72fcf869c727918429e4f/docs/broadcast.md)
+and list the interoperability checks still needed for PixelQSO. The app now
+uses the command and KISS TCP interfaces and imports no Data2G modem internals;
+the pinned Python host runtime runs in a separate process.
 
 ## Direction
 
 Use the Data2G host as a **radio interface**. PixelQSO owns card identity, card format, fragment indexing, image assembly, deduplication, received-card persistence, and contact stages. Do not ask Data2G to understand PixelQSO's cards or maintain application-level objects. Open a named broadcast group such as `PIXELQSO`; send app-framed card chunks as KISS frames; rebuild cards from checked frames delivered to that group.
 
-The existing draft provides useful foundations: named groups map to KISS ports, mode enumeration reports bandwidth and capacities, the host chooses transmit mode, bursts are one-to-many without an ARQ session, and `HEARD`/`LOST` statuses report decoded group traffic. Andrew explicitly leaves incremental redundancy for later and proposes an application-marked resend with an RV, while Data2G retains soft information to combine it.
+Named groups map to KISS ports, `MODES` reports bandwidth and capacities, the
+host chooses transmit mode, and bursts are one-to-many without an ARQ session.
+`HEARD`/`LOST` statuses report decoded group traffic. ACKMODE confirms a frame
+was sent over the air, not that a peer received it. Incremental redundancy is
+not part of PR #37.
 
 ## Application payload framing
 
@@ -24,35 +32,43 @@ The app should tolerate duplicate fragments across bursts and reject fragments w
 
 ## Queueing, copies, and completion
 
-The draft says all ports share a queue; the next burst takes the first queued frame's port and mode, then adds queued frames for that group/mode that fit. This means enqueuing every copy immediately may not produce one separately observable copy per UI `Copies` count, and frames for multiple image fragments may share a burst. Before implementing copy scheduling, agree on one of:
+The host shares its queue across ports and may pack compatible queued frames
+into a burst. PixelQSO submits only one ACKMODE-tagged frame at a time and waits
+for the ACK before submitting the next fragment or repeat, so each app frame
+waits for the previous burst to finish. ACKMODE reports that the burst carrying
+the frame finished transmitting; a `DROPPED` status without an ACK means it was
+not sent. `HEARD` is only known at the end of a decoded burst, so preview is
+burst-by-burst, not intra-burst. The app advances automatic QSO stages after
+local ACKMODE completion and never treats it as remote receipt. Host behavior
+under simultaneous groups still needs live measurement.
 
-1. A documented way for the client to pace frames so each intended pass forms a burst, or
-2. A transmit status event that reports when a group's burst actually goes on air, its mode, frame/codeword count, and the application frame IDs it carried.
-
-The current draft defines receive statuses (`HEARD`, `LOST`, and ambiguous `MISSED`) but no transmit completion event. PixelQSO needs completion information to count actual passes, estimate contact-stage completion, and avoid treating a queued frame as transmitted. `HEARD` is only known at the end of a decoded burst, so progressive preview is burst-by-burst, not intra-burst.
-
-KISS frames can be split across codewords. The draft notes that a failed codeword loses frames it touches and possibly later frames if a length field is lost. Keep each PixelQSO fragment independently checksummed and small enough that losses do not invalidate an entire image. Validate malformed lengths and maximum frame sizes at both ends.
+KISS frames can be split across codewords. The protocol specifies that a failed
+codeword can lose the frames it touches and possibly later frames if a length
+field is lost. Keep each PixelQSO fragment independently checksummed and small
+enough that losses do not invalidate an entire image. Validate malformed lengths
+and maximum frame sizes at both ends.
 
 ## Incremental redundancy follow-up
 
-This is explicitly **not in the broadcast draft yet**. When added, the useful radio interface is an application-marked resend/RV extension, not Data2G object accounting. Define a stable retry identity that names the same encoded application frame across bursts, an RV value, mode compatibility rules, bounded soft-buffer lifetime/capacity, and a status for successful decode or expiry. Data2G should combine soft codeword information only when identity, payload, and coding layout match. PixelQSO then receives the recovered KISS frame through the ordinary group port and continues its existing fragment assembly.
+Incremental redundancy was explicitly left out of PR #37. If a later protocol adds it, the useful radio interface is an application-marked resend/RV extension, not Data2G object accounting. Define a stable retry identity that names the same encoded application frame across bursts, an RV value, mode compatibility rules, bounded soft-buffer lifetime/capacity, and a status for successful decode or expiry. Data2G should combine soft codeword information only when identity, payload, and coding layout match. PixelQSO then receives the recovered KISS frame through the ordinary group port and continues its existing fragment assembly.
 
 Do not assume the planned phrase “the position-only scrambler already lets a resend combine from any slot” settles all wire details. Confirm exactly how a sender marks the frame/RV, how receiver state is keyed, what happens on a mode change, when RVs wrap, and what data lets a receiver that missed the first pass identify the retry. Measure the airtime and recovery benefit against sending an ordinary repeated frame.
 
 ## Host and radio ownership
 
-The draft integrates command, data, and KISS ports in one `data2g-host`. PixelQSO currently has its own audio and CAT/PTT path. Pick a single owner for audio playback and PTT for this backend; do not let both apps key or play the same radio. If PixelQSO keeps CAT frequency control, establish how its PTT requests coordinate with the Data2G host. Decide whether the host runs as a managed child process or a separately installed service, and document startup, readiness, shutdown, and reconnect behavior.
+The integrated `data2g-host` owns radio audio and PTT for this backend. PixelQSO
+connects to a separately installed host, releases its local CAT/audio receive
+path, and does not manage host process lifetime.
 
-The draft's statuses go only to ports opened on the command connection. Confirm notification delivery and reconnection semantics, plus group-port lifetime and client ownership. Group names and CRC masks are routing/integrity aids, not encryption or authentication.
+Statuses are delivered to command clients after broadcast setup. Group names
+and CRC masks are routing/integrity aids, not encryption or authentication.
 
-## Questions to settle with Andrew before integration
+## Remaining interoperability questions
 
-1. Is the broadcast host protocol intended as a stable supported interface for third-party applications? How are versions negotiated?
-2. How should PixelQSO pace frames or learn that a burst was actually transmitted?
-3. How do clients choose a mode and avoid queue mixing when several groups or modes are active?
-4. What are maximum KISS frame and burst sizes, including framing overhead? Does `MODES` capacity describe KISS information bytes or modem payload bytes?
-5. What exactly will the incremental-redundancy KISS extension identify and report? Can late listeners combine an RV if they missed RV0?
-6. What host configuration cleanly supports an application that already controls CAT/PTT or audio devices?
+1. What is the actual maximum KISS information-frame size, including framing overhead? Does `MODES` capacity describe KISS information bytes or PHY data bytes?
+2. How does the host batch queued application frames into bursts under concurrent groups and modes? ACKMODE identifies per-frame transmit completion, but live queue behavior still needs measurement.
+3. Which host configuration and audio-device combinations provide reliable exclusive CAT/PTT/audio ownership for PixelQSO?
+4. What should a future incremental-redundancy KISS extension identify and report? Can a late listener combine an RV if it missed RV0?
 
 ## Implementation gates
 
@@ -62,4 +78,7 @@ The draft's statuses go only to ports opened on the command connection. Confirm 
 - Verify the host-reported mode bandwidth and actual generated/captured airtime, including queue delay and PTT ownership.
 - Treat RV soft combining as a separate follow-up gate; do not claim its reliability benefit until measured on impaired audio and then RF.
 
-Until these gates pass, the direct Python adapter described in [DATA2G-BACKEND.md](DATA2G-BACKEND.md) remains the experimental implementation; the broadcast host draft is the intended integration direction, not a current dependency.
+The direct PCM adapter described in [DATA2G-BACKEND.md](DATA2G-BACKEND.md) has
+been removed. Synthetic protocol and Qt tests pass, but live host KISS exchange,
+actual maximum frame sizing, radio ownership, and on-air WebSDR measurements
+remain unverified.

@@ -4,17 +4,18 @@ Pixel QSO is a desktop application for sending small pixel-art QSO/QSL cards ove
 
 Requires Python 3.10+.
 
-With uv, the default environment contains only the desktop app and its standard
-modem backends. Plain `uv sync` does not install optional extras; the lockfile
-can list their resolutions without adding them to the base environment:
+With uv, the default environment contains the desktop app and the supported
+Data2G host runtime. Torch remains an upstream training-only extra and is not
+installed. SciPy for PixelQSO experimental weak-signal modes remains optional:
 
 ```sh
 uv sync
 uv run python app.py
 ```
 
-The equivalent base install with pip is shown below. `requirements-app.txt`
-deliberately contains no Data2G, SciPy, or PyTorch dependencies.
+The equivalent standard install with pip is shown below. `requirements-app.txt`
+pins the same Data2G host revision and does not install Torch or SciPy for
+PixelQSO's experimental weak-signal modem.
 
 ```sh
 python -m pip install -r requirements-app.txt
@@ -53,6 +54,9 @@ match the receiver's setting or tune the radio to align the received tones.
 This setting applies to the three narrow Resilient modes. Both stations need
 the corrected one-symbol-rate tone spacing introduced with these modes.
 
+For a local radio-TX/WebSDR-RX pair, continuous capture, replay and an optional
+IP telemetry back channel, see [On-air testing](ON-AIR-TESTING.md).
+
 ## Mobile web app and control API
 
 Enable **Mobile control** in Station settings → Options. Pixel QSO starts an
@@ -65,33 +69,31 @@ POST `/api/stage`, `/api/quickdraw`, `/api/transmit`, and `/api/stop`.
 The server listens on all network interfaces while enabled. Use it only on a
 trusted network; anyone who can reach it can request a transmission.
 
-## Experimental Data2G backend
+## Data2G host integration
 
-Data2G is opt-in because its decoder needs PyTorch and can install large,
-platform-specific runtime packages. Enable it only when you want the Data2G
-transmission choices:
+PixelQSO uses Data2G through its supported command and KISS APIs. In Station
+settings, choose a remote host or start a local host managed by PixelQSO. The
+standard install includes the pinned Data2G runtime needed for local hosting;
+the host runs as a separate process and owns radio audio, modem operation, and
+PTT. PixelQSO talks to it only through command and KISS sockets. For local
+modem modes, CAT connects to the saved rigctld endpoint on startup by default;
+turn off **Connect to rigctld on startup** in Station settings to disable it.
+Remote hosts remain supported. Torch is not installed because it is only needed for upstream
+model training. If a local host exits during startup, PixelQSO reports the
+current failure from `data2g-host.log` in its data directory. See
+[on-air testing](ON-AIR-TESTING.md) and [the integration plan](docs/DATA2G-INTEGRATION-PLAN.md) for setup and remaining
+validation.
 
-```sh
-uv sync --extra data2g
-uv run --extra data2g python app.py
-```
-
-This enables Data2G fast and robust choices within its 1.2 kHz band. Choose a
-Data2G option on both stations; either choice can receive both included
-Data2G submodes. The card, CQ/Exchange/73 stages, one-way copy count, and QSO
-log work the same way. A decoded Data2G burst contributes checked image
-fragments to the live card. Details are in [DATA2G-BACKEND.md](DATA2G-BACKEND.md).
-
-The separate experimental weak-signal modem uses Data2G's LDPC code
-construction but has its own CPU decoder, so it does not need PyTorch. Install
-only its lighter optional set with:
+The experimental weak-signal modem uses a fixed, attributed 3GPP NR LDPC table
+and its own CPU decoder. It does not depend on Data2G or PyTorch. Install its
+optional SciPy dependency with:
 
 ```sh
 uv sync --extra weak-signal
 uv run --extra weak-signal python app.py
 ```
 
-The proposed host-based broadcast integration, implementation notes, and open questions are tracked in [DATA2G-BROADCAST-NOTES.md](DATA2G-BROADCAST-NOTES.md).
+Host protocol details and remaining interoperability checks are tracked in [DATA2G-BROADCAST-NOTES.md](DATA2G-BROADCAST-NOTES.md).
 
 ## Test with two stations
 
@@ -109,21 +111,19 @@ python -m PyInstaller --clean --noconfirm pixelqso.spec
 ```
 
 Builds are created in `dist/`. The same PySide6 application supports Linux, Windows, and macOS.
-This is the base build. To include the experimental Data2G backend, build from
-its optional environment:
+To package the experimental weak-signal modem, use:
 
 ```sh
-uv sync --extra data2g
-uv run --extra data2g pyinstaller --clean --noconfirm pixelqso.spec
+PIXELQSO_FREEZE_WEAK_SIGNAL=1 uv run --extra weak-signal --with pyinstaller pyinstaller --clean --noconfirm pixelqso.spec
 ```
 
-That bundle will be substantially larger because it includes Data2G and
-PyTorch. To package the weak-signal experiment without PyTorch, use:
+The default frozen app includes SciPy for the bundled Data2G host and excludes
+the optional PixelQSO weak-signal modem. The environment flag above includes
+that modem.
 
-```sh
-uv sync --extra weak-signal
-uv run --extra weak-signal pyinstaller --clean --noconfirm pixelqso.spec
-```
+The default frozen build includes the locally managed Data2G server runtime.
+It starts as a child process and uses the same supported command and KISS
+interfaces as a remote server; Torch and GPU training packages are excluded.
 
 ## Modem test
 
@@ -150,6 +150,5 @@ For weaker signals, **Weak signal · combined copies · experimental** sends
 1–8 identical bursts and combines soft bit evidence at the receiver. Start with
 four copies (18.488 seconds of audio). Both formats require the `weak-signal`
 extra and retain whole-card integrity checks; neither provides partial images.
-Install `uv sync --extra weak-signal` to enable it without installing
-PyTorch. See
+Install `uv sync --extra weak-signal` to enable it. See
 [the modem format, limits and measurements](WEAK-SIGNAL-MODEM.md).

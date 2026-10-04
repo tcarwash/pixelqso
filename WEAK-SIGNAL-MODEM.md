@@ -1,10 +1,11 @@
 # Experimental weak-signal modem
 
 Select **Weak signal · 32×32 · experimental** in Transmission type. Install its
-lightweight dependencies with `uv sync --extra weak-signal`. The mode uses
-Data2G's pinned LDPC construction and encoder, NumPy for decoding, and SciPy
-for filtering/resampling. It does not use Data2G's OFDM waveform or Torch for
-decoding. Production Resilient remains the default.
+lightweight dependencies with `uv sync --extra weak-signal`. The mode uses an
+independent fixed encoder/decoder graph generated from the attributed 3GPP NR
+BG2 shift table in `licenses/weak-signal`; NumPy handles the code and SciPy
+handles filtering/resampling. It has no Data2G or Torch dependency. Production
+Resilient remains the default.
 
 This mode carries one complete **32×32 eight-color** card. Colors are mapped to
 the same shared palette used by production. Callsign, grid, card ID, message

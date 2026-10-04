@@ -1,10 +1,5 @@
-"""Experimental fixed 32x32 card modem: shaped QPSK and rate-0.24 LDPC.
-
-The wire format is independent of the production FSK and Data2G waveforms.
-Data2G supplies only its pinned NR parity-check construction and encoder.
-"""
+"""Experimental fixed 32x32 card modem: shaped QPSK and rate-0.24 LDPC."""
 from functools import lru_cache
-import hashlib
 import math
 import struct
 import zlib
@@ -26,12 +21,8 @@ GUARD = 1600
 
 @lru_cache(None)
 def code():
-    from data2g.ldpc import nr_code
-    result = nr_code(K, N, bg=2)
-    digest = hashlib.sha256(result.base.astype('<i8').tobytes()).hexdigest()
-    if digest != '05c6cf540be3769cbb7dc3dd7e68af93a14ebc98275ee54a1a54b0c6f5c3df55':
-        raise RuntimeError('Experimental modem LDPC construction changed')
-    return result
+    from weak_signal_ldpc import fixed_code
+    return fixed_code()
 
 
 @lru_cache(None)

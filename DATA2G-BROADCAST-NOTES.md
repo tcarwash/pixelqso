@@ -50,20 +50,43 @@ does not expose arbitrary partial decoder symbols or intra-burst pixels.
 The app-level protocol in [`card_transfer.py`](card_transfer.py) uses the
 `PQI2` magic and version 1. Each frame carries card dimensions and palette,
 callsign/grid, QSO stage, byte offset and total packed-raster length, a
-whole-raster CRC32, and a 64-bit BLAKE2s image identity. Receivers retain
+whole-raster CRC32, and a 64-bit BLAKE2s content tag. Receivers retain
 interleaved images by sender and image identity, accept duplicate or
 out-of-order fragments, and reject conflicting overlap. Pixel coverage can
-update the preview before the whole-raster CRC passes; only a complete exact
-raster is accepted as verified.
+update the preview before the raster checks pass; a complete raster must match
+both its CRC32 and content tag before the service emits a verified-complete
+event.
 
-Pixel QSO currently sends application frames up to 256 bytes and lets the host
-map them onto its own codewords. The app frame size is independent of PHY
-codeword boundaries. Native and pinned Python host-to-host tests transfer a
-full card through paced audio links and verify its identity and CRC.
+Pixel QSO prefers application frames up to 256 bytes and lowers that limit for
+Data2G modes with less codeword capacity. The limit accounts for the KISS
+length prefix and reserves control codewords; the card protocol header is
+included in the frame. The app frame size is independent of PHY codeword
+boundaries. Native and pinned Python host-to-host tests transfer a full card
+through paced audio links and verify its identity and CRC.
 
 The former `PQD2` PCM waveform/application path is intentionally not supported
 by the host/KISS receiver. Old waveform captures need the old decoder; saved
 card JSON remains independent of that waveform format.
+
+## Experimental local resilient wire versions
+
+The established local Resilient modes continue to transmit version 3 so an
+upgrade does not silently change their on-air format. The separate
+**Resilient v4 · whole-image check** experimental mode transmits version 4 and
+requires a receiver that understands that version. Version 4 identifies the
+canonical raster after mapping pixels to the shared 8/16/32-color palette and
+packing those indices in raster order. Protected metadata carries its CRC32
+and a 32-bit BLAKE2s content tag. Each version 4 FEC block also carries its
+block index and count under its RS and CRC protection. Checked blocks can
+contribute verified regions, while the card is promoted as a complete verified
+image only when every required block passes and the reconstructed canonical
+raster matches both metadata checks. Version 3 remains decodable and retains
+only its per-block CRC verification scope; version 3 and version 4 blocks never
+share an assembly identity.
+
+For a 32×32 8-color card, the new version 4 metadata and block-position fields
+increase a clean cycle from 1,236 to 1,294 tones (about 4.7%). This is a symbol
+count comparison, not an RF recovery or sensitivity result.
 
 ## Verified behavior and remaining checks
 

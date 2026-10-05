@@ -32,7 +32,8 @@ class NarrowModeTests(unittest.TestCase):
 
     def test_resilient_keeps_provisional_pixels_until_block_crc_passes(self):
         card = pixel.example_card()
-        symbols = list(pixel.minimal_avatar_resilient_cycle_symbols(card, message_type="cq"))
+        symbols = list(pixel.minimal_avatar_resilient_cycle_symbols(
+            card, message_type="cq", wire_version=3))
         first_block = len(pixel.FRAME_SYNC) + pixel.AVATAR_META_TONE_COUNT
         # Four strong symbol errors exceed the bounded Chase search and leave
         # the block available only as provisional preview pixels.
@@ -73,7 +74,9 @@ class NarrowModeTests(unittest.TestCase):
                     else:
                         self.assertEqual(tones[0], placement)
                     audio = backend.encode(card, 1, "cq", None)
-                    self.assertAlmostEqual(len(audio) / 48000, 1236 / baud)
+                    self.assertAlmostEqual(len(audio) / 48000,
+                                           len(pixel.minimal_avatar_resilient_cycle_symbols(
+                                               card, wire_version=3)) / baud)
                     audio = np.pad(audio, (12000, 12000))
                     audio += np.random.default_rng(10).normal(0, .05, len(audio))
                     report = backend.decode(audio, 48000)
@@ -96,7 +99,9 @@ class NarrowModeTests(unittest.TestCase):
                 self.assertTrue(is_available(backend.key))
                 self.assertEqual(backend.profile.tones_hz, tuple(range(baud, 9 * baud, baud)))
                 audio = backend.encode(card, 1, "exchange", -7)
-                self.assertAlmostEqual(len(audio) / 48000, 1236 / baud)
+                self.assertAlmostEqual(len(audio) / 48000,
+                                       len(pixel.minimal_avatar_resilient_cycle_symbols(
+                                           card, wire_version=3)) / baud)
                 audio = np.pad(audio, (12000, 12000))
                 audio += np.random.default_rng(4).normal(0, .05, len(audio))
                 report = backend.decode(audio, 48000)

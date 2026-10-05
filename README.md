@@ -38,25 +38,33 @@ and local card and QSO storage.
 
 ## Modem choices
 
-Resilient 100, 50, and 25 baud are normal modes. Resilient 100 is the default
-when no compatible Data2G host mode is selected. Higher-speed Resilient, Fast,
-Weak signal, and legacy modes are under **Show experimental modem modes** in
-Station settings. CPU weak-signal modes ship in the same app. They need no
-PyTorch or GPU packages; SciPy is included by the Data2G runtime.
+Data2G is the default backend. After connecting, Pixel QSO lists the host's
+advertised modes that its broadcast API accepts for this group and that have
+enough frame capacity for a Pixel QSO card fragment. Each entry shows the exact
+host mode name, bandwidth, and maximum application-frame size.
 
-Data2G Robust and Fast become available after Pixel QSO discovers compatible
-modes from a Data2G host. Robust is preferred for a new selection when the host
-is connected. For local Resilient modes, the audio placement control sets the
-lowest tone; 300 Hz is the recommended starting offset. This control does not
+Pixel QSO's local Resilient, Fast, weak-signal, and legacy modems are available
+through **Experimental modems** after enabling **Show experimental modem modes**
+in Station settings. Local Resilient modes have an audio placement control that
+sets the lowest tone; 300 Hz is the recommended starting offset. It does not
 configure Data2G's audio placement.
+
+The existing Resilient modes keep the version 3 on-air format for compatibility
+with existing local-modem stations. **Resilient v4 · whole-image check** is a
+separate experimental mode and sends a new version 4 format. Version 4 protects
+the canonical packed palette raster's CRC32 and content tag in its header, adds
+explicit block position/count fields, and accepts a complete image only after
+all checked blocks match that raster identity. Version 3 remains decodable with
+its original per-block CRC verification scope; it does not claim whole-image
+checksum verification. Version 4 transmissions require a peer with v4 support.
 
 ## Data2G host
 
 In Station settings, choose **Start local Data2G host** to have Pixel QSO start
 the bundled host, or choose **Remote Data2G host** and enter a host address.
 The defaults are command port 8300 and KISS port 8100. Pixel QSO discovers the
-host's mode catalog, opens the shared `PIXELQSO` broadcast group, and chooses
-compatible Robust/Fast presets from the host's supported modes.
+host's mode catalog, opens the shared `PIXELQSO` broadcast group, and validates
+the catalog against that group's `BCAST MODE` support before showing choices.
 
 For Data2G modes, Data2G owns radio audio and PTT. Pixel QSO releases its local
 audio receiver and CAT connection while the host is selected. Local Resilient
@@ -67,6 +75,14 @@ ACKMODE confirms that a local frame finished transmitting; it does not confirm
 that another station received the card. Group names and CRC masks are not
 encryption or privacy. See [the host protocol notes](DATA2G-BROADCAST-NOTES.md)
 for details on group and frame behavior.
+
+Pixel QSO's internal adapter boundary records which component owns radio and
+audio, what receive features are available, and what integrity evidence a
+backend supplies. Data2G enters as checked application frames; experimental
+local modems enter as decoded blocks or candidate pixels. Both feed the same
+bounded card assembly service. Adding an experimental backend requires a known
+Pixel QSO framing and integrity contract; arbitrary modem formats are not
+automatically interoperable.
 
 ## Build
 

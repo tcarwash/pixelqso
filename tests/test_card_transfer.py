@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from card_transfer import CardTransferReceiver, HEADER, fragment
+from card_transfer import Assembly, CardTransferReceiver, HEADER, fragment
 
 
 class CardTransferTests(unittest.TestCase):
@@ -49,12 +49,31 @@ class CardTransferTests(unittest.TestCase):
         self.assertIsNot(first_assembly, second_assembly)
         self.assertEqual(len(rx.assemblies), 2)
 
+    def test_content_identity_merges_refinement_after_card_id_changes(self):
+        rx = CardTransferReceiver()
+        first, _ = rx.feed("AG7SU", fragment(self.card, self.packed, 0, self.packed[:1]))
+        revised_card_id = SimpleNamespace(**{**vars(self.card), "card_id": 991})
+        resumed, _ = rx.feed("AG7SU", fragment(revised_card_id, self.packed, 1, self.packed[1:]))
+        self.assertIs(resumed, first)
+        self.assertTrue(resumed.exact)
+        self.assertEqual(len(rx.assemblies), 1)
+
+    def test_complete_transfer_requires_both_raster_crc_and_content_tag(self):
+        frame = bytearray(fragment(self.card, self.packed, 0, self.packed))
+        frame[HEADER.size - 1] ^= 0x01
+        assembly, metadata = CardTransferReceiver().feed("AG7SU", bytes(frame))
+        self.assertTrue(all(assembly.present))
+        self.assertFalse(assembly.exact)
+        self.assertTrue(metadata["whole_raster_crc32_valid"])
+        self.assertFalse(metadata["content_tag_valid"])
+
     def test_assembly_cache_is_bounded(self):
         rx = CardTransferReceiver(max_assemblies=2)
         assemblies = []
         for card_id in (71, 72, 73):
             card = SimpleNamespace(**{**vars(self.card), "card_id": card_id})
-            assembly, _ = rx.feed("AG7SU", fragment(card, self.packed, 0, self.packed[:1]))
+            packed = bytes(value ^ (card_id & 0xff) for value in self.packed)
+            assembly, _ = rx.feed("AG7SU", fragment(card, packed, 0, packed[:1]))
             assemblies.append(assembly)
         self.assertEqual(len(rx.assemblies), 2)
         self.assertNotIn(71, [assembly.metadata[0] for assembly in rx.assemblies.values()])
@@ -68,6 +87,14 @@ class CardTransferTests(unittest.TestCase):
         self.assertFalse(assembly.exact)
         with self.assertRaisesRegex(ValueError, "conflicting"):
             rx.feed("AG7SU", fragment(self.card, self.packed, 0, b"bad"))
+
+    def test_conflicting_fragment_is_rejected_before_any_bytes_are_applied(self):
+        assembly = Assembly((), 4, 0)
+        assembly.add(1, b"x")
+        with self.assertRaisesRegex(ValueError, "conflicting"):
+            assembly.add(0, b"ay")
+        self.assertEqual(assembly.present, bytearray((0, 1, 0, 0)))
+        self.assertEqual(assembly.data[0], 0)
 
     def test_header_is_versioned_and_checks_dimensions(self):
         frame = fragment(self.card, self.packed, 0, self.packed)

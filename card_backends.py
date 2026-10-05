@@ -9,12 +9,16 @@ import math
 import importlib.util
 from dataclasses import dataclass, replace
 from typing import Protocol
+from urllib.parse import quote
 
 import numpy as np
 import cardmodem as pixel
 from card_transfer import HEADER as TRANSFER_HEADER
 
 AUDIO_RATE = pixel.SAMPLE_RATE
+DATA2G_PREFERRED_FRAME_BYTES = 256
+DATA2G_LENGTH_PREFIX_BYTES = 2
+DATA2G_MAX_CONTROL_CODEWORDS = 4
 
 
 class CardBackend(Protocol):
@@ -40,15 +44,21 @@ class AvatarBackend:
     label: str
     checked: bool
     profile: pixel.ModemProfile = pixel.MINIMAL_AVATAR_PROFILE
+    wire_version: int = 3
 
     def encode(self, card, repeats, message_type, snr_db):
-        cycle = (pixel.minimal_avatar_resilient_cycle_symbols(card, message_type=message_type, snr_db=snr_db)
+        cycle = (pixel.minimal_avatar_resilient_cycle_symbols(
+                    card, message_type=message_type, snr_db=snr_db,
+                    wire_version=self.wire_version)
                  if self.checked else pixel.minimal_avatar_symbols(card, message_type=message_type, snr_db=snr_db))
         return pixel.synthesize(pixel.repeat_symbol_stream(cycle, repeats), profile=self.profile)
 
     def estimate_seconds(self, card, repeats):
-        duration = (pixel.minimal_avatar_resilient_duration(card=card) if self.checked
-                    else pixel.minimal_avatar_duration(card=card))
+        if self.checked:
+            symbol_count = len(pixel.minimal_avatar_resilient_cycle_symbols(
+                card, wire_version=self.wire_version))
+            return repeats * symbol_count / self.profile.baud
+        duration = pixel.minimal_avatar_duration(card=card)
         return repeats * duration * pixel.MINIMAL_AVATAR_PROFILE.baud / self.profile.baud
 
     def decode(self, audio, sample_rate):
@@ -69,7 +79,9 @@ class AvatarBackend:
         return _report(pixels, decoded, sample_rate, self.profile.key)
 
     def minimum_audio_seconds(self):
-        symbols = len(pixel.FRAME_SYNC) + pixel.AVATAR_META_TONE_COUNT + (132 if self.checked else 32)
+        header = (pixel.AVATAR_META_V4_TONE_COUNT if self.wire_version == 4
+                  else pixel.AVATAR_META_TONE_COUNT)
+        symbols = len(pixel.FRAME_SYNC) + header + (132 if self.checked else 32)
         return symbols / self.profile.baud
 
 
@@ -84,10 +96,19 @@ class Data2GHostBackend:
     mode: object | None = None
     checked: bool = False
     max_repeats: int = 20
+    disabled_reason: str | None = None
 
     @property
     def mode_name(self):
         return getattr(self.mode, "name", "")
+
+    @property
+    def max_frame_bytes(self):
+        return data2g_max_frame_bytes(self.mode)
+
+    @property
+    def usable(self):
+        return self.mode is not None and self.disabled_reason is None and self.max_frame_bytes is not None
 
     def encode(self, *_args):
         raise RuntimeError("Data2G card frames are submitted through the configured host connection")
@@ -95,22 +116,27 @@ class Data2GHostBackend:
     def estimate_seconds(self, card, repeats):
         if self.mode is None:
             raise RuntimeError("Connect to a Data2G host to discover this mode")
+        if self.disabled_reason:
+            raise ValueError(self.disabled_reason)
         if not 1 <= repeats <= self.max_repeats:
             raise ValueError(f"Copies must be 1..{self.max_repeats}")
         packed = pixel.minimal_avatar_payload(card)
-        app_bytes = 256 - TRANSFER_HEADER.size
+        frame_limit = self.max_frame_bytes
+        if frame_limit is None:
+            raise ValueError("Data2G mode cannot fit the Pixel QSO card header and image data")
+        app_bytes = frame_limit - TRANSFER_HEADER.size
         mode = self.mode
-        if mode.bytes_per_codeword <= 0 or mode.max_codewords < 1:
-            raise ValueError("Data2G host advertised invalid mode capacity")
         per_codeword = ((mode.seconds_at_max - mode.seconds_at_one) /
                         max(1, mode.max_codewords - 1))
         estimate = 0.0
         for offset in range(0, len(packed), app_bytes):
-            app_frame_bytes = TRANSFER_HEADER.size + min(app_bytes, len(packed) - offset)
+            frame_bytes = TRANSFER_HEADER.size + min(app_bytes, len(packed) - offset)
             # Data2G's broadcast stream adds a two-byte frame length before
-            # coding. ACKMODE serialization means each PixelQSO frame gets its
-            # own burst; the host may combine codewords from that frame only.
-            codewords = math.ceil((app_frame_bytes + 2) / mode.bytes_per_codeword)
+            # coding. Reserve the host's maximum four control codewords; ACKMODE
+            # serialization gives each PixelQSO frame its own burst.
+            codewords = (DATA2G_MAX_CONTROL_CODEWORDS +
+                         math.ceil((frame_bytes + DATA2G_LENGTH_PREFIX_BYTES) /
+                                   mode.bytes_per_codeword))
             if codewords > mode.max_codewords:
                 raise ValueError("PixelQSO fragment exceeds the host mode's maximum burst capacity")
             estimate += mode.seconds_at_one + max(0, codewords - 1) * per_codeword
@@ -123,52 +149,95 @@ class Data2GHostBackend:
         return self.mode.seconds_at_one if self.mode is not None else 0.0
 
 
-def host_mode_backends(modes):
-    """Choose compatible robust/fast presets from the host's advertised modes.
+def data2g_mode_key(mode_name: str) -> str:
+    """Return a stable, collision-safe UI/settings key for a host mode name."""
+    return "data2g_mode_" + quote(str(mode_name), safe="")
 
-    Prefer the usual 1.2-kHz profiles, then adapt to narrower host bandwidth
-    caps (whose mode names have prefixes such as ``n10-`` and ``n4-``).
+
+def data2g_max_frame_bytes(mode, preferred=DATA2G_PREFERRED_FRAME_BYTES):
+    """Safe app-frame limit after Data2G's stream prefix and control reserve."""
+    if mode is None:
+        return None
+    try:
+        bytes_per_codeword = int(mode.bytes_per_codeword)
+        max_codewords = int(mode.max_codewords)
+        if (bytes_per_codeword <= 0 or max_codewords <= DATA2G_MAX_CONTROL_CODEWORDS or
+                not math.isfinite(float(mode.seconds_at_one)) or
+                not math.isfinite(float(mode.seconds_at_max)) or
+                mode.seconds_at_one <= 0 or mode.seconds_at_max < mode.seconds_at_one):
+            return None
+        data_capacity = ((max_codewords - DATA2G_MAX_CONTROL_CODEWORDS) *
+                         bytes_per_codeword - DATA2G_LENGTH_PREFIX_BYTES)
+        if data_capacity < TRANSFER_HEADER.size + 1:
+            return None
+        return min(int(preferred), data_capacity)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def host_mode_backends(modes, supported_names=None):
+    """Build a backend entry for every mode the host advertises.
+
+    `supported_names` should come from BCAST MODE validation on the opened
+    group, since MODES includes modes that may not fit that group's control.
+    Rejected or undersized modes remain present with a disabled reason.
     """
-    modes = [m for m in modes if m.bytes_per_codeword > 0 and m.max_codewords > 0
-             and math.ceil((256 + 2) / m.bytes_per_codeword) <= m.max_codewords]
+    allowed = None if supported_names is None else set(supported_names)
+    result = {}
+    for mode in sorted(modes, key=lambda item: (item.bandwidth_hz, item.name)):
+        frame_limit = data2g_max_frame_bytes(mode)
+        if allowed is not None and mode.name not in allowed:
+            reason = "The host refused BCAST MODE for this group's control fields."
+        elif frame_limit is None:
+            reason = "Not enough codeword capacity for the Pixel QSO header and one image byte."
+        else:
+            reason = None
+        key = data2g_mode_key(mode.name)
+        bandwidth = (f"{mode.bandwidth_hz / 1000:g} kHz" if mode.bandwidth_hz >= 1000
+                     else f"{mode.bandwidth_hz:g} Hz")
+        capacity = f"{frame_limit} B/frame" if frame_limit is not None else "not usable"
+        label = f"Data2G · {mode.name} · {bandwidth} · {capacity}"
+        result[key] = Data2GHostBackend(key, label, mode, disabled_reason=reason)
+    return result
+
+
+def preferred_data2g_mode_key(backends, preset="robust"):
+    """Resolve legacy Robust/Fast preferences against a dynamic host catalog."""
+    usable = [(key, backend) for key, backend in backends.items() if backend.usable]
+    if not usable:
+        return "data2g_1200_robust"
+    entries = usable
+    if preset not in {"robust", "fast"}:
+        return next((key for key, backend in entries if backend.mode_name == preset),
+                    entries[0][0])
 
     def fraction(mode):
         try:
-            value = mode.name.rsplit("r", 1)[1].split("/", 1)
-            return int(value[0]) / int(value[1])
-        except (IndexError, ValueError, ZeroDivisionError):
+            rate = mode.name.rsplit("r", 1)[1].split("/", 1)
+            return int(rate[0]) / int(rate[1])
+        except (AttributeError, IndexError, ValueError, ZeroDivisionError):
             return None
 
-    def family_modes(family):
-        return [m for m in modes if family in m.name.lower() and "ack" not in m.name.lower()]
-
-    robust_candidates = family_modes("qpsk")
-    fast_candidates = family_modes("16qam")
-    robust = next((m for m in robust_candidates if m.name == "qpsk-r1/2"), None)
-    if robust is None:
-        same_rate = [m for m in robust_candidates if m.name.endswith("qpsk-r1/2")]
-        if same_rate:
-            robust = max(same_rate, key=lambda m: (m.bandwidth_hz, m.bytes_per_codeword))
-    if robust is None and robust_candidates:
-        robust = min(robust_candidates, key=lambda m: (
-            fraction(m) if fraction(m) is not None else 2.0,
-            -m.bandwidth_hz, -m.bytes_per_codeword))
-
-    fast = next((m for m in fast_candidates if m.name == "16qam-r1/2"), None)
-    if fast is None and fast_candidates:
-        fast = max(fast_candidates, key=lambda m: (
-            fraction(m) if fraction(m) is not None else 0.0,
-            m.bandwidth_hz, m.bytes_per_codeword))
-
-    result = {}
-    for key, role, mode in (("data2g_1200_robust", "robust", robust),
-                            ("data2g_1200_fast", "fast", fast)):
-        if mode is None:
-            continue
-        bandwidth = (f"{mode.bandwidth_hz / 1000:g} kHz" if mode.bandwidth_hz >= 1000
-                     else f"{mode.bandwidth_hz:g} Hz")
-        result[key] = Data2GHostBackend(key, f"Data2G · {bandwidth} · {role}", mode)
-    return result
+    candidates = [(key, backend) for key, backend in entries
+                  if ("qpsk" in backend.mode_name.lower() if preset == "robust"
+                      else "16qam" in backend.mode_name.lower())]
+    if not candidates:
+        return entries[0][0]
+    if preset == "robust":
+        same_rate = next((key for key, backend in candidates
+                          if backend.mode_name.endswith("qpsk-r1/2")), None)
+        if same_rate is not None:
+            return same_rate
+        return min(candidates, key=lambda item: (
+            fraction(item[1].mode) if fraction(item[1].mode) is not None else 2.0,
+            -item[1].mode.bandwidth_hz))[0]
+    same_rate = next((key for key, backend in candidates
+                      if backend.mode_name.endswith("16qam-r1/2")), None)
+    if same_rate is not None:
+        return same_rate
+    return max(candidates, key=lambda item: (
+        fraction(item[1].mode) if fraction(item[1].mode) is not None else 0.0,
+        item[1].mode.bandwidth_hz))[0]
 
 
 @dataclass(frozen=True)
@@ -219,11 +288,15 @@ class WeakSignalCombinedBackend(WeakSignalBackend):
         return repeats * weak.seconds()
 
 
+# The two legacy keys are retained only to migrate saved preferences and to
+# represent the not-yet-discovered Data2G selection before a host connects.
 BACKENDS: dict[str, CardBackend] = {
     "experimental_qpsk_5s": WeakSignalBackend(),
     "experimental_qpsk_combined": WeakSignalCombinedBackend(),
     "fast_avatar": AvatarBackend("fast_avatar", "Fast · unverified · experimental", False),
     "fast_avatar_fec": AvatarBackend("fast_avatar_fec", "Resilient · 400 baud · experimental", True),
+    "fast_avatar_fec_v4": AvatarBackend("fast_avatar_fec_v4", "Resilient v4 · whole-image check · experimental", True,
+                                         wire_version=4),
     **{f"resilient_{baud}": AvatarBackend(
         f"resilient_{baud}", f"Resilient · ≈{9 * baud} Hz · {baud} baud", True,
         pixel.ModemProfile(f"avatar-{baud}", f"Narrow avatar · {baud} baud", baud,
@@ -241,6 +314,14 @@ class ModeSpec:
     experimental: bool
     execution_path: str
     availability: str = "installed"
+    adapter_key: str | None = None
+    supports_audio_placement: bool = False
+
+    @property
+    def adapter(self) -> str:
+        if self.adapter_key:
+            return self.adapter_key
+        return "data2g_host" if self.execution_path == "data2g_host" else "experimental_local"
 
     @property
     def label(self) -> str:
@@ -254,12 +335,11 @@ class ModeSpec:
 # BACKENDS; this policy remains the source of ordering, visibility, execution
 # path, and dependency/connection requirements.
 MODE_REGISTRY: dict[str, ModeSpec] = {
-    "data2g_1200_robust": ModeSpec("data2g_1200_robust", "Data2G · robust", False, "data2g_host", "host"),
-    "data2g_1200_fast": ModeSpec("data2g_1200_fast", "Data2G · fast", False, "data2g_host", "host"),
-    "resilient_100": ModeSpec("resilient_100", "Resilient · 900 Hz · 100 baud", False, "pixelqso_audio"),
-    "resilient_50": ModeSpec("resilient_50", "Resilient · 450 Hz · 50 baud", False, "pixelqso_audio"),
-    "resilient_25": ModeSpec("resilient_25", "Resilient · 225 Hz · 25 baud", False, "pixelqso_audio"),
+    "resilient_100": ModeSpec("resilient_100", "Resilient · 900 Hz · 100 baud · experimental", True, "pixelqso_audio", supports_audio_placement=True),
+    "resilient_50": ModeSpec("resilient_50", "Resilient · 450 Hz · 50 baud · experimental", True, "pixelqso_audio", supports_audio_placement=True),
+    "resilient_25": ModeSpec("resilient_25", "Resilient · 225 Hz · 25 baud · experimental", True, "pixelqso_audio", supports_audio_placement=True),
     "fast_avatar_fec": ModeSpec("fast_avatar_fec", "Resilient · 400 baud · experimental", True, "pixelqso_audio"),
+    "fast_avatar_fec_v4": ModeSpec("fast_avatar_fec_v4", "Resilient v4 · whole-image check · experimental", True, "pixelqso_audio"),
     "fast_avatar": ModeSpec("fast_avatar", "Fast · experimental", True, "pixelqso_audio"),
     "experimental_qpsk_5s": ModeSpec("experimental_qpsk_5s", "Weak signal · experimental", True, "pixelqso_audio", "scipy"),
     "experimental_qpsk_combined": ModeSpec("experimental_qpsk_combined", "Weak signal combined · experimental", True, "pixelqso_audio", "scipy"),
@@ -268,7 +348,20 @@ MODE_REGISTRY: dict[str, ModeSpec] = {
 MODE_ORDER = tuple(MODE_REGISTRY)
 EXPERIMENTAL_MODE_KEYS = frozenset(key for key, spec in MODE_REGISTRY.items() if spec.experimental)
 LEGACY_MODE_KEY = "standard"
-DEFAULT_MODE_KEY = "resilient_100"
+DEFAULT_MODE_KEY = "data2g_1200_robust"
+
+
+def register_data2g_mode_backends(backends):
+    """Replace the dynamic Data2G catalog after a successful host discovery."""
+    global MODE_ORDER
+    for key, spec in list(MODE_REGISTRY.items()):
+        if spec.execution_path == "data2g_host":
+            MODE_REGISTRY.pop(key, None)
+    for key, backend in backends.items():
+        BACKENDS[key] = backend
+        MODE_REGISTRY[key] = ModeSpec(key, backend.label, False, "data2g_host", "host",
+                                      "data2g_host")
+    MODE_ORDER = tuple(MODE_REGISTRY)
 
 
 def is_experimental_mode(key: str) -> bool:
@@ -284,18 +377,17 @@ def available_modes(*, include_experimental: bool = False) -> list[tuple[str, Ca
 
 
 def normal_default_mode(keys=None, *, host_connected: bool = False) -> str:
-    """Choose a selectable default without preferring an unconfigured host."""
+    """Choose a Data2G default; never silently fall back to a local modem."""
     present = set(keys if keys is not None else (key for key, _ in available_modes()))
-    if host_connected and "data2g_1200_robust" in present:
-        return "data2g_1200_robust"
-    if DEFAULT_MODE_KEY in present:
-        return DEFAULT_MODE_KEY
-    return next((key for key in MODE_ORDER if key in present and not is_experimental_mode(key)),
-                "standard")
+    if host_connected:
+        return next((key for key in MODE_ORDER
+                     if key in present and key.startswith("data2g_mode_")), DEFAULT_MODE_KEY)
+    return DEFAULT_MODE_KEY
 
 def get_backend(key: str, audio_placement: str | float = "near_carrier") -> CardBackend:
     backend = BACKENDS[key]
-    if not key.startswith("resilient_"):
+    spec = MODE_REGISTRY.get(key)
+    if spec is None or not spec.supports_audio_placement:
         return backend
     baud = backend.profile.baud
     if audio_placement == "near_carrier":
@@ -314,6 +406,11 @@ def is_card_backend(key: str) -> bool:
     return key in BACKENDS
 
 
+def mode_supports_audio_placement(key: str) -> bool:
+    spec = MODE_REGISTRY.get(key)
+    return bool(spec and spec.supports_audio_placement)
+
+
 def audio_backend_keys(*, include_experimental: bool = True) -> tuple[str, ...]:
     """Locally synthesized modes for benchmark/replay tools, in registry order."""
     return tuple(key for key, spec in MODE_REGISTRY.items()
@@ -330,5 +427,5 @@ def is_available(key: str) -> bool:
         return importlib.util.find_spec("scipy") is not None
     if spec.availability == "host":
         backend = BACKENDS.get(key)
-        return isinstance(backend, Data2GHostBackend) and backend.mode is not None
+        return isinstance(backend, Data2GHostBackend) and backend.usable
     return key == LEGACY_MODE_KEY or key in BACKENDS

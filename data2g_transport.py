@@ -7,6 +7,7 @@ import queue
 import socket
 import threading
 import time
+from concurrent.futures import Future
 from typing import Callable
 
 FEND, FESC, TFEND, TFESC = 0xC0, 0xDB, 0xDC, 0xDD
@@ -16,6 +17,10 @@ MAX_KISS_FRAME_BYTES = 65536
 
 class Data2GError(RuntimeError):
     """Host connection, command, or protocol error."""
+
+
+class Data2GCommandRefused(Data2GError):
+    """The host answered WRONG for a validly delivered command."""
 
 
 @dataclass(frozen=True)
@@ -216,7 +221,9 @@ class Data2GTransport:
                     if terminal:
                         response.append(item)
                         if item == "WRONG":
-                            raise Data2GError(f"Data2G host refused command: {line}")
+                            error = (Data2GCommandRefused if line.upper().startswith("BCAST MODE ")
+                                     else Data2GError)
+                            raise error(f"Data2G host refused command: {line}")
                         return response
                     response.append(item)
             except queue.Empty as exc:
@@ -412,6 +419,13 @@ class Data2GSession:
         self._require_ready()
         self._enqueue(("mode", str(mode)))
 
+    def check_broadcast_modes(self, names, *, timeout=30.0):
+        """Ask the connected host which catalog modes fit this opened BCAST port."""
+        self._require_ready()
+        future = Future()
+        self._enqueue(("check_modes", (tuple(str(name) for name in names), future)))
+        return future.result(timeout=max(0.1, float(timeout)))
+
     def send_frame(self, tag, payload):
         self._require_ready()
         if len(tag) != 2:
@@ -460,10 +474,28 @@ class Data2GSession:
                 try:
                     if action == "mode":
                         client.set_mode(self.port, value)
+                    elif action == "check_modes":
+                        names, future = value
+                        results = {}
+                        try:
+                            for name in names:
+                                try:
+                                    client.set_mode(self.port, name)
+                                    results[name] = None
+                                except Data2GCommandRefused as exc:
+                                    results[name] = str(exc)
+                            future.set_result(results)
+                        except Exception as exc:
+                            future.set_exception(exc)
+                            raise
                     elif action == "send":
                         tag, payload = value
                         client.send_frame(self.port, tag, payload)
                 except Exception as exc:
+                    if action == "check_modes":
+                        _names, future = value
+                        if not future.done():
+                            future.set_exception(exc)
                     Data2GTransport._callback(self.on_error, str(exc))
                     if action == "mode":
                         raise Data2GError(f"Data2G host refused selected mode {value!r}: {exc}") from exc

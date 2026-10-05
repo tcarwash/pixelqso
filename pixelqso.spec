@@ -16,9 +16,13 @@ bundled_hidden = []
 if include_data2g_host:
     from PyInstaller.utils.hooks import collect_all
     data2g_datas, data2g_binaries, data2g_hidden = collect_all("data2g")
+    pyaudio_datas, pyaudio_binaries, pyaudio_hidden = collect_all("pyaudio")
     bundled_datas.extend(data2g_datas)
+    bundled_datas.extend(pyaudio_datas)
     bundled_binaries.extend(data2g_binaries)
+    bundled_binaries.extend(pyaudio_binaries)
     bundled_hidden.extend(data2g_hidden)
+    bundled_hidden.extend(pyaudio_hidden)
 hidden = [
     # Local modules are not reliably discovered by the frozen app analysis
     # when the spec is invoked from outside this folder.

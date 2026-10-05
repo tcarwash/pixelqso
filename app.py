@@ -10,6 +10,8 @@ import math
 import os
 import subprocess
 import sys
+import threading
+import tempfile
 import time
 import wave
 from pathlib import Path
@@ -31,23 +33,28 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QListWidget
     QStackedWidget, QProgressBar)
 
 import cardmodem as modem
-from backend_adapters import (AdapterKind, DATA2G_ADAPTER,
-                              EXPERIMENTAL_ADAPTER, adapter_for_backend_selection)
+from backend_adapters import (AdapterKind, DATA2G_ADAPTER, DecodeFailure,
+                              DecodeFailureKind, DecodeOutcome,
+                              EXPERIMENTAL_ADAPTER, ReceiveStartError,
+                              adapter_for_backend_selection)
 from card_backends import (BACKENDS, DEFAULT_MODE_KEY, LEGACY_MODE_KEY, MODE_REGISTRY, Data2GHostBackend,
                            available_modes, get_backend,
-                           host_mode_backends, is_card_backend, is_experimental_mode,
-                           mode_supports_audio_placement,
+                           data2g_mode_name, host_mode_backends, is_card_backend, is_experimental_mode,
+                           is_data2g_mode_key, mode_supports_audio_placement,
                            preferred_data2g_mode_key, register_data2g_mode_backends)
-from card_transfer import (CardAssemblyService,
-                           HEADER as CARD_TRANSFER_HEADER, fragment as card_fragment)
-from data2g_transport import Data2GMode, Data2GSession
-from data2g_runtime import (data2g_audio_device_selector, local_host_arguments,
-                            local_host_command)
+from card_transfer import CardAssemblyService
+from data2g_transport import Data2GMode
+from data2g_runtime import (data2g_audio_device_selector,
+                            data2g_host_audio_devices, int_setting,
+                            local_host_arguments, local_host_command,
+                            validate_data2g_ports)
 from on_air import SessionRecorder, card_reference, decoded_reference
 from card_views import DeckDialog, card_art, deck_events
 from webserver import CompanionServer
 
 APP_ICON_PATH = Path(__file__).resolve().with_name("icon.png")
+DATA2G_ACK_TIMEOUT_MS = 15_000
+DATA2G_BUSY_ACK_TIMEOUT_MS = 5 * 60_000
 DATA = Path.home() / ".local" / "share" / "PixelQSO"
 AUTO_REPLY_GUARD_MS = 600
 PALETTE = [(0, 0, 0), (15, 15, 15), (0, 0, 15), (0, 15, 15),
@@ -154,25 +161,31 @@ class DecodeSignals(QObject):
 
 
 class Data2GSignals(QObject):
-    connect_finished = Signal(object, object, object)
-    frame = Signal(int, bytes)
-    ack = Signal(int, bytes)
-    status = Signal(str)
-    error = Signal(str)
-    closed = Signal()
+    connect_finished = Signal(object, object, object, object)
+    frame = Signal(object, int, object)
+    ack = Signal(object, int, object)
+    status = Signal(object, str)
+    error = Signal(object, str)
+    closed = Signal(object)
 
 
 class Data2GConnectWorker(QRunnable):
     def __init__(self, session, signals, timeout=None):
         super().__init__()
         self.session, self.signals, self.timeout = session, signals, timeout
+        self._cancelled = threading.Event()
+
+    def cancel(self):
+        self._cancelled.set()
 
     def run(self):
         try:
             modes, checked = DATA2G_ADAPTER.discover(self.session, self.timeout)
-            self.signals.connect_finished.emit(modes, None, checked)
+            if not self._cancelled.is_set():
+                self.signals.connect_finished.emit(self.session, modes, None, checked)
         except Exception as exc:
-            self.signals.connect_finished.emit(None, str(exc), None)
+            if not self._cancelled.is_set():
+                self.signals.connect_finished.emit(self.session, None, str(exc), None)
 
 
 class RxAudioWaterfall(QWidget):
@@ -282,9 +295,11 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
                              preferred_mode=None, include_experimental=False):
     """Try the selected format first, then fall back to all installed formats."""
     preview = None
+    last_failure = None
     backends = available_modes(include_experimental=include_experimental)
     backends = [(key, backend) for key, backend in backends
-                if not isinstance(backend, Data2GHostBackend)]
+                if MODE_REGISTRY.get(key) is not None and
+                MODE_REGISTRY[key].adapter != DATA2G_ADAPTER.key]
     preferred_key = {"fast_avatar": "fast_avatar_fec",
                      "experimental_qpsk_combined": "experimental_qpsk_5s"}.get(
                          preferred_mode, preferred_mode)
@@ -298,20 +313,44 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
         placements = (list(dict.fromkeys((audio_placement, "near_carrier", "centered")))
                       if mode_supports_audio_placement(key) else [audio_placement])
         for placement in placements:
-            try:
-                report = EXPERIMENTAL_ADAPTER.decode(
-                    get_backend(key, placement), audio, sample_rate)
-            except ValueError:
-                continue  # No matching frame in this snapshot.
+            outcome = local_adapter_for_mode(key).decode_capture(
+                get_backend(key, placement), audio, sample_rate)
+            if outcome.failure:
+                if outcome.failure.kind is DecodeFailureKind.NO_MATCH:
+                    last_failure = outcome.failure
+                    continue
+                return outcome
+            report = outcome.report
             if report["card"].get("exact"):
-                return report
+                return DecodeOutcome(report=report)
             if preview is None:
                 preview = report
-    return preview
+    # The receive-all path includes the legacy packet modem after all card
+    # waveform adapters have had a chance to return a complete card.
+    if len(audio) >= sample_rate:
+        legacy = local_adapter_for_mode(LEGACY_MODE_KEY).decode_legacy_audio(
+            audio, sample_rate, "auto")
+        if legacy.report is not None:
+            if legacy.report["card"].get("exact") or preview is None:
+                return legacy
+        elif (legacy.failure and legacy.failure.kind is DecodeFailureKind.BACKEND_ERROR
+              and preview is None):
+            return legacy
+    if preview is not None:
+        return DecodeOutcome(report=preview)
+    return DecodeOutcome(failure=last_failure or DecodeFailure(
+        EXPERIMENTAL_ADAPTER.key, DecodeFailureKind.NO_MATCH,
+        "No matching card frame received yet", True))
 
 
 def decode_avatar_report(audio, sample_rate, mode="fast_avatar_fec"):
-    return EXPERIMENTAL_ADAPTER.decode(get_backend(mode), audio, sample_rate)
+    return local_adapter_for_mode(mode).decode_capture(get_backend(mode), audio, sample_rate)
+
+
+def local_adapter_for_mode(mode):
+    """Resolve decoder ownership from the registered mode contract."""
+    spec = MODE_REGISTRY.get(mode)
+    return adapter_for_backend_selection("experimental", spec.adapter if spec else None)
 
 
 class DecodeWorker(QRunnable):
@@ -330,30 +369,30 @@ class DecodeWorker(QRunnable):
 
     def run(self):
         try:
+            if self.mode == LEGACY_MODE_KEY:
+                outcome = local_adapter_for_mode(self.mode).decode_legacy_wav(
+                    self.path, self.state_path, self.profile)
+                self.signals.finished.emit((str(self.path), outcome.report, outcome.failure))
+                return
             audio, sr = modem.read_wav(self.path)
             if self.mode == "auto":
-                result = decode_all_card_backends(audio, sr, self.audio_placement,
-                                                  self.preferred_mode, self.include_experimental)
-                if result is not None:
-                    self.signals.finished.emit((str(self.path), result, None))
+                outcome = decode_all_card_backends(audio, sr, self.audio_placement,
+                                                   self.preferred_mode, self.include_experimental)
+                if (outcome.failure and
+                        outcome.failure.kind is DecodeFailureKind.NO_MATCH):
+                    outcome = local_adapter_for_mode(LEGACY_MODE_KEY).decode_legacy_wav(
+                        self.path, self.state_path, self.profile)
+                if outcome.failure:
+                    self.signals.finished.emit((str(self.path), None, outcome.failure))
                     return
-                raise ValueError("No matching card frame received yet")
-            if is_card_backend(self.mode):
-                result = EXPERIMENTAL_ADAPTER.decode(
-                    get_backend(self.mode, self.audio_placement), audio, sr)
-                self.signals.finished.emit((str(self.path), result, None))
+                self.signals.finished.emit((str(self.path), outcome.report, None))
                 return
-            packets, errors, sr, state = modem.decode_wav_with_state(self.path, self.state_path, self.profile)
-            meta, pixels = modem.reconstruct(packets)
-            result = {"sample_rate": sr,
-                "valid_packets": [{"type": p.packet_type, "card_id": p.card_id, "seq": p.seq,
-                                   "corrected_bits": p.corrected_bits,
-                                   "payload_hex": p.payload.hex()} for p in packets],
-                "fresh_packets": state.get("fresh_valid_packets", []),
-                "fresh_identity_evidence_card_ids": state.get("fresh_identity_evidence_card_ids", []),
-                "receive_profile": state.get("profile"),
-                "errors": errors, "card": meta, "pixels": pixels, "evidence_state": state}
-            self.signals.finished.emit((str(self.path), result, None))
+            if is_card_backend(self.mode):
+                outcome = local_adapter_for_mode(self.mode).decode_capture(
+                    get_backend(self.mode, self.audio_placement), audio, sr)
+                self.signals.finished.emit((str(self.path), outcome.report, outcome.failure))
+                return
+            raise ValueError(f"No decoder is registered for mode {self.mode!r}")
         except Exception as exc:
             self.signals.finished.emit((str(self.path), None, str(exc)))
 
@@ -385,43 +424,45 @@ class LiveDecodeWorker(QRunnable):
         try:
             audio = np.frombuffer(self.samples, dtype="<i2").astype(np.float32) / 32768.0
             if self.mode == "auto":
-                result = decode_all_card_backends(audio, self.sample_rate, self.audio_placement,
-                                                  self.preferred_mode, self.include_experimental)
-                if result is not None:
-                    result["valid_packet_count"] = 0
-                    self._finish(result, bool(result["card"].get("exact")), None, started)
+                outcome = decode_all_card_backends(audio, self.sample_rate, self.audio_placement,
+                                                   self.preferred_mode, self.include_experimental)
+                if outcome.failure:
+                    self._finish(None, False, outcome.failure, started)
                     return
-                raise ValueError("No matching card frame received yet")
+                result = outcome.report
+                result["valid_packet_count"] = 0
+                self._finish(result, bool(result["card"].get("exact")), None, started)
+                return
+            if self.mode == LEGACY_MODE_KEY:
+                outcome = local_adapter_for_mode(self.mode).decode_legacy_audio(
+                    audio, self.sample_rate, self.profile)
+                if outcome.failure:
+                    self._finish(None, False, outcome.failure, started)
+                    return
+                result = outcome.report
+                self._finish(result, bool(result.get("complete")), None, started)
+                return
             if is_card_backend(self.mode):
-                result = EXPERIMENTAL_ADAPTER.decode(
+                outcome = local_adapter_for_mode(self.mode).decode_capture(
                     get_backend(self.mode, self.audio_placement), audio, self.sample_rate)
+                if outcome.failure:
+                    self._finish(None, False, outcome.failure, started)
+                    return
+                result = outcome.report
                 card = result["card"]
                 self._finish({"valid_packet_count": 0,
                     "card": card, "pixels": result["pixels"], "fresh_packets": [],
                     "receive_profile": result["receive_profile"]}, bool(card.get("exact")), None, started)
                 return
-            try:
-                avatar_result = decode_avatar_report(audio, self.sample_rate)
-            except Exception:
-                avatar_result = None
-            if avatar_result is not None:
-                card = avatar_result["card"]
-                result = {"valid_packet_count": 0, "card": card, "pixels": avatar_result["pixels"],
-                          "fresh_packets": [], "receive_profile": modem.MINIMAL_AVATAR_PROFILE.key}
-                self._finish(result, bool(card.get("exact")), None, started)
+            # Compatibility fallback for an unregistered legacy selection.
+            # Keep packet parsing and its integrity rules inside the adapter.
+            outcome = local_adapter_for_mode(LEGACY_MODE_KEY).decode_legacy_audio(
+                audio, self.sample_rate, self.profile)
+            if outcome.failure:
+                self._finish(None, False, outcome.failure, started)
                 return
-            selected = (modem.select_capture_profile(audio, self.sample_rate)
-                        if self.profile == "auto" else modem.resolve_profile(self.profile))
-            evidence, _start, _shift, _period = modem.receive_capture_evidence(
-                audio, self.sample_rate, profile=selected)
-            packets, _errors = modem.decode_packet_evidence(evidence)
-            meta, pixels = modem.reconstruct(packets)
-            complete = modem.is_complete_card(packets)
-            result = {"valid_packet_count": len(packets), "card": meta, "pixels": pixels,
-                      "fresh_packets": [{"type": p.packet_type, "card_id": p.card_id, "seq": p.seq,
-                                         "payload_hex": p.payload.hex()} for p in packets],
-                      "receive_profile": selected.key}
-            self._finish(result, complete, None, started)
+            result = outcome.report
+            self._finish(result, bool(result.get("complete")), None, started)
         except Exception as exc:
             self._finish(None, False, str(exc), started)
 
@@ -874,11 +915,21 @@ class MainWindow(QMainWindow):
         self.data2g_session = None
         self.data2g_modes = {}
         self.data2g_connecting = False
+        self.data2g_last_host_error = None
+        self.data2g_closed_during_connect = None
+        self.data2g_local_starting = False
+        self.data2g_closing = False
         self.data2g_handoff_pending = False
         self.data2g_handoff_deadline = 0.0
         self.data2g_local_process = None
         self.data2g_local_log = None
         self.data2g_local_log_offset = 0
+        self.data2g_local_log_monitor_offset = 0
+        self.data2g_local_log_pending = ""
+        self.data2g_ptt_warnings = set()
+        self.data2g_ptt_failed = str(
+            self.settings.value("data2g/ptt_failed", "false")).lower() in {
+                "1", "true", "yes", "on"}
         self._closing = False
         try:
             self.cached_data2g_modes = [Data2GMode(**item) for item in
@@ -889,23 +940,32 @@ class MainWindow(QMainWindow):
         # selectable only after this session rediscovers and validates it.
         self.data2g_modes = {}
         self.card_assembly = CardAssemblyService()
-        self.data2g_signals = Data2GSignals(self)
+        # A managed-host connection worker can outlive this window while its
+        # startup retry finishes. Keep the emitter owned by the worker/session
+        # references so a late result cannot emit through a deleted QObject.
+        self.data2g_signals = Data2GSignals()
+        self.data2g_signals.connect_finished.connect(self._data2g_connect_finished)
         self.data2g_signals.frame.connect(self._data2g_rx_frame)
         self.data2g_signals.ack.connect(self._data2g_tx_ack)
         self.data2g_signals.status.connect(self._data2g_host_status)
-        self.data2g_signals.error.connect(self._data2g_host_error)
+        self.data2g_signals.error.connect(self._data2g_session_error)
         self.data2g_signals.closed.connect(self._data2g_host_closed)
         self.data2g_connect_worker = None
-        self.data2g_connect_handler_connected = False
         self.data2g_tx_frames = []
         self.data2g_tx_waiting = None
         self.data2g_tx_sent = 0
         self.data2g_tx_total = 0
         self.data2g_tag = 0
+        self.data2g_channel_busy = False
+        self.data2g_last_host_error = None
+        self.data2g_ack_timeout_ms = DATA2G_ACK_TIMEOUT_MS
         self.data2g_ack_timer = QTimer(self)
         self.data2g_ack_timer.setSingleShot(True)
-        self.data2g_ack_timer.setInterval(15000)
+        self.data2g_ack_timer.setInterval(DATA2G_ACK_TIMEOUT_MS)
         self.data2g_ack_timer.timeout.connect(self._data2g_ack_timeout)
+        self.data2g_host_log_timer = QTimer(self)
+        self.data2g_host_log_timer.setInterval(400)
+        self.data2g_host_log_timer.timeout.connect(self._poll_local_data2g_host_log)
         self.on_air = SessionRecorder.from_environment()
         self.on_air_rx_buffer = bytearray()
         self.on_air_rx_samples = 0
@@ -939,24 +999,31 @@ class MainWindow(QMainWindow):
         self.data2g_host_source.setCurrentIndex(1 if local_default else 0)
         self.data2g_host_source.currentIndexChanged.connect(self._update_data2g_host_controls)
         self.data2g_command_port = QSpinBox(); self.data2g_command_port.setRange(1, 65535)
-        self.data2g_command_port.setValue(int(os.environ.get(
-            "PIXELQSO_DATA2G_COMMAND_PORT", self.settings.value("data2g/command_port", 8300))))
+        self.data2g_command_port.setToolTip(
+            "The Data2G host also uses the next port for its data listener.")
+        self.data2g_command_port.setValue(int_setting(os.environ.get(
+            "PIXELQSO_DATA2G_COMMAND_PORT", self.settings.value("data2g/command_port", 8300)),
+            8300))
         self.data2g_kiss_port = QSpinBox(); self.data2g_kiss_port.setRange(1, 65535)
-        self.data2g_kiss_port.setValue(int(os.environ.get(
-            "PIXELQSO_DATA2G_KISS_PORT", self.settings.value("data2g/kiss_port", 8100))))
+        self.data2g_kiss_port.setToolTip(
+            "Must differ from both the command port and its next data port.")
+        self.data2g_kiss_port.setValue(int_setting(os.environ.get(
+            "PIXELQSO_DATA2G_KISS_PORT", self.settings.value("data2g/kiss_port", 8100)),
+            8100))
         self.data2g_host_bandwidth = QComboBox()
         self.data2g_host_bandwidth.addItem("2400 Hz", 2400)
         self.data2g_host_bandwidth.addItem("500 Hz", 500)
         bandwidth_index = self.data2g_host_bandwidth.findData(
-            int(self.settings.value("data2g/bandwidth_hz", 2400)))
+            int_setting(self.settings.value("data2g/bandwidth_hz", 2400), 2400))
         self.data2g_host_bandwidth.setCurrentIndex(max(0, bandwidth_index))
         self.data2g_rig_host = QLineEdit(os.environ.get(
             "PIXELQSO_DATA2G_RIGCTLD_HOST", str(self.settings.value(
                 "data2g/rigctld_host", self.settings.value("radio/rigctld_host", "127.0.0.1")))))
         self.data2g_rig_port = QSpinBox(); self.data2g_rig_port.setRange(1, 65535)
-        self.data2g_rig_port.setValue(int(os.environ.get(
+        self.data2g_rig_port.setValue(int_setting(os.environ.get(
             "PIXELQSO_DATA2G_RIGCTLD_PORT", self.settings.value(
-                "data2g/rigctld_port", self.settings.value("radio/rigctld_port", 4532)))))
+                "data2g/rigctld_port", self.settings.value("radio/rigctld_port", 4532))),
+            4532))
         self.data2g_host_status = QLabel("Not connected")
         self.data2g_host_connect = QPushButton("Connect and discover modes")
         self.data2g_host_connect.clicked.connect(self._connect_data2g_host)
@@ -980,6 +1047,9 @@ class MainWindow(QMainWindow):
         if experimental_item is not None:
             experimental_item.setEnabled(self.show_experimental_modes.isChecked())
         saved_backend = str(self.settings.value("options/backend", "data2g"))
+        if saved_backend not in {"data2g", "experimental"}:
+            saved_backend = "data2g"
+            self.settings.setValue("options/backend", saved_backend)
         self.backend_combo.setCurrentIndex(max(0, self.backend_combo.findData(saved_backend)))
         if not self.show_experimental_modes.isChecked() and saved_backend == "experimental":
             self.backend_combo.setCurrentIndex(0)
@@ -1022,7 +1092,8 @@ class MainWindow(QMainWindow):
             try:
                 saved_report = json.loads(saved_qsl.read_text())
                 saved_card = saved_report.get("card", {})
-                if saved_card.get("exact") and saved_card.get("callsign") and saved_card.get("card_id") is not None:
+                if (CardAssemblyService.assess(saved_report).verified_complete and
+                        saved_card.get("callsign") and saved_card.get("card_id") is not None):
                     self.seen_received_cards.add(received_card_key(saved_report))
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 continue
@@ -1045,6 +1116,8 @@ class MainWindow(QMainWindow):
         self.live_decode_final = False
         self.rx_audio = None
         self.rx_device = None
+        self.local_receive_handle = None
+        self.local_receive_adapter = None
         self.rx_bytes = bytearray()
         self.rx_rate = modem.SAMPLE_RATE
         self.rx_live_profile = None
@@ -1380,7 +1453,18 @@ class MainWindow(QMainWindow):
 
     def refresh_qso_log(self, *_):
         if not hasattr(self, "log_gallery"): return
-        self.log_gallery.clear(); self.qso_log_dir.mkdir(parents=True, exist_ok=True)
+        self.log_gallery.clear()
+        try:
+            self.qso_log_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            message = f"Could not open QSO log folder: {exc}"
+            self.log_status.setText(message)
+            self._update_export_buttons()
+            if hasattr(self, "exchange_log"):
+                self.exchange_log.append(message)
+            if hasattr(self, "rx_status"):
+                self.rx_status.setText(message)
+            return
         entries = []
         query = self.log_search.text().strip().casefold()
         for path in self.qso_log_dir.glob("*.json"):
@@ -1619,7 +1703,7 @@ class MainWindow(QMainWindow):
         side.addLayout(stamp_buttons)
         stamp_actions = QHBoxLayout()
         edit_stamp = QPushButton("Edit stamp…"); edit_stamp.clicked.connect(self.edit_stamp); stamp_actions.addWidget(edit_stamp)
-        remove_stamp = QPushButton("Delete stamp"); remove_stamp.clicked.connect(self.remove_stamp); stamp_actions.addWidget(remove_stamp)
+        remove_stamp = QPushButton("Delete saved stamp"); remove_stamp.clicked.connect(self.remove_stamp); stamp_actions.addWidget(remove_stamp)
         side.addLayout(stamp_actions)
         stamp_size_row = QHBoxLayout()
         self.placed_stamp_width = QSpinBox(); self.placed_stamp_width.setRange(1, 64); self.placed_stamp_width.setSuffix(" px")
@@ -2036,39 +2120,89 @@ class MainWindow(QMainWindow):
         self.input_device = QComboBox()
         for dev in QMediaDevices.audioInputs(): self.input_device.addItem(dev.description(), dev)
         self.data2g_output_device = QComboBox()
-        for dev in QMediaDevices.audioOutputs(): self.data2g_output_device.addItem(dev.description(), dev)
+        self.data2g_output_device.addItem("System default output", "")
+        for device_index, name in data2g_host_audio_devices("output"):
+            self.data2g_output_device.addItem(
+                f"{name} [PortAudio {device_index}]", device_index)
         self.data2g_input_device = QComboBox()
-        for dev in QMediaDevices.audioInputs(): self.data2g_input_device.addItem(dev.description(), dev)
+        self.data2g_input_device.addItem("System default input", "")
+        for device_index, name in data2g_host_audio_devices("input"):
+            self.data2g_input_device.addItem(
+                f"{name} [PortAudio {device_index}]", device_index)
+        self.data2g_audio_config_errors = {}
         for combo, variable, setting in (
                 (self.input_device, "PIXELQSO_INPUT_DEVICE", "audio/input_device"),
                 (self.output_device, "PIXELQSO_OUTPUT_DEVICE", "audio/output_device"),
                 (self.data2g_input_device, "PIXELQSO_DATA2G_INPUT_DEVICE", "data2g/audio_input_device"),
                 (self.data2g_output_device, "PIXELQSO_DATA2G_OUTPUT_DEVICE", "data2g/audio_output_device")):
-            requested = os.environ.get(variable)
+            requested_variable = variable
+            requested = os.environ.get(requested_variable)
             legacy_audio_setting = {"data2g/audio_input_device": "audio/input_device",
                                     "data2g/audio_output_device": "audio/output_device"}.get(setting)
             if not requested and legacy_audio_setting:
-                requested = os.environ.get("PIXELQSO_INPUT_DEVICE" if "input" in setting
-                                           else "PIXELQSO_OUTPUT_DEVICE")
+                requested_variable = ("PIXELQSO_INPUT_DEVICE" if "input" in setting
+                                      else "PIXELQSO_OUTPUT_DEVICE")
+                requested = os.environ.get(requested_variable)
             if requested:
                 index = combo.findText(requested)
                 if index < 0:
-                    raise ValueError(f"Configured audio device is unavailable: {variable}")
+                    index = combo.findData(requested)
+                if index < 0 and setting.startswith("data2g/"):
+                    matches = [i for i in range(combo.count())
+                               if requested.casefold() in combo.itemText(i).casefold()]
+                    if len(matches) == 1:
+                        index = matches[0]
+                if index < 0:
+                    if setting.startswith("data2g/"):
+                        self.data2g_audio_config_errors[setting] = requested_variable
+                        index = -1
+                        combo.setCurrentIndex(-1)
+                    else:
+                        raise ValueError(f"Configured audio device is unavailable: {requested_variable}")
                 combo.setCurrentIndex(index)
             else:
                 source_setting = (legacy_audio_setting if legacy_audio_setting and
                                   not self.settings.contains(setting + "/id") else setting)
                 saved_id = str(self.settings.value(source_setting + "/id", ""))
                 saved_name = str(self.settings.value(source_setting + "/name", ""))
-                index = next((i for i in range(combo.count())
-                              if self._audio_device_identifier(combo.itemData(i)) == saved_id), -1)
+                index = combo.findText(saved_name) if saved_name else -1
+                if index < 0 and setting.startswith("data2g/") and saved_name:
+                    matches = [i for i in range(combo.count())
+                               if saved_name.casefold() in combo.itemText(i).casefold()]
+                    if len(matches) == 1:
+                        index = matches[0]
+                if index < 0 and setting.startswith("data2g/") and saved_id:
+                    try:
+                        previous_qt_id = bytes.fromhex(saved_id).decode("utf-8").strip()
+                    except (ValueError, UnicodeDecodeError):
+                        previous_qt_id = ""
+                    if previous_qt_id:
+                        matches = [i for i in range(combo.count())
+                                   if previous_qt_id.casefold() in combo.itemText(i).casefold()]
+                        if len(matches) == 1:
+                            index = matches[0]
+                if index < 0:
+                    index = next((i for i in range(combo.count())
+                                  if self._audio_device_identifier(combo.itemData(i)) == saved_id), -1)
                 if index < 0 and saved_name:
                     index = combo.findText(saved_name)
                 if index >= 0:
                     combo.setCurrentIndex(index)
+                elif setting.startswith("data2g/") and (saved_id or saved_name):
+                    direction = "input" if "input" in setting else "output"
+                    previous = saved_name or "saved device ID"
+                    self.data2g_audio_config_errors[setting] = (
+                        f"saved {direction} device '{previous}'")
+                    combo.setCurrentIndex(-1)
             combo.currentIndexChanged.connect(
                 lambda _index, selected=combo, key=setting: self._save_audio_device(selected, key))
-            self._save_audio_device(combo, setting)
+            if setting.startswith("data2g/"):
+                combo.currentIndexChanged.connect(
+                    lambda _index, key=setting: self._data2g_audio_device_changed(key))
+            if setting not in self.data2g_audio_config_errors:
+                self._save_audio_device(combo, setting)
+        if self.data2g_audio_config_errors:
+            self.data2g_host_status.setText(self._data2g_audio_config_error_message())
         self.exchange_mode = QComboBox(); self.exchange_mode.addItems(["Manual exchange", "Automatic exchange", "Beacon"])
         self.exchange_role = QComboBox(); self.exchange_role.addItems(["Call-first", "Reply to CQ"])
         self.exchange_mode.currentIndexChanged.connect(self._update_exchange_controls)
@@ -2083,12 +2217,17 @@ class MainWindow(QMainWindow):
         profile_form.setContentsMargins(0, 0, 0, 0); profile_form.addRow("Bandwidth", self.profile_combo)
         self.mode_combo = QComboBox()
         configured_mode = self.settings.value("transfer/mode", DEFAULT_MODE_KEY)
+        preserved_legacy_mode = (
+            configured_mode not in {"data2g_1200_robust", "data2g_1200_fast"} and
+            not is_data2g_mode_key(str(configured_mode)) and
+            self.settings.value("transfer/experimental_mode", None) is None and
+            is_experimental_mode(str(configured_mode)))
         if (self.settings.value("transfer/data2g_mode", None) is None and
                 (configured_mode in {"data2g_1200_robust", "data2g_1200_fast"} or
-                 str(configured_mode).startswith("data2g_mode_"))):
+                 is_data2g_mode_key(str(configured_mode)))):
             self.settings.setValue("transfer/data2g_mode", configured_mode)
         if (configured_mode not in {"data2g_1200_robust", "data2g_1200_fast"} and
-                not str(configured_mode).startswith("data2g_mode_")
+                not is_data2g_mode_key(str(configured_mode))
                 and self.settings.value("transfer/experimental_mode", None) is None):
             self.settings.setValue("transfer/experimental_mode", configured_mode)
         configured_mode = self.settings.value(
@@ -2100,6 +2239,14 @@ class MainWindow(QMainWindow):
                 and configured_mode != DEFAULT_MODE_KEY):
             self._mode_has_explicit_selection = True
         self._set_mode_options(configured_mode)
+        if (preserved_legacy_mode and self.backend_combo.currentData() == "data2g" and
+                not self.settings.value(
+                "transfer/experimental_mode_migrated", False, type=bool)):
+            self.settings.setValue("transfer/experimental_mode_migrated", True)
+            self.statusBar().showMessage(
+                f"Your saved local modem mode {configured_mode!r} is preserved under "
+                "Experimental modems. Enable Show experimental modem modes and select "
+                "that backend to use it.", 15000)
         self.mode_combo.currentIndexChanged.connect(self._persist_selected_mode)
         self.mode_combo.currentIndexChanged.connect(self._mark_mode_selection_explicit)
         self.mode_combo.currentIndexChanged.connect(self._on_mode_selection_changed)
@@ -2201,7 +2348,11 @@ class MainWindow(QMainWindow):
 
         wav_button = QPushButton("Decode audio file…"); wav_button.clicked.connect(self.decode_wav)
         receive_group = QGroupBox("Receive")
-        receive_layout = QHBoxLayout(receive_group); receive_layout.addWidget(QLabel("Always listening when an audio input is available."), 1); receive_layout.addWidget(wav_button)
+        receive_layout = QHBoxLayout(receive_group)
+        self.receive_status_hint = QLabel()
+        self.receive_status_hint.setWordWrap(True)
+        receive_layout.addWidget(self.receive_status_hint, 1)
+        receive_layout.addWidget(wav_button)
 
         left_panel = QVBoxLayout(); left_panel.setContentsMargins(0, 0, 0, 0); left_panel.addWidget(transfer_group); left_panel.addStretch()
         left = QWidget(); left.setLayout(left_panel); left.setMaximumWidth(410)
@@ -2290,6 +2441,7 @@ class MainWindow(QMainWindow):
         quick_draw_row.addWidget(self.clear_quick_draw_button)
         right_panel.addLayout(quick_draw_row)
         self.exchange_log = QTextEdit(); self.exchange_log.setReadOnly(True); self.exchange_log.setPlaceholderText("Exchange activity"); self.exchange_log.setFixedHeight(92)
+        self.exchange_log.document().setMaximumBlockCount(2000)
         right_panel.addWidget(self.exchange_log)
         right = QWidget(); right.setLayout(right_panel)
         left_scroll = QScrollArea(); left_scroll.setWidgetResizable(True); left_scroll.setWidget(left)
@@ -2317,26 +2469,36 @@ class MainWindow(QMainWindow):
         options_form = QFormLayout(options)
         options_form.addRow("My call sign", self.station_call)
         options_form.addRow("My grid square", self.station_grid)
-        options_form.addRow("Testing", self.audio_test_mode)
+        options_form.addRow("Experimental audio test", self.audio_test_mode)
         options_form.addRow("Advanced modes", self.show_experimental_modes)
-        options_form.addRow("Data2G connection", self.data2g_host_source)
-        options_form.addRow("Data2G host", self.data2g_host_input)
-        options_form.addRow("Command port", self.data2g_command_port)
-        options_form.addRow("KISS port", self.data2g_kiss_port)
-        options_form.addRow("Local host bandwidth", self.data2g_host_bandwidth)
+        options_form.addRow("Mobile control", self.web_enabled)
+        options_form.addRow("Web port", self.web_port)
+        layout.addWidget(options)
+
+        self.data2g_settings_group = QGroupBox("Data2G host")
+        data2g_form = QFormLayout(self.data2g_settings_group)
+        data2g_form.addRow("Connection", self.data2g_host_source)
+        data2g_form.addRow("Host", self.data2g_host_input)
+        data2g_form.addRow("Command port", self.data2g_command_port)
+        data2g_form.addRow("KISS port", self.data2g_kiss_port)
+        data2g_form.addRow("Local host bandwidth", self.data2g_host_bandwidth)
         self.data2g_radio_group = QGroupBox("Managed Data2G host radio/PTT")
         data2g_radio_form = QFormLayout(self.data2g_radio_group)
         data2g_radio_form.addRow("Host rigctld", self.data2g_rig_host)
         data2g_radio_form.addRow("Port", self.data2g_rig_port)
         data2g_radio_form.addRow("Host audio input", self.data2g_input_device)
         data2g_radio_form.addRow("Host audio output", self.data2g_output_device)
-        data2g_radio_form.addRow(QLabel("These settings configure the local Data2G server. Remote Data2G hosts use their own radio settings."))
-        options_form.addRow(self.data2g_radio_group)
-        options_form.addRow("Data2G status", self.data2g_host_status)
-        options_form.addRow(self.data2g_host_connect)
-        options_form.addRow("Mobile control", self.web_enabled)
-        options_form.addRow("Web port", self.web_port)
-        layout.addWidget(options)
+        data2g_form.addRow(self.data2g_radio_group)
+        host_radio_note = QLabel(
+            "Managed-host audio and rigctld settings apply only to a local server; remote "
+            "hosts use their own radio settings. A successful API connection does not confirm host audio or "
+            "PTT operation. Check the managed host status/log or the remote host before "
+            "transmitting.")
+        host_radio_note.setWordWrap(True)
+        data2g_form.addRow(host_radio_note)
+        data2g_form.addRow("Status", self.data2g_host_status)
+        data2g_form.addRow(self.data2g_host_connect)
+        layout.addWidget(self.data2g_settings_group)
         station = QGroupBox("Experimental modem audio")
         station_form = QFormLayout(station)
         station_form.addRow("Audio output", self.output_device); station_form.addRow("Audio input", self.input_device)
@@ -2367,17 +2529,25 @@ class MainWindow(QMainWindow):
         remote = self.data2g_host_source.currentData() != "local"
         server_running = bool(self.data2g_local_process and
                               self.data2g_local_process.poll() is None)
-        busy = self.data2g_connecting or self.data2g_handoff_pending or bool(
-            self.data2g_session and self.data2g_session.connected) or server_running
+        busy = (self.data2g_connecting or self.data2g_local_starting or self.data2g_closing or
+                self.data2g_handoff_pending or
+                DATA2G_ADAPTER.is_connected(self.data2g_session) or server_running)
         self.data2g_host_source.setEnabled(not busy)
         self.data2g_host_input.setEnabled(remote and not busy)
         self.data2g_command_port.setEnabled(not busy)
         self.data2g_kiss_port.setEnabled(not busy)
         self.data2g_host_bandwidth.setEnabled(not remote and not busy)
-        connected = bool(self.data2g_session and self.data2g_session.connected)
+        connected = bool(DATA2G_ADAPTER.is_connected(self.data2g_session))
+        local_audio_ready = (remote or not self.data2g_audio_config_errors)
         self.data2g_host_connect.setEnabled(
-            not self.data2g_connecting and not self.data2g_handoff_pending and
+            not self.data2g_connecting and not self.data2g_local_starting and
+            not self.data2g_closing and
+            not self.data2g_handoff_pending and
+            (connected or local_audio_ready) and
             (self.backend_combo.currentData() == "data2g" or connected))
+        self.data2g_host_connect.setToolTip(
+            self._data2g_audio_config_error_message()
+            if not local_audio_ready else "")
         if hasattr(self, "data2g_radio_group"):
             self.data2g_radio_group.setVisible(not remote)
             self.data2g_radio_group.setEnabled(not busy)
@@ -2403,10 +2573,10 @@ class MainWindow(QMainWindow):
                 kiss_port=self.data2g_kiss_port.value(),
                 callsign=self.station_call.text(),
                 input_device=(data2g_audio_device_selector(
-                    self.data2g_input_device.currentData().id(), self.data2g_input_device.currentText())
+                    self.data2g_input_device.currentData(), self.data2g_input_device.currentText())
                     if self.data2g_input_device.count() else ""),
                 output_device=(data2g_audio_device_selector(
-                    self.data2g_output_device.currentData().id(), self.data2g_output_device.currentText())
+                    self.data2g_output_device.currentData(), self.data2g_output_device.currentText())
                     if self.data2g_output_device.count() else ""),
                 rig_host=self.data2g_rig_host.text().strip(),
                 rig_port=self.data2g_rig_port.value(),
@@ -2415,13 +2585,18 @@ class MainWindow(QMainWindow):
         except ValueError as exc:
             self.data2g_host_status.setText("Local host settings are invalid · " + str(exc))
             return False
-        DATA.mkdir(parents=True, exist_ok=True)
         log_path = DATA / "data2g-host.log"
         try:
+            DATA.mkdir(parents=True, exist_ok=True)
             self.data2g_local_log_offset = log_path.stat().st_size
         except OSError:
             self.data2g_local_log_offset = 0
-        self.data2g_local_log = log_path.open("a", encoding="utf-8")
+        try:
+            self.data2g_local_log = log_path.open("a", encoding="utf-8")
+        except OSError as exc:
+            self.data2g_host_status.setText(
+                f"Could not prepare local Data2G host log: {exc}")
+            return False
         try:
             self.data2g_local_process = subprocess.Popen(
                 local_host_command(args), cwd=str(DATA), stdout=self.data2g_local_log,
@@ -2431,15 +2606,63 @@ class MainWindow(QMainWindow):
             self.data2g_local_log = None
             self.data2g_host_status.setText(f"Could not start local Data2G host: {exc}")
             return False
+        self.data2g_local_log_monitor_offset = self.data2g_local_log_offset
+        self.data2g_local_log_pending = ""
+        self.data2g_ptt_warnings.clear()
+        self.data2g_local_starting = True
+        self.data2g_host_log_timer.start()
         self.settings.setValue("data2g/local_host", True)
         self.data2g_host_status.setText("Starting local Data2G host…")
         self._update_data2g_host_controls()
-        QTimer.singleShot(500, self._connect_data2g_host)
+        self.refresh_tx_button()
+        QTimer.singleShot(500, self._connect_after_local_data2g_start)
         return False
 
-    def _stop_local_data2g_host(self):
+    def _connect_after_local_data2g_start(self):
+        self.data2g_local_starting = False
+        if self._closing:
+            self._stop_local_data2g_host()
+            return
+        if (self.backend_combo.currentData() != "data2g" or
+                self.data2g_host_source.currentData() != "local"):
+            self._stop_local_data2g_host()
+            if self.backend_combo.currentData() == "experimental":
+                self._resume_experimental_backend()
+            return
+        self._connect_data2g_host()
+
+    def _local_data2g_connect_failure_hint(self):
         process = self.data2g_local_process
-        self.data2g_local_process = None
+        if process is None or self.data2g_host_source.currentData() != "local":
+            return ""
+        log_path = DATA / "data2g-host.log"
+        try:
+            size = log_path.stat().st_size
+            with log_path.open("rb") as log_file:
+                log_file.seek(max(self.data2g_local_log_offset, size - 12000))
+                log_text = log_file.read().decode("utf-8", "replace").lower()
+        except OSError:
+            log_text = ""
+        if any(marker in log_text for marker in
+               ("address already in use", "eaddrinuse", "winerror 10048", "errno 98")):
+            return "A local Data2G port is already in use; choose free command/KISS ports in Station settings."
+        missing_audio_device = any(
+            marker in log_text for marker in
+            ("no input device matching", "no output device matching"))
+        audio_open_failure = (
+            any(marker in log_text for marker in
+                ("pyaudio", "portaudio", "pa.open", "input device", "output device")) and
+            any(marker in log_text for marker in
+                ("error", "failed", "invalid", "no default", "exception", "cannot")))
+        if missing_audio_device or audio_open_failure:
+            return "Local Data2G audio did not start; check the selected input/output devices and data2g-host.log."
+        if process.poll() is not None:
+            return "The local Data2G host exited during startup; see data2g-host.log."
+        return "The local Data2G listeners did not become available; see data2g-host.log."
+
+    def _stop_local_data2g_host(self):
+        self.data2g_local_starting = False
+        process = self.data2g_local_process
         if process and process.poll() is None:
             process.terminate()
             try:
@@ -2447,21 +2670,102 @@ class MainWindow(QMainWindow):
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=2)
+        if process is not None:
+            self._poll_local_data2g_host_log()
+        else:
+            self.data2g_host_log_timer.stop()
+        self.data2g_local_process = None
         if self.data2g_local_log:
             self.data2g_local_log.close()
             self.data2g_local_log = None
         if hasattr(self, "data2g_host_source"):
             self._update_data2g_host_controls()
+            self.refresh_tx_button()
+
+    def _poll_local_data2g_host_log(self):
+        process = self.data2g_local_process
+        if process is None:
+            self.data2g_host_log_timer.stop()
+            return
+        log_path = DATA / "data2g-host.log"
+        try:
+            with log_path.open("rb") as log_file:
+                log_file.seek(self.data2g_local_log_monitor_offset)
+                chunk = log_file.read(65536)
+                self.data2g_local_log_monitor_offset += len(chunk)
+        except OSError:
+            chunk = b""
+        combined = self.data2g_local_log_pending + chunk.decode("utf-8", "replace")
+        lines = combined.splitlines()
+        if combined.endswith(("\n", "\r")):
+            self.data2g_local_log_pending = ""
+        elif lines:
+            self.data2g_local_log_pending = lines.pop()
+        else:
+            self.data2g_local_log_pending = combined
+        stopped = process.poll() is not None
+        if stopped:
+            if self.data2g_local_log_pending:
+                lines.append(self.data2g_local_log_pending)
+                self.data2g_local_log_pending = ""
+            self.data2g_host_log_timer.stop()
+        for line in lines:
+            lowered = line.lower()
+            if ("ptt on failed" in lowered or
+                    ("to ptt on" in lowered and "rigctld answered" in lowered)):
+                warning = "on"
+                message = ("Managed Data2G host could not key the radio through rigctld. "
+                           "Check its rigctld connection and settings; see data2g-host.log.")
+            elif ("ptt off failed" in lowered or
+                  ("to ptt off" in lowered and "rigctld answered" in lowered)):
+                warning = "off"
+                message = ("Managed Data2G host could not confirm PTT release through rigctld. "
+                           "Verify the radio is unkeyed; see data2g-host.log.")
+            else:
+                continue
+            if warning not in self.data2g_ptt_warnings:
+                self.data2g_ptt_warnings.add(warning)
+                self.data2g_ptt_failed = True
+                self.settings.setValue("data2g/ptt_failed", True)
+                self.settings.sync()
+                self._data2g_host_error(message)
+                self.refresh_tx_button()
+                self._update_backend_ui()
+                self._refresh_transfer_summary()
+                if self.auto_armed:
+                    self.stop_auto_exchange(
+                        "Automatic exchange stopped after a managed-host PTT failure; "
+                        "verify the radio is unkeyed before reconnecting.")
 
     def _connect_data2g_host(self):
-        if self.data2g_connecting or self.data2g_handoff_pending:
+        if (self._closing or self.data2g_connecting or self.data2g_local_starting or
+                self.data2g_closing or self.data2g_handoff_pending):
             return
-        if self.data2g_session and self.data2g_session.connected:
+        if DATA2G_ADAPTER.is_connected(self.data2g_session):
+            self.data2g_closing = True
             self.data2g_host_status.setText("Disconnecting…")
             self.data2g_host_connect.setEnabled(False)
+            self.refresh_tx_button()
+            self._update_data2g_host_controls()
             import threading
             threading.Thread(target=DATA2G_ADAPTER.disconnect, args=(self.data2g_session,), daemon=True,
                              name="data2g-close").start()
+            return
+        if (self.data2g_host_source.currentData() == "local" and
+                self.data2g_audio_config_errors):
+            self.data2g_host_status.setText(self._data2g_audio_config_error_message())
+            return
+        try:
+            station_call = DATA2G_ADAPTER.validate_station_call(
+                self.station_call.text())
+        except ValueError as exc:
+            self.data2g_host_status.setText(f"Invalid station call · {exc}")
+            return
+        try:
+            validate_data2g_ports(self.data2g_command_port.value(),
+                                  self.data2g_kiss_port.value())
+        except ValueError as exc:
+            self.data2g_host_status.setText(f"Invalid Data2G ports · {exc}")
             return
         if self.rig.socket.state() != QTcpSocket.SocketState.UnconnectedState:
             self.data2g_handoff_pending = True
@@ -2475,19 +2779,12 @@ class MainWindow(QMainWindow):
             return
         local_host = self.data2g_host_source.currentData() == "local"
         if local_host and self.data2g_local_process and self.data2g_local_process.poll() is not None:
-            log_path = DATA / "data2g-host.log"
-            detail = ""
-            try:
-                with log_path.open("rb") as log_file:
-                    log_file.seek(self.data2g_local_log_offset)
-                    log_text = log_file.read()[-16000:].decode("utf-8", "replace")
-                lines = [line.strip() for line in log_text.splitlines()
-                         if line.strip() and not line.lstrip().startswith(("ALSA lib", "Cannot connect to server",
-                                                                         "jack server", "JackShmReadWritePtr"))]
-                detail = lines[-1] if lines else ""
-            except OSError:
-                pass
-            self.data2g_host_status.setText("Local Data2G host exited" + (" · " + detail if detail else " · see data2g-host.log"))
+            hint = self._local_data2g_connect_failure_hint()
+            hint = hint or "The local Data2G host exited during startup; see data2g-host.log."
+            self.data2g_last_host_error = hint
+            self.data2g_host_status.setText("Local Data2G host exited · " + hint)
+            self.exchange_log.append("Data2G host: " + hint)
+            self.rx_status.setText(hint)
             self._stop_local_data2g_host()
             self.data2g_host_connect.setEnabled(True)
             return
@@ -2498,25 +2795,28 @@ class MainWindow(QMainWindow):
         if not host:
             self.data2g_host_status.setText("Enter a host name or address")
             return
-        self.settings.setValue("data2g/host", host)
+        self.data2g_channel_busy = False
+        self.data2g_last_host_error = None
+        self.data2g_ack_timeout_ms = DATA2G_ACK_TIMEOUT_MS
+        if not local_host:
+            self.settings.setValue("data2g/host", host)
+            self.settings.setValue("data2g/local_host", False)
         self.data2g_connecting = True
         self.data2g_host_status.setText(f"Connecting to {host}…")
         self.data2g_host_connect.setEnabled(False)
         self._update_data2g_host_controls()
-        session = Data2GSession(
+        session = DATA2G_ADAPTER.create_session(
             host, self.data2g_command_port.value(), self.data2g_kiss_port.value(),
-            callsign=self.station_call.text().strip().upper() or None,
+            callsign=station_call,
             connect_retry_window=6.0 if local_host else 0.0,
-            on_frame=self.data2g_signals.frame.emit,
-            on_ack=self.data2g_signals.ack.emit,
-            on_status=self.data2g_signals.status.emit,
-            on_error=self.data2g_signals.error.emit,
-            on_closed=self.data2g_signals.closed.emit)
+            on_frame=lambda port, frame: self.data2g_signals.frame.emit(session, port, frame),
+            on_ack=lambda port, tag: self.data2g_signals.ack.emit(session, port, tag),
+            on_status=lambda message: self.data2g_signals.status.emit(session, message),
+            on_error=lambda message: self.data2g_signals.error.emit(session, message),
+            on_closed=lambda: self.data2g_signals.closed.emit(session))
         self.data2g_session = session
         worker = Data2GConnectWorker(session, self.data2g_signals)
         self.data2g_connect_worker = worker
-        self.data2g_signals.connect_finished.connect(self._data2g_connect_finished)
-        self.data2g_connect_handler_connected = True
         self.decode_pool.start(worker)
 
     def _finish_data2g_radio_handoff(self):
@@ -2534,24 +2834,55 @@ class MainWindow(QMainWindow):
         self.data2g_handoff_pending = False
         self._connect_data2g_host()
 
-    def _data2g_connect_finished(self, modes, error, mode_checks=None):
-        if self.data2g_connect_handler_connected:
-            try:
-                self.data2g_signals.connect_finished.disconnect(self._data2g_connect_finished)
-            except RuntimeError:
-                pass
-            self.data2g_connect_handler_connected = False
+    def _data2g_connect_finished(self, session, modes, error, mode_checks=None):
+        if session is not self.data2g_session:
+            return
+        closed_during_connect = self.data2g_closed_during_connect is session
+        intentional_handoff = (
+            self.backend_combo.currentData() == "experimental" and
+            (closed_during_connect or self.data2g_closing))
+        if self.data2g_closed_during_connect is session:
+            self.data2g_closed_during_connect = None
+        if closed_during_connect and not error:
+            error = "Data2G host disconnected during mode discovery"
         self.data2g_connect_worker = None
         self.data2g_connecting = False
         self.data2g_host_connect.setEnabled(True)
         self._update_data2g_host_controls()
-        if error:
-            self.data2g_host_status.setText("Connection failed: " + error)
-            if self.on_air:
-                self.on_air.emit("host_connect_failed", {"error": error})
-            self.data2g_session = None
-            self._stop_local_data2g_host()
+        if intentional_handoff and not error:
+            # Discovery may win the race with the close request. Keep the
+            # Data2G session as the owner until its closed callback arrives;
+            # that callback performs the local CAT/audio handoff.
+            self.data2g_host_status.setText(
+                "Disconnecting Data2G before Experimental modems take radio control…")
             self.refresh_tx_button()
+            return
+        if error:
+            hint = "" if intentional_handoff else self._local_data2g_connect_failure_hint()
+            visible_error = hint or error
+            self.data2g_last_host_error = None if intentional_handoff else visible_error
+            self.data2g_session = None
+            self.data2g_closing = False
+            self.data2g_modes = {}
+            register_data2g_mode_backends(self.data2g_modes)
+            self._stop_local_data2g_host()
+            if intentional_handoff:
+                self.data2g_host_status.setText(
+                    "Data2G closed · Experimental modems selected")
+                self.exchange_log.append(
+                    "Data2G host: connection closed for Experimental modem handoff.")
+                self.rx_status.setText("Experimental modem selected")
+            else:
+                self.data2g_host_status.setText(
+                    "Connection failed: " + error + (" · " + hint if hint else ""))
+                self.exchange_log.append("Data2G host: " + visible_error)
+                self.rx_status.setText(visible_error)
+            self._refresh_mode_options()
+            if self.on_air and not intentional_handoff:
+                self.on_air.emit("host_connect_failed", {"error": error})
+            self.refresh_tx_button()
+            if self.backend_combo.currentData() == "experimental":
+                self._resume_experimental_backend()
             return
         mode_checks = mode_checks or {}
         self.data2g_modes = host_mode_backends(
@@ -2567,7 +2898,7 @@ class MainWindow(QMainWindow):
         names = ", ".join(backend.mode_name for backend in usable_modes.values())
         if self.on_air:
             self.on_air.emit("host_connected", {
-                "port": self.data2g_session.port,
+                "port": DATA2G_ADAPTER.group_port(self.data2g_session),
                 "modes": [mode.__dict__ for mode in modes],
                 "supported_modes": names,
             })
@@ -2575,10 +2906,11 @@ class MainWindow(QMainWindow):
         capacity_rejected = sum(not backend.usable and not backend.disabled_reason.startswith(
             "The host refused") for backend in self.data2g_modes.values())
         self.data2g_host_status.setText(
-            f"Connected · port {self.data2g_session.port} · "
+            f"Connected · port {DATA2G_ADAPTER.group_port(self.data2g_session)} · "
             f"{len(usable_modes)} usable broadcast modes" +
             (f" · {rejected_count} refused for this group" if rejected_count else "") +
-            (f" · {capacity_rejected} below card capacity" if capacity_rejected else ""))
+            (f" · {capacity_rejected} below card capacity" if capacity_rejected else "") +
+            " · host audio/PTT readiness unverified")
         self.data2g_host_connect.setText("Disconnect Data2G host")
         requested_mode = os.environ.get("PIXELQSO_DATA2G_MODE", "").strip()
         saved_mode = str(self.settings.value("transfer/data2g_mode", DEFAULT_MODE_KEY))
@@ -2596,32 +2928,58 @@ class MainWindow(QMainWindow):
             preferred = preferred_data2g_mode_key(self.data2g_modes, "robust")
         self._refresh_mode_options(preferred)
         selected_backend = self.selected_backend()
-        if isinstance(selected_backend, Data2GHostBackend) and selected_backend.usable:
+        saved_backend = self.data2g_modes.get(saved_mode)
+        if (not requested_mode and is_data2g_mode_key(saved_mode) and
+                (saved_backend is None or not saved_backend.usable)):
+            reason = (saved_backend.disabled_reason if saved_backend is not None else
+                      "the connected host no longer advertises this mode")
+            replacement = (f"Using {selected_backend.mode_name}."
+                           if (self.selected_adapter().capabilities.kind is AdapterKind.FRAME_TRANSPORT and
+                               selected_backend is not None and
+                               getattr(selected_backend, "usable", False)) else
+                           "No Data2G mode is currently usable for transmission.")
+            self.statusBar().showMessage(
+                f"Saved Data2G mode {data2g_mode_name(saved_mode)!r} unavailable: "
+                f"{reason} {replacement}", 15000)
+        if (self.selected_adapter().capabilities.kind is AdapterKind.FRAME_TRANSPORT and
+                selected_backend is not None and getattr(selected_backend, "usable", False)):
             self._on_mode_selection_changed()
         elif not usable_modes:
             self.data2g_host_status.setText(
-                "Connected for receive · no mode fits this broadcast group's control and frame limits")
+                "Connected for receive · no mode fits this broadcast group's control and frame limits · "
+                "host audio/PTT readiness unverified")
         self.refresh_tx_button()
 
-    def _data2g_host_closed(self):
-        if self.data2g_session is None:
+    def _data2g_host_closed(self, session):
+        if session is not self.data2g_session:
             return
+        if self.data2g_connecting:
+            self.data2g_closed_during_connect = session
+            return
+        self.data2g_closing = False
         if self.on_air:
             self.on_air.emit("host_disconnected", {})
         if self.stop_tx_btn.isVisible():
             self._finish_data2g_transmission("Data2G host disconnected; any in-flight transmission status is unknown.")
+        if self.auto_armed:
+            self.stop_auto_exchange(
+                "Automatic exchange stopped because the Data2G host disconnected.")
         self.data2g_session = None
+        self.data2g_channel_busy = False
         self.data2g_modes = {}
         register_data2g_mode_backends(self.data2g_modes)
         self.data2g_host_connect.setEnabled(True)
         self.data2g_host_connect.setText("Connect and discover modes")
-        self.data2g_host_status.setText("Not connected")
+        self.data2g_host_status.setText(
+            "Host disconnected · " + self.data2g_last_host_error
+            if self.data2g_last_host_error else "Not connected")
         self._refresh_mode_options()
         self._stop_local_data2g_host()
         self._update_data2g_host_controls()
         self.refresh_tx_button()
         if (not self._closing and self.backend_combo.currentData() == "experimental"
-                and self._should_auto_connect_rig() and not self.rig.connected()):
+                and not self.data2g_ptt_failed and
+                self._should_auto_connect_rig() and not self.rig.connected()):
             QTimer.singleShot(0, self.connect_rig)
         if (not self._closing and
                 self.backend_combo.currentData() == "experimental" and
@@ -2652,6 +3010,10 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "mode_combo"):
             return
         data2g = self.backend_combo.currentData() == "data2g"
+        if not data2g and not self._confirm_data2g_ptt_recovery():
+            with QSignalBlocker(self.backend_combo):
+                self.backend_combo.setCurrentIndex(self.backend_combo.findData("data2g"))
+            return
         if data2g and self.rx_timer.isActive():
             self._discard_receive_for_tx()
         preferred = self.settings.value(
@@ -2661,24 +3023,52 @@ class MainWindow(QMainWindow):
         self._set_mode_options(preferred)
         self._on_mode_selection_changed()
         if (data2g and not self.data2g_connecting and
-                not (self.data2g_session and self.data2g_session.connected)):
+                not (DATA2G_ADAPTER.is_connected(self.data2g_session))):
             self._connect_data2g_host()
         host_active = bool(self.data2g_connecting or self.data2g_handoff_pending or
-                           (self.data2g_session and self.data2g_session.connected))
+                           self.data2g_closing or
+                           (DATA2G_ADAPTER.is_connected(self.data2g_session)))
         if (not data2g and not host_active and self._should_auto_connect_rig()
                 and not self.rig.connected()):
             QTimer.singleShot(0, self.connect_rig)
         self._update_transfer_controls()
         self._refresh_transfer_summary()
+        self.audio_test_mode_changed(self.audio_test_mode.isChecked())
         self.refresh_tx_button()
 
+    def _data2g_session_error(self, session, message):
+        # Startup failures are summarized after the connect worker completes,
+        # where the managed-host log can provide a useful local audio/port hint.
+        if session is self.data2g_session and not self.data2g_connecting:
+            self._data2g_host_error(message)
+
     def _data2g_host_error(self, message):
+        self.data2g_last_host_error = message
         self.exchange_log.append("Data2G host: " + message)
         self.data2g_host_status.setText("Host error: " + message)
+        if getattr(self, "data2g_tx_total", 0):
+            in_flight = self.data2g_tx_waiting is not None
+            detail = ("The in-flight frame may have transmitted; remaining frames were not sent. "
+                      if in_flight else
+                      "Remaining card frames were not sent.")
+            self._finish_data2g_transmission(
+                f"Data2G host error: {message}. {detail}")
         if self.on_air:
             self.on_air.emit("host_error", {"error": message})
 
-    def _data2g_host_status(self, message):
+    def _data2g_host_status(self, session, message):
+        if session is not self.data2g_session:
+            return
+        if message in {"BUSY ON", "BUSY OFF"}:
+            self.data2g_channel_busy = message == "BUSY ON"
+            if self.data2g_tx_waiting is not None:
+                timeout = (DATA2G_BUSY_ACK_TIMEOUT_MS if self.data2g_channel_busy
+                           else self.data2g_ack_timeout_ms)
+                self.data2g_ack_timer.start(timeout)
+                self.rx_status.setText(
+                    "Data2G host is holding the queued frame while the channel is busy"
+                    if self.data2g_channel_busy else
+                    "Data2G channel is clear · awaiting host ACK")
         if message.startswith(("BCAST ", "PTT ", "BUSY ", "BUFFER ", "MODE ")):
             self.exchange_log.append("Data2G: " + message)
             if self.on_air:
@@ -2687,17 +3077,17 @@ class MainWindow(QMainWindow):
     def _on_mode_selection_changed(self, *_):
         backend = self.selected_backend()
         if self.selected_adapter().capabilities.kind is AdapterKind.FRAME_TRANSPORT:
-            if not isinstance(backend, Data2GHostBackend) or not backend.usable:
-                if isinstance(backend, Data2GHostBackend) and backend.disabled_reason:
+            if backend is None or not getattr(backend, "usable", False):
+                if backend is not None and getattr(backend, "disabled_reason", None):
                     self.rx_status.setText(backend.disabled_reason)
-                elif not self.data2g_connecting and not (self.data2g_session and self.data2g_session.connected):
+                elif not self.data2g_connecting and not (DATA2G_ADAPTER.is_connected(self.data2g_session)):
                     self._connect_data2g_host()
                 self.refresh_tx_button()
                 self._update_backend_ui()
                 return
             if self.rig.connected():
                 self.rig.disconnect()
-            if self.data2g_session and self.data2g_session.connected:
+            if DATA2G_ADAPTER.is_connected(self.data2g_session):
                 DATA2G_ADAPTER.select_mode(self.data2g_session, backend.mode_name)
             elif not self.data2g_connecting:
                 self._connect_data2g_host()
@@ -2706,15 +3096,54 @@ class MainWindow(QMainWindow):
             self.listen_indicator.setText("● DATA2G HOST RX")
             self.listen_indicator.setStyleSheet("color:#8bd8ae;font-weight:700;letter-spacing:1px")
             self.rx_status.setText("Receiving KISS card frames through the Data2G host")
-        elif isinstance(backend, Data2GHostBackend) and backend.mode is not None:
-            self.rx_status.setText(backend.disabled_reason or "Data2G mode is unavailable")
-        elif self.data2g_session and self.data2g_session.connected:
+        elif (self.data2g_connecting or
+              DATA2G_ADAPTER.is_connected(self.data2g_session)):
             session = self.data2g_session
+            self.data2g_closing = True
+            self.data2g_host_status.setText(
+                "Disconnecting Data2G before experimental modem takes radio control…")
+            self._update_data2g_host_controls()
             import threading
             threading.Thread(target=DATA2G_ADAPTER.disconnect, args=(session,), daemon=True,
-                             name="data2g-close").start()
+                             name="data2g-experimental-handoff").start()
         self.refresh_tx_button()
         self._update_backend_ui()
+
+    def _resume_experimental_backend(self):
+        """Acquire local CAT/audio only after the Data2G owner has exited."""
+        if (self._closing or self.backend_combo.currentData() != "experimental" or
+                self.data2g_connecting or self.data2g_local_starting or self.data2g_closing or
+                DATA2G_ADAPTER.is_connected(self.data2g_session)):
+            return
+        if self.data2g_local_process and self.data2g_local_process.poll() is None:
+            return
+        if (not self.data2g_ptt_failed and self._should_auto_connect_rig() and
+                not self.rig.connected()):
+            QTimer.singleShot(0, self.connect_rig)
+        QTimer.singleShot(0, self._ensure_session_receive)
+
+    def _confirm_data2g_ptt_recovery(self):
+        if not self.data2g_ptt_failed:
+            return True
+        answer = QMessageBox.warning(
+            self, "Data2G PTT state is uncertain",
+            "The managed Data2G host reported a PTT failure. Confirm that you have "
+            "verified the radio is unkeyed before resuming radio control or "
+            "transmitting.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return False
+        self.data2g_ptt_failed = False
+        # Permit a later fault of the same on/off class to relatch the
+        # interlock after this explicit recovery.
+        self.data2g_ptt_warnings.clear()
+        self.settings.setValue("data2g/ptt_failed", False)
+        self.settings.sync()
+        self._update_backend_ui()
+        self.refresh_tx_button()
+        self._refresh_transfer_summary()
+        return True
 
     def _update_backend_ui(self):
         """Make controls reflect which backend currently owns reception and CAT/PTT."""
@@ -2722,9 +3151,43 @@ class MainWindow(QMainWindow):
             return
         capabilities = self.selected_adapter().capabilities
         selected_data2g = capabilities.kind is AdapterKind.FRAME_TRANSPORT
-        host_busy = bool(self.data2g_connecting or self.data2g_handoff_pending or
-                         (self.data2g_session and self.data2g_session.connected))
+        if hasattr(self, "audio_test_mode"):
+            self.audio_test_mode.setEnabled(not selected_data2g)
+            self.audio_test_mode.setToolTip(
+                "Applies only to Experimental modems. Data2G transmission uses the host's radio/PTT settings.")
+        host_busy = bool(self.data2g_connecting or self.data2g_local_starting or self.data2g_closing or
+                         self.data2g_handoff_pending or
+                         (DATA2G_ADAPTER.is_connected(self.data2g_session)))
         data2g_path = selected_data2g or host_busy
+        if hasattr(self, "station_call"):
+            self.station_call.setEnabled(not host_busy)
+            self.station_call.setToolTip(
+                "Disconnect the Data2G host before changing call sign; the open group uses this identity."
+                if host_busy else "Used in card identity and when opening the Data2G broadcast group.")
+        if hasattr(self, "receive_status_hint"):
+            if self.data2g_ptt_failed:
+                message = ("The Data2G host reported a PTT failure. Verify the radio is unkeyed; "
+                           "radio control or the next transmission requires confirmation.")
+            elif selected_data2g:
+                message = ("Data2G host is connected and listening for card frames."
+                           if DATA2G_ADAPTER.is_connected(self.data2g_session) else
+                           "Data2G host handles radio reception. Connect a host in Station settings to receive card frames.")
+            elif host_busy:
+                message = "Data2G radio handoff is in progress; local modem reception will start when the host disconnects."
+            else:
+                message = "Always listening when a local audio input is available."
+            self.receive_status_hint.setText(message)
+        if hasattr(self, "auto_start_btn"):
+            mode_backend = self.selected_backend()
+            auto_host_ready = (selected_data2g and mode_backend is not None and
+                               getattr(mode_backend, "usable", False) and
+                               DATA2G_ADAPTER.is_connected(self.data2g_session))
+            self.auto_start_btn.setEnabled(
+                not self.auto_armed and (not selected_data2g or auto_host_ready))
+            self.auto_start_btn.setToolTip(
+                (getattr(mode_backend, "disabled_reason", None) or
+                 "Connect to a Data2G host and select a usable broadcast mode first.")
+                if selected_data2g and not auto_host_ready else "")
         self.receive_all_modes.setEnabled(capabilities.receive_all_modes)
         self.receive_all_modes.setVisible(capabilities.receive_all_modes)
         if self.receive_all_modes_label is not None:
@@ -2742,14 +3205,17 @@ class MainWindow(QMainWindow):
             self.cat_settings_group.setEnabled(not host_busy)
         if hasattr(self, "experimental_audio_group"):
             self.experimental_audio_group.setVisible(not selected_data2g)
+        if hasattr(self, "data2g_settings_group"):
+            self.data2g_settings_group.setVisible(selected_data2g or host_busy)
 
-    def _data2g_rx_frame(self, port, frame):
-        if not self.data2g_session or port != self.data2g_session.port:
+    def _data2g_rx_frame(self, session, port, frame):
+        if (session is not self.data2g_session or not self.data2g_session or
+                port != DATA2G_ADAPTER.group_port(self.data2g_session)):
             return
         frame_ref = {"port": port, "bytes": len(frame),
                      "sha256": hashlib.sha256(frame).hexdigest()}
         if self.on_air:
-            self.on_air.emit("host_rx_frame", frame_ref)
+            self.on_air.emit("host_rx_frame", frame_ref, binary=frame)
         try:
             _assembly, metadata = self.card_assembly.feed_transport_frame("PIXELQSO", frame)
             pixels = metadata.pop("pixels")
@@ -2757,8 +3223,6 @@ class MainWindow(QMainWindow):
             palette = [list(color) for color in modem.AVATAR_PALETTES[palette_id]]
             card = {**metadata, "palette": palette, "avatar_burst": True,
                     "received_copies": 1}
-            if metadata.get("exact"):
-                card["verified_pixel_coverage"] = metadata["pixel_coverage"]
             report = {"sample_rate": 0, "receive_profile": "Data2G host/KISS",
                       "valid_packets": [], "valid_packet_count": 1, "errors": [],
                       "card": card, "pixels": pixels}
@@ -2775,7 +3239,8 @@ class MainWindow(QMainWindow):
             if improved:
                 image = self.card_image(report)
                 self._show_receive_preview(image, exact=bool(card.get("exact")),
-                                           coverage=card.get("pixel_coverage"))
+                                           coverage=card.get("pixel_coverage"),
+                                           verified_coverage=card.get("verified_pixel_coverage"))
             if verified_complete:
                 self._add_session_wall_card(report)
                 key = received_card_key(report)
@@ -2796,10 +3261,38 @@ class MainWindow(QMainWindow):
 
     def save_received_report(self, report, prefix):
         folder = DATA / "qsl"
-        folder.mkdir(parents=True, exist_ok=True)
         card = report.get("card") or {}
-        name = f"{prefix}-{card.get('callsign') or 'unknown'}-{card.get('card_id', 'na')}-{time.time_ns()}.json"
-        (folder / name).write_text(json.dumps(report, indent=2))
+        callsign = str(card.get("callsign") or "unknown")
+        safe_callsign = "".join(
+            character if character.isascii() and
+            (character.isalnum() or character in "_-") else "_"
+            for character in callsign)[:32].strip("._") or "unknown"
+        name = (f"{prefix}-{safe_callsign}-{card.get('card_id', 'na')}-"
+                f"{time.time_ns()}.json")
+        destination = folder / name
+        temporary = None
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=folder,
+                    prefix=".data2g-", suffix=".tmp", delete=False) as output:
+                temporary = Path(output.name)
+                json.dump(report, output, indent=2)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, destination)
+        except OSError as exc:
+            message = f"Could not save received card capture: {exc}"
+            self.exchange_log.append(message)
+            self.rx_status.setText(message)
+            return None
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        return destination
 
     def save_station_settings(self):
         callsign = self.station_call.text().strip().upper()
@@ -2909,22 +3402,22 @@ class MainWindow(QMainWindow):
         finally: request["event"].set()
 
     def audio_test_mode_changed(self, enabled):
+        data2g_selected = (hasattr(self, "backend_combo") and
+                           self.backend_combo.currentData() == "data2g")
+        local_audio_test = bool(enabled and not data2g_selected)
         if hasattr(self, "test_mode_banner"):
-            self.test_mode_banner.setVisible(enabled)
+            self.test_mode_banner.setVisible(local_audio_test)
         if hasattr(self, "tx_btn"):
-            self.tx_btn.setText("Send test audio" if enabled else "Send selected stage")
             self.refresh_tx_button()
-        if hasattr(self, "beacon_button"):
-            self.beacon_button.setEnabled(not enabled and self.rig.connected())
         if hasattr(self, "beacon_controls"):
-            self.beacon_controls.setEnabled(not enabled)
+            self.beacon_controls.setEnabled(not local_audio_test)
         if hasattr(self, "frequency_controls"):
-            self.frequency_controls.setVisible(not enabled and self.exchange_mode.currentIndex() != 2)
+            self.frequency_controls.setVisible(not local_audio_test and self.exchange_mode.currentIndex() != 2)
         if hasattr(self, "exchange_mode"):
             self._update_exchange_controls()
-        if hasattr(self, "rig_status") and enabled and self.test_link_enabled:
+        if hasattr(self, "rig_status") and local_audio_test and self.test_link_enabled:
             self.rig_status.setText("Two-window local audio link · CAT/PTT disabled")
-        elif hasattr(self, "rig_status") and not enabled and not self.rig.connected():
+        elif hasattr(self, "rig_status") and not local_audio_test and not data2g_selected and not self.rig.connected():
             self.rig_status.setText("CAT disconnected")
 
     def _update_exchange_controls(self, *_):
@@ -2945,9 +3438,16 @@ class MainWindow(QMainWindow):
         self.cq_controls.setVisible(not beacon)
         self.tx_btn.setText("Send selected stage" if not automatic else "Transmit stage")
         self._refresh_contact_stage_indicator()
-        self.beacon_controls.setVisible(beacon and not self.audio_test_mode.isChecked())
-        host_mode = isinstance(self.selected_backend(), Data2GHostBackend)
-        self.frequency_controls.setVisible(not beacon and not self.audio_test_mode.isChecked() and not host_mode)
+        host_mode = (self.selected_adapter().capabilities.kind is
+                     AdapterKind.FRAME_TRANSPORT)
+        local_audio_test = self.audio_test_mode.isChecked() and not host_mode
+        self.beacon_controls.setVisible(beacon and not local_audio_test)
+        self.beacon_freq.setVisible(not host_mode)
+        self.beacon_button.setText("Send beacon at host frequency" if host_mode else "Transmit beacon")
+        self.beacon_button.setToolTip(
+            "Uses the frequency configured on the Data2G host; Pixel QSO does not tune it."
+            if host_mode else "Tunes the connected local radio to the selected beacon frequency.")
+        self.frequency_controls.setVisible(not beacon and not local_audio_test and not host_mode)
 
     def _refresh_contact_stage_indicator(self):
         buttons = getattr(self, "manual_stage_buttons", None)
@@ -3004,6 +3504,8 @@ class MainWindow(QMainWindow):
     def _audio_device_identifier(device):
         if device is None:
             return ""
+        if isinstance(device, str):
+            return device
         try:
             return bytes(device.id()).hex()
         except (AttributeError, TypeError):
@@ -3014,9 +3516,24 @@ class MainWindow(QMainWindow):
         if device is None:
             return
         self.settings.setValue(setting + "/id", self._audio_device_identifier(device))
-        self.settings.setValue(setting + "/name", device.description())
+        self.settings.setValue(setting + "/name", combo.currentText())
 
-    def _show_receive_preview(self, image, *, exact=False, coverage=None):
+    def _data2g_audio_config_error_message(self):
+        details = ", ".join(self.data2g_audio_config_errors.values())
+        return (f"Data2G host audio selection unavailable ({details}); "
+                "choose a listed device in Station settings before starting the local host.")
+
+    def _data2g_audio_device_changed(self, setting):
+        self.data2g_audio_config_errors.pop(setting, None)
+        if self.data2g_audio_config_errors:
+            self.data2g_host_status.setText(self._data2g_audio_config_error_message())
+        else:
+            self.data2g_host_status.setText(
+                "Data2G audio selection updated; connect to start the local host.")
+        self._update_data2g_host_controls()
+
+    def _show_receive_preview(self, image, *, exact=False, coverage=None,
+                              verified_coverage=None):
         if image is None:
             return
         self.receive_view.setPixmap(QPixmap.fromImage(image).scaled(
@@ -3024,17 +3541,14 @@ class MainWindow(QMainWindow):
             Qt.TransformationMode.FastTransformation))
         if exact:
             self.receive_progress.setValue(100)
-            self.receive_progress.setFormat("100% · CRC verified")
+            self.receive_progress.setFormat("100% · whole card verified")
         else:
-            if coverage is None:
-                percent = 0
-            elif isinstance(coverage, (int, float)):
-                percent = round(max(0.0, min(1.0, float(coverage))) * 100)
-            else:
-                coverage = list(coverage)
-                percent = round(100 * sum(bool(value) for value in coverage) / len(coverage)) if coverage else 0
+            percent = self._coverage_percent(coverage)
+            verified_percent = self._coverage_percent(verified_coverage)
             self.receive_progress.setValue(percent)
-            self.receive_progress.setFormat(f"{percent}% · provisional")
+            self.receive_progress.setFormat(
+                f"{percent}% received · {verified_percent}% verified regions"
+                if verified_percent else f"{percent}% received · provisional")
         self.receive_preview_box.show()
         if exact:
             self.live_preview_timeout.start(5000)
@@ -3044,6 +3558,15 @@ class MainWindow(QMainWindow):
     def _hide_receive_preview(self):
         self.live_preview_timeout.stop()
         self.receive_preview_box.hide()
+
+    @staticmethod
+    def _coverage_percent(coverage):
+        if coverage is None:
+            return 0
+        if isinstance(coverage, (int, float)):
+            return round(max(0.0, min(1.0, float(coverage))) * 100)
+        values = list(coverage)
+        return round(100 * sum(bool(value) for value in values) / len(values)) if values else 0
 
     def _clear_exact_live_preview(self):
         snapshot = self.card_assembly.preview_snapshot()
@@ -3107,18 +3630,21 @@ class MainWindow(QMainWindow):
             fallback = "resilient_100"
         visible_keys = {key for key, _backend in entries}
         selectable_keys = {key for key, backend in entries
-                           if not isinstance(backend, Data2GHostBackend) or backend.usable}
+                           if (MODE_REGISTRY.get(key) is None or
+                               MODE_REGISTRY[key].adapter != DATA2G_ADAPTER.key or
+                               getattr(backend, "usable", False))}
         if fallback not in visible_keys and data2g and entries:
             fallback = entries[0][0]
         selected = (preferred if preferred in selectable_keys else
                     next((key for key, _backend in entries if key in selectable_keys), fallback))
-        migrated = selected != preferred and is_experimental_mode(str(preferred))
         with QSignalBlocker(self.mode_combo):
             self.mode_combo.clear()
             for key, backend in entries:
                 label = "Legacy packet · experimental" if key == LEGACY_MODE_KEY else backend.label
                 self.mode_combo.addItem(label, key)
-                if isinstance(backend, Data2GHostBackend) and not backend.usable:
+                if (MODE_REGISTRY.get(key) is not None and
+                        MODE_REGISTRY[key].adapter == DATA2G_ADAPTER.key and
+                        not getattr(backend, "usable", False)):
                     item = self.mode_combo.model().item(self.mode_combo.count() - 1)
                     if item is not None:
                         item.setEnabled(False)
@@ -3129,12 +3655,6 @@ class MainWindow(QMainWindow):
         if not data2g or (self.data2g_modes and selected in selectable_keys):
             self.settings.setValue(setting, selected)
         self._mode_has_explicit_selection = selected != fallback
-        if (migrated and not self.settings.value("transfer/experimental_mode_migrated", False,
-                                                  type=bool)):
-            self.settings.setValue("transfer/experimental_mode_migrated", True)
-            self.statusBar().showMessage(
-                f"Saved experimental mode {preferred!r} moved to {selected}; turn on Show experimental modem modes to select it.",
-                15000)
 
     def _update_transfer_controls(self, *_):
         if hasattr(self, "audio_placement_combo"):
@@ -3172,34 +3692,64 @@ class MainWindow(QMainWindow):
     def _refresh_transfer_summary(self, *_):
         if not hasattr(self, "transfer_summary"):
             return
+        def set_summary(text, data2g=False):
+            if data2g and self.data2g_ptt_failed:
+                text += " · PTT fault pending: verify radio is unkeyed before transmitting"
+            self.transfer_summary.setText(text)
         try:
-            card = self._chosen_card()
             backend = self.selected_backend()
+            data2g = (self.selected_adapter().capabilities.kind is
+                      AdapterKind.FRAME_TRANSPORT)
+            if data2g:
+                if backend is None or getattr(backend, "mode", None) is None:
+                    set_summary(
+                        "Connect to a Data2G host to discover broadcast modes and estimate airtime.", True)
+                    return
+                if backend.disabled_reason:
+                    set_summary(backend.disabled_reason, True)
+                    return
+            card = self._chosen_card()
             if backend is not None:
                 total_seconds = backend.estimate_seconds(card, self.repeat_count.value())
             else:
                 symbols, profile = self._card_tx_symbols(card)
                 total_seconds = len(symbols) / profile.baud
-            self.transfer_summary.setText(f"{card.width}×{card.height} · {len(card.palette)} colors · {total_seconds:.1f}s")
+            timing = (f"~{total_seconds:.1f}s RF airtime" if data2g else
+                      f"{total_seconds:.1f}s")
+            set_summary(
+                f"{card.width}×{card.height} · {len(card.palette)} colors · {timing}", data2g)
             if mode_supports_audio_placement(self.selected_mode()):
                 tones = backend.profile.tones_hz
                 self.transfer_summary.setText(self.transfer_summary.text() + f" · {tones[0]:g}–{tones[-1]:g} Hz audio")
-            elif self.selected_adapter().capabilities.kind is AdapterKind.FRAME_TRANSPORT:
-                self.transfer_summary.setText(self.transfer_summary.text() + " · radio/audio/PTT are controlled by the Data2G host")
+            elif data2g:
+                set_summary(
+                    self.transfer_summary.text() +
+                    " · host channel-access waits can extend elapsed time · "
+                    "radio/audio/PTT are controlled by the Data2G host", True)
         except Exception as exc:
-            self.transfer_summary.setText(str(exc) if self.selected_mode() == "experimental_qpsk_5s" else
-                                          "Choose a card and burst type to see estimated send time.")
+            set_summary(str(exc) if self.selected_mode() == "experimental_qpsk_5s" else
+                        "Choose a card and burst type to see estimated send time.",
+                        self.selected_adapter().capabilities.kind is AdapterKind.FRAME_TRANSPORT)
 
     def _card_tx_audio(self, card, *, beacon=False):
         stage = "card" if beacon else self._outgoing_message_type()
         wire_type = {"report73": "73", "final73": "73"}.get(stage, stage)
         snr_db = self.tx_snr_db if stage in {"exchange", "report73"} else None
         backend = self.selected_backend()
+        adapter = self.selected_adapter()
+        if adapter.capabilities.kind is AdapterKind.FRAME_TRANSPORT:
+            raise ValueError(
+                "Data2G creates the radio waveform inside its host and does not export "
+                "a local WAV. Select Experimental modems to export local transmission audio.")
         if backend is not None:
-            return EXPERIMENTAL_ADAPTER.encode(
-                backend, card, self.repeat_count.value(), wire_type, snr_db)
-        symbols, profile = self._card_tx_symbols(card, beacon=beacon)
-        return modem.synthesize(symbols, profile=profile)
+            if adapter.capabilities.kind is not AdapterKind.LOCAL_IMAGE_MODEM:
+                raise ValueError(f"Selected modem adapter {adapter.key!r} cannot encode local audio")
+            return adapter.encode(backend, card, self.repeat_count.value(), wire_type, snr_db)
+        encode_legacy = getattr(adapter, "encode_legacy", None)
+        if not callable(encode_legacy):
+            raise ValueError(f"Selected modem adapter {adapter.key!r} does not support legacy packet encoding")
+        return encode_legacy(card, self.repeat_count.value(), wire_type, snr_db,
+                             self.selected_mode(), self.selected_profile(), beacon=beacon)
 
     def _card_tx_symbols(self, card, *, beacon=False):
         mode = self.selected_mode()
@@ -3220,43 +3770,66 @@ class MainWindow(QMainWindow):
         if self.rig.connected():
             self.rig.disconnect()
             return
+        if (self.data2g_connecting or self.data2g_local_starting or self.data2g_closing or
+                self.data2g_handoff_pending or
+                DATA2G_ADAPTER.is_connected(self.data2g_session)):
+            self.rig_status.setText(
+                "CAT connection blocked while Data2G owns or is acquiring radio/audio")
+            return
+        if not self._confirm_data2g_ptt_recovery():
+            return
         self.settings.setValue("radio/rigctld_host", self.rig_host.text().strip())
         self.settings.setValue("radio/rigctld_port", self.rig_port.value())
         self.rig_status.setText("Connecting to rig control service…")
         self.rig.connect_to(self.rig_host.text().strip(), self.rig_port.value(), self.rig_changed)
 
     def refresh_tx_button(self):
-        switching_locked = bool(
+        backend_switch_locked = bool(
             self.auto_armed or self.ptt_active or self.tx_audio is not None or
             self.tx_timer.isActive() or getattr(self, "data2g_tx_waiting", None) is not None or
-            getattr(self, "data2g_connecting", False) or
+            getattr(self, "data2g_local_starting", False) or
+            getattr(self, "data2g_closing", False) or
             getattr(self, "data2g_handoff_pending", False) or
+            getattr(self, "data2g_tx_total", 0) or
             (hasattr(self, "stop_tx_btn") and self.stop_tx_btn.isVisible()))
+        switching_locked = backend_switch_locked or bool(
+            getattr(self, "data2g_connecting", False))
         if hasattr(self, "backend_combo"):
-            self.backend_combo.setEnabled(not switching_locked)
+            # Keep the backend choice available while discovery is in flight:
+            # selecting Experimental closes that pending Data2G session, then
+            # resumes local CAT/audio only after the host releases ownership.
+            self.backend_combo.setEnabled(not backend_switch_locked)
         if hasattr(self, "mode_combo"):
             self.mode_combo.setEnabled(not switching_locked)
         if hasattr(self, "show_experimental_modes"):
-            self.show_experimental_modes.setEnabled(not switching_locked)
+            # Revealing the alternate backend is part of choosing it; allow
+            # this preference to change during discovery, while keeping the
+            # actual mode selector locked until discovery or handoff completes.
+            self.show_experimental_modes.setEnabled(not backend_switch_locked)
         test_ready = (self.audio_test_mode.isChecked() and
                       (self.test_link_enabled or self.output_device.currentData()))
         data2g_selected = (hasattr(self, "backend_combo") and
                            self.backend_combo.currentData() == "data2g")
         host_backend = self.selected_backend()
-        host_ready = (isinstance(host_backend, Data2GHostBackend) and
-                      host_backend.usable and self.data2g_session is not None and
-                      self.data2g_session.connected)
+        host_ready = (data2g_selected and host_backend is not None and
+                      getattr(host_backend, "usable", False) and self.data2g_session is not None and
+                      DATA2G_ADAPTER.is_connected(self.data2g_session))
         radio_ready = (host_ready if data2g_selected else test_ready or self.rig.connected())
         ready = (radio_ready and not self.auto_armed and not self.ptt_active
                  and self.tx_audio is None and not self.tx_timer.isActive()
+                 and not getattr(self, "data2g_tx_total", 0)
+                 and not getattr(self, "data2g_connecting", False)
+                 and not getattr(self, "data2g_closing", False)
+                 and not getattr(self, "data2g_handoff_pending", False)
                  and self.rig.pending is None and not self.rig.queue
                  and not getattr(self, "beacon_pending", False))
         if os.environ.get("PIXELQSO_AUDIO_ROLE") == "websdr-rx":
             ready = False
         self.tx_btn.setEnabled(ready)
-        self.tx_btn.setText("Send test audio" if self.audio_test_mode.isChecked() else "Send selected stage")
+        local_audio_test = (self.audio_test_mode.isChecked() and not data2g_selected)
+        self.tx_btn.setText("Send test audio" if local_audio_test else "Send selected stage")
         if hasattr(self, "beacon_button"):
-            self.beacon_button.setEnabled(ready and not self.audio_test_mode.isChecked())
+            self.beacon_button.setEnabled(ready and not local_audio_test)
 
     def rig_changed(self, connected, message):
         self.rig_status.setText(message)
@@ -3366,19 +3939,35 @@ class MainWindow(QMainWindow):
         self._refresh_contact_stage_indicator()
         self.transmit_exchange()
 
+    def _stop_local_receive_capture(self):
+        handle = getattr(self, "local_receive_handle", None)
+        adapter = getattr(self, "local_receive_adapter", None)
+        errors = ()
+        try:
+            if handle is not None and adapter is not None:
+                result = adapter.stop_receive(handle)
+                errors = ((result,) if isinstance(result, str) else tuple(result or ()))
+        except Exception as exc:
+            errors = (f"receive adapter: {exc}",)
+        finally:
+            self.local_receive_handle = None
+            self.local_receive_adapter = None
+            self.rx_audio = None
+            self.rx_device = None
+            self.test_rx_socket = None
+        for error in errors:
+            if hasattr(self, "exchange_log"):
+                self.exchange_log.append(f"Local receive resource release issue: {error}")
+
     def _discard_receive_for_tx(self):
         self._flush_on_air_rx()
         self.rx_timer.stop()
         self.live_preview_timeout.stop()
         self.auto_receive_timer.stop()
-        if self.rx_audio:
-            self.rx_audio.stop()
-        self.rx_audio = None; self.rx_device = None
+        self._stop_local_receive_capture()
         self.card_assembly.begin_receive_window()
         self._clear_exact_live_preview()
         self.rx_bytes.clear()
-        if self.test_rx_socket is not None:
-            self.test_rx_socket.close(); self.test_rx_socket.deleteLater(); self.test_rx_socket = None
         self.test_rx_pending = {}; self.test_rx_expected = None
         self.test_rx_final_pending = False; self.live_decode_final = False
         if hasattr(self, "receive_stack"):
@@ -3453,7 +4042,7 @@ class MainWindow(QMainWindow):
 
     def _handle_contact_message(self, report):
         card = report.get("card") or {}
-        if not card.get("exact") or not card.get("avatar_burst"):
+        if not self._assembly_verified(report) or not card.get("avatar_burst"):
             return
         kind = card.get("message_type", "card")
         self._show_reply_action(report)
@@ -3510,8 +4099,7 @@ class MainWindow(QMainWindow):
         if self.active_qso_log is not None:
             self.active_qso_log["status"] = "Complete"
             self.active_qso_log["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            if self._active_qso_path:
-                self._active_qso_path.write_text(json.dumps(self.active_qso_log, indent=2))
+            self._persist_active_qso_log()
             self.refresh_qso_log()
             self.active_qso_log = None
             self._active_qso_path = None
@@ -3536,7 +4124,7 @@ class MainWindow(QMainWindow):
             self._refresh_contact_stage_indicator()
         backend = self.selected_backend()
         if self.selected_adapter().capabilities.kind is AdapterKind.FRAME_TRANSPORT:
-            if not isinstance(backend, Data2GHostBackend):
+            if backend is None:
                 QMessageBox.warning(self, "Data2G mode unavailable",
                                     "Connect to a Data2G host and select a usable broadcast mode first.")
                 return
@@ -3551,57 +4139,75 @@ class MainWindow(QMainWindow):
         generation = self.auto_generation if self.auto_armed else None
         self.read_rig(lambda ok: self._preflight_and_confirm_tx(ok, generation))
 
-    def _prepare_data2g_transmission(self, backend):
+    def _prepare_data2g_transmission(self, backend, *, message_type=None, card_override=None,
+                                     beacon=False):
+        if self.data2g_tx_total or self.data2g_tx_waiting is not None:
+            QMessageBox.information(self, "Data2G transmission in progress",
+                                    "Wait for the queued host transmission to finish before sending another card.")
+            return
         if not backend.usable:
             QMessageBox.warning(self, "Data2G mode unavailable",
                                 backend.disabled_reason or "Reconnect to discover usable Data2G modes.")
             return
-        if not self.data2g_session or not self.data2g_session.connected:
+        if not self.data2g_session or not DATA2G_ADAPTER.is_connected(self.data2g_session):
             QMessageBox.warning(self, "Data2G host unavailable", "Connect to a Data2G host in Station settings before transmitting.")
             return
+        if not self._confirm_data2g_ptt_recovery():
+            if self.auto_armed:
+                self.stop_auto_exchange(
+                    "Automatic exchange stopped after a managed-host PTT failure; "
+                    "verify the radio is unkeyed before transmitting again.")
+            return
         try:
-            card = self._chosen_card()
+            card = card_override if card_override is not None else self._chosen_card()
             card.validate()
-            if self.auto_armed and card.callsign.upper() != self.station_call.text().strip().upper():
-                raise ValueError("The automatic exchange card must use the call sign configured in Station settings.")
+            station_call = self.station_call.text().strip().upper()
+            if card.callsign.upper() != station_call:
+                raise ValueError(
+                    f"This card uses {card.callsign.upper() or 'no call sign'}, but the "
+                    f"Data2G broadcast group is open for {station_call or 'no call sign'}. "
+                    "Update the card or Station settings so both identities match.")
             self._remember_tx_card(card)
-            message_type = self._outgoing_message_type()
+            message_type = message_type or self._outgoing_message_type()
             wire_type = {"report73": "73", "final73": "73"}.get(message_type, message_type)
             # `report73` is serialized as wire stage `73`, but its optional
             # SNR field still carries the report when a local decoder supplied one.
             snr_db = self.tx_snr_db if message_type in {"exchange", "report73"} else None
-            packed = modem.minimal_avatar_payload(card)
-            frame_limit = backend.max_frame_bytes
-            if frame_limit is None:
-                raise ValueError("Selected Data2G mode cannot carry the card header and any image data")
-            chunk_size = frame_limit - CARD_TRANSFER_HEADER.size
-            if chunk_size < 1:
-                raise ValueError("Selected Data2G mode has no room for Pixel QSO image data")
-            frames = [card_fragment(card, packed, offset, packed[offset:offset + chunk_size],
-                                    wire_type, snr_db)
-                      for offset in range(0, len(packed), chunk_size)]
+            frames = DATA2G_ADAPTER.frame_card(
+                card, backend.max_frame_bytes, wire_type, snr_db)
             repeats = self.repeat_count.value()
+            self.data2g_ack_timeout_ms = max(
+                DATA2G_ACK_TIMEOUT_MS,
+                math.ceil((float(backend.mode.seconds_at_max) + 10.0) * 1000))
+            # Mode selection can fail synchronously if the session has gone
+            # stale or its bounded command queue is full. Do not publish TX
+            # queue state until that prerequisite has been accepted.
+            DATA2G_ADAPTER.select_mode(self.data2g_session, backend.mode_name)
             self.data2g_tx_frames = frames * repeats
             self.data2g_tx_waiting = None
             self.data2g_tx_sent = 0
             self.data2g_tx_total = len(self.data2g_tx_frames)
-            DATA2G_ADAPTER.select_mode(self.data2g_session, backend.mode_name)
             self.tx_card = card
             self.tx_message_type = wire_type
             if wire_type == "cq":
                 self.last_cq_snapshot = self._local_card_snapshot(card, wire_type, snr_db)
-            else:
+            elif not beacon:
                 self._begin_qso_log(self.auto_peer or "Unknown", "")
                 self._append_qso_card("sent_cards", self._local_card_snapshot(card, wire_type, snr_db))
-            self.tx_label = "Data2G host card frames"
-            self.tx_btn.setEnabled(False)
+            self.tx_label = "Data2G host beacon" if beacon else "Data2G host card frames"
             self.stop_tx_btn.setEnabled(True)
             self.stop_tx_btn.setVisible(True)
             self.stop_tx_btn.setText("Stop queue")
+            self.refresh_tx_button()
             self.listen_indicator.setText("● DATA2G HOST TX")
             self.listen_indicator.setStyleSheet("color:#e5b36e;font-weight:700;letter-spacing:1px")
-            self.rx_status.setText(f"Sending frame 0/{self.data2g_tx_total} · ACKs confirm local host transmission only")
-            self.exchange_log.append(f"Submitting {self.data2g_tx_total} Data2G application frames using {backend.mode_name}; no remote receipt is implied by ACKMODE.")
+            self.rx_status.setText(
+                f"Sending {'beacon ' if beacon else ''}frame 0/{self.data2g_tx_total} · "
+                "ACKs confirm local host transmission only")
+            self.exchange_log.append(
+                f"Submitting {self.data2g_tx_total} Data2G application frames using "
+                f"{backend.mode_name}{' as a beacon' if beacon else ''}; "
+                "no remote receipt is implied by ACKMODE.")
             if self.on_air:
                 self.on_air.emit("host_tx_start", {
                     "mode": backend.mode_name, "message_type": wire_type,
@@ -3619,7 +4225,7 @@ class MainWindow(QMainWindow):
     def _data2g_send_next(self):
         if not self.data2g_tx_frames or self.data2g_tx_waiting is not None:
             return
-        if not self.data2g_session or not self.data2g_session.connected:
+        if not self.data2g_session or not DATA2G_ADAPTER.is_connected(self.data2g_session):
             self._finish_data2g_transmission("Data2G host disconnected; remaining frames were not sent.")
             return
         self.data2g_tag = (self.data2g_tag + 1) & 0xffff
@@ -3630,17 +4236,23 @@ class MainWindow(QMainWindow):
             self.data2g_tx_waiting = tag
             if self.on_air:
                 self.on_air.emit("host_tx_frame_queued", {
-                    "port": self.data2g_session.port, "tag": tag.hex(),
+                    "port": DATA2G_ADAPTER.group_port(self.data2g_session), "tag": tag.hex(),
                     "index": self.data2g_tx_sent + 1, "total": self.data2g_tx_total,
                     "bytes": len(frame), "sha256": hashlib.sha256(frame).hexdigest(),
                 })
-            self.data2g_ack_timer.start()
-            self.rx_status.setText(f"Data2G frame {self.data2g_tx_sent + 1}/{self.data2g_tx_total} queued · awaiting host ACK")
+            timeout = (DATA2G_BUSY_ACK_TIMEOUT_MS if self.data2g_channel_busy
+                       else self.data2g_ack_timeout_ms)
+            self.data2g_ack_timer.start(timeout)
+            self.rx_status.setText(
+                "Data2G host is holding the queued frame while the channel is busy"
+                if self.data2g_channel_busy else
+                f"Data2G frame {self.data2g_tx_sent + 1}/{self.data2g_tx_total} queued · awaiting host ACK")
         except Exception as exc:
             self._finish_data2g_transmission(f"Data2G frame queue failed: {exc}")
 
-    def _data2g_tx_ack(self, port, tag):
-        if (not self.data2g_session or port != self.data2g_session.port or
+    def _data2g_tx_ack(self, session, port, tag):
+        if (session is not self.data2g_session or not self.data2g_session or
+                port != DATA2G_ADAPTER.group_port(self.data2g_session) or
                 self.data2g_tx_waiting is None or tag != self.data2g_tx_waiting):
             return
         self.data2g_ack_timer.stop()
@@ -3695,7 +4307,7 @@ class MainWindow(QMainWindow):
                     self._complete_contact()
                 self._refresh_contact_stage_indicator()
                 self.auto_should_listen = True
-        if self.data2g_session and self.data2g_session.connected:
+        if DATA2G_ADAPTER.is_connected(self.data2g_session):
             self.listen_indicator.setText("● DATA2G HOST RX")
             self.listen_indicator.setStyleSheet("color:#8bd8ae;font-weight:700;letter-spacing:1px")
 
@@ -3713,7 +4325,10 @@ class MainWindow(QMainWindow):
 
     def _data2g_ack_timeout(self):
         self._finish_data2g_transmission(
-            "Data2G ACKMODE timed out; whether that frame transmitted is unknown. Remaining frames were not replayed.")
+            ("Data2G host remained busy beyond the ACK wait limit; whether the frame transmitted is unknown. "
+             "Remaining frames were not replayed." if self.data2g_channel_busy else
+             "Data2G ACKMODE timed out; whether that frame transmitted is unknown. "
+             "Remaining frames were not replayed."))
 
     def _prepare_test_transmission(self):
         if self.test_link_enabled:
@@ -3759,12 +4374,21 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Select automatic exchange", "Choose Automatic card exchange before starting.")
             return
         backend = self.selected_backend()
-        host_mode = isinstance(backend, Data2GHostBackend)
+        host_mode = (self.selected_adapter().capabilities.kind is
+                     AdapterKind.FRAME_TRANSPORT)
         if backend is None or (not host_mode and not backend.checked):
             QMessageBox.warning(self, "Choose resilient burst", "Automatic CQ exchanges require resilient burst cards so the message type and integrity checks are available.")
             return
-        if host_mode and (not self.data2g_session or not self.data2g_session.connected):
+        if host_mode and not getattr(backend, "usable", False):
+            QMessageBox.warning(
+                self, "Data2G mode unavailable",
+                getattr(backend, "disabled_reason", None) or
+                "Connect to a Data2G host and select a usable broadcast mode first.")
+            return
+        if host_mode and (not self.data2g_session or not DATA2G_ADAPTER.is_connected(self.data2g_session)):
             QMessageBox.warning(self, "Data2G host unavailable", "Connect to the Data2G host before starting an automatic exchange.")
+            return
+        if host_mode and not self._confirm_data2g_ptt_recovery():
             return
         link_ready = self.test_link_enabled and self.audio_test_mode.isChecked()
         devices_ready = bool(self.output_device.currentData() and self.input_device.currentData())
@@ -3835,10 +4459,8 @@ class MainWindow(QMainWindow):
         self._update_transfer_controls()
         if self.rx_timer.isActive():
             self.rx_timer.stop()
-            if self.rx_audio: self.rx_audio.stop()
-            self.rx_audio = None; self.rx_device = None; self.rx_bytes.clear()
-            if self.test_rx_socket is not None:
-                self.test_rx_socket.close(); self.test_rx_socket.deleteLater(); self.test_rx_socket = None
+            self._stop_local_receive_capture()
+            self.rx_bytes.clear()
             self.test_rx_pending = {}; self.test_rx_expected = None
         if self.tx_timer.isActive():
             self._finish_tx(log_message)
@@ -3849,10 +4471,9 @@ class MainWindow(QMainWindow):
         if self.active_qso_log is not None:
             self.active_qso_log["status"] = "Complete" if "complete" in log_message.lower() else "Stopped"
             self.active_qso_log["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            self.qso_log_dir.mkdir(parents=True, exist_ok=True)
             if getattr(self, "_active_qso_path", None) is None:
                 self._active_qso_path = self.qso_log_dir / f"qso-{time.strftime('%Y%m%d-%H%M%S')}-{id(self.active_qso_log) & 0xffff:04x}.json"
-            self._active_qso_path.write_text(json.dumps(self.active_qso_log, indent=2))
+            self._persist_active_qso_log()
             self.refresh_qso_log()
             self.active_qso_log = None
             self._active_qso_path = None
@@ -4119,9 +4740,20 @@ class MainWindow(QMainWindow):
         self.stop_receive()
 
     def transmit_beacon(self):
+        """Send a one-shot card beacon through the selected backend."""
         if os.environ.get("PIXELQSO_AUDIO_ROLE") == "websdr-rx":
             return
-        """Operator-started, single card beacon through the normal CAT/PTT audio chain."""
+        if self.selected_adapter().capabilities.kind is AdapterKind.FRAME_TRANSPORT:
+            backend = self.selected_backend()
+            if backend is None:
+                QMessageBox.warning(self, "Data2G mode unavailable",
+                                    "Connect to a Data2G host and select a usable broadcast mode first.")
+                return
+            self.update_identity()
+            self.tx_snr_db = None
+            self._prepare_data2g_transmission(
+                backend, message_type="card", card_override=self.card, beacon=True)
+            return
         if not self.rig.connected():
             QMessageBox.warning(self, "CAT unavailable", "Connect to rigctld; PixelQSO will tune the radio to the selected beacon frequency.")
             return
@@ -4218,7 +4850,8 @@ class MainWindow(QMainWindow):
         auto_capture = capture_path in self.auto_decode_paths
         self.auto_decode_paths.discard(capture_path)
         if error:
-            self.rx_status.setText("Decode failed: " + error)
+            error_text = error.message if isinstance(error, DecodeFailure) else str(error)
+            self.rx_status.setText("Decode failed: " + error_text)
             if auto_capture and self.auto_armed:
                 if self.auto_timeout_pending:
                     self._resolve_auto_receive_timeout()
@@ -4238,7 +4871,8 @@ class MainWindow(QMainWindow):
         if image is not None:
             card = report.get("card") or {}
             self._show_receive_preview(image, exact=bool(card.get("exact")),
-                                       coverage=card.get("pixel_coverage"))
+                                       coverage=card.get("pixel_coverage"),
+                                       verified_coverage=card.get("verified_pixel_coverage"))
         card = report.get("card") or {}
         is_avatar = bool(card.get("raw_avatar") or card.get("avatar_burst"))
         verified_complete = self._assembly_verified(report)
@@ -4292,11 +4926,11 @@ class MainWindow(QMainWindow):
         own_call = self.call.text().strip().upper()
         if card_meta.get("avatar_burst"):
             fresh_identity = card_meta.get("card_id") is not None
-            fresh_complete = bool(card_meta.get("exact"))
+            fresh_complete = self._assembly_verified(report)
         else:
             fresh_identity = card_meta.get("card_id") in valid_current_ids
             fresh_complete = card_meta.get("card_id") in complete_current_ids
-        if (not fresh_identity or not fresh_complete or not card_meta.get("exact")
+        if (not fresh_identity or not fresh_complete or not self._assembly_verified(report)
                 or not callsign or callsign == own_call):
             if self.auto_timeout_pending:
                 self._resolve_auto_receive_timeout()
@@ -4351,30 +4985,32 @@ class MainWindow(QMainWindow):
                 self.stop_auto_exchange("Automatic exchange stopped because receive could not start.")
 
         self.rx_rate = modem.SAMPLE_RATE
-        if self.test_link_enabled and self.audio_test_mode.isChecked():
-            self.test_rx_socket = QUdpSocket(self)
-            if not self.test_rx_socket.bind(QHostAddress(QHostAddress.SpecialAddress.LocalHost), self.test_rx_port):
-                message = f"Could not open the local test-audio port {self.test_rx_port}: {self.test_rx_socket.errorString()}"
-                self.test_rx_socket.deleteLater(); self.test_rx_socket = None
-                receive_error("Local audio link unavailable", message)
-                return
+        test_mode = self.test_link_enabled and self.audio_test_mode.isChecked()
+        audio_format = QAudioFormat()
+        audio_format.setSampleRate(modem.SAMPLE_RATE)
+        audio_format.setChannelCount(1)
+        audio_format.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        adapter = self.selected_adapter()
+        try:
+            handle = adapter.start_receive(
+                device=None if test_mode else self.input_device.currentData(),
+                audio_format=audio_format, parent=self,
+                audio_source_factory=QAudioSource,
+                test_port=self.test_rx_port if test_mode else None,
+                test_socket_factory=lambda parent: QUdpSocket(parent),
+                test_bind=lambda sock, port: sock.bind(
+                    QHostAddress(QHostAddress.SpecialAddress.LocalHost), port))
+        except ReceiveStartError as exc:
+            receive_error(exc.title, exc.message)
+            return
+        self.local_receive_handle = handle
+        self.local_receive_adapter = adapter
+        self.rx_audio = handle.audio_source
+        self.rx_device = handle.audio_stream
+        self.test_rx_socket = handle.test_socket
+        if test_mode:
             self.test_rx_expected = None
             self.test_rx_pending = {}
-        else:
-            device = self.input_device.currentData()
-            if not device:
-                receive_error("No audio input", "Not listening · select an audio input in Station settings.")
-                return
-            fmt = QAudioFormat(); fmt.setSampleRate(modem.SAMPLE_RATE); fmt.setChannelCount(1); fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
-            if not device.isFormatSupported(fmt):
-                receive_error("Audio format unsupported", "Not listening · the selected input does not support 48 kHz mono 16-bit audio.")
-                return
-            self.rx_audio = QAudioSource(device, fmt, self)
-            self.rx_device = self.rx_audio.start()
-            if not self.rx_device:
-                self.rx_audio = None
-                receive_error("Audio failed", "Not listening · could not open the selected audio input.")
-                return
         self.card_assembly.begin_receive_window()
         self._clear_exact_live_preview()
         self.rx_bytes.clear()
@@ -4396,7 +5032,8 @@ class MainWindow(QMainWindow):
                        "pixels": snapshot.pixels}
             image = self.card_image(preview)
             if image is not None:
-                self._show_receive_preview(image, coverage=snapshot.coverage)
+                self._show_receive_preview(image, coverage=snapshot.coverage,
+                                           verified_coverage=snapshot.verified_pixels)
         elif not snapshot:
             self._hide_receive_preview()
         self.receive_stack.setCurrentWidget(self.session_wall_page)
@@ -4454,7 +5091,8 @@ class MainWindow(QMainWindow):
         elif self.selected_backend() is not None:
             backend = self.selected_backend()
             minimum_samples = int(backend.minimum_audio_seconds() * self.rx_rate)
-            interval = max(1, int((1.0 if isinstance(backend, Data2GHostBackend) else 0.5) * self.rx_rate))
+            interval = max(1, int((1.0 if self.selected_adapter().capabilities.kind is
+                                   AdapterKind.FRAME_TRANSPORT else 0.5) * self.rx_rate))
         else:
             minimum_samples = int(1.0 * self.rx_rate)
             interval = 2 * self.rx_rate
@@ -4489,23 +5127,30 @@ class MainWindow(QMainWindow):
         self.live_decode_inflight = False
         if generation != self.auto_generation or not self.rx_timer.isActive():
             return
+        error_text = (error.message if isinstance(error, DecodeFailure) else
+                      str(error) if error else None)
         on_air_details = None
         if self.on_air:
             pcm = self.on_air_decode_pcm or b""
-            on_air_details = {"report": report, "complete": False, "error": error,
+            decoder_stats = dict(stats)
+            if isinstance(error, DecodeFailure):
+                decoder_stats["failure_kind"] = error.kind.value
+            on_air_details = {"report": report, "complete": False, "error": error_text,
                               "rx_stream_id": self.on_air_decode_stream,
                               "sample_start": self.on_air_decode_end_sample - len(pcm) // 2,
                               "sample_end": self.on_air_decode_end_sample,
-                              "decoder": stats,
+                              "decoder": decoder_stats,
                               "reference": decoded_reference(report) if report else None}
         if error:
             if self.on_air and on_air_details is not None:
                 self.on_air.emit("rx_decode", on_air_details)
                 self.on_air_decode_pcm = None
-            if self.selected_mode().startswith("data2g_") and "No checked Data2G card fragment received yet" in error:
-                QTimer.singleShot(0, self._drain_rx)
-                return
-            self.rx_status.setText("Listening · no complete card decoded yet")
+            if (isinstance(error, DecodeFailure) and
+                    error.kind is DecodeFailureKind.BACKEND_ERROR):
+                self.rx_status.setText("Receive decoder error: " + error_text)
+                self.exchange_log.append("Receive decoder error: " + error_text)
+            else:
+                self.rx_status.setText("Listening · no complete card decoded yet")
             QTimer.singleShot(0, self._drain_rx)
             return
         card = report.get("card") or {}
@@ -4534,7 +5179,8 @@ class MainWindow(QMainWindow):
                            f"{report.get('valid_packet_count', 0)} packets received")
             if image is not None and (card.get("preview_received") or card.get("avatar_burst") or card.get("raw_avatar")):
                 self._show_receive_preview(image, exact=bool(card.get("exact")),
-                                           coverage=card.get("pixel_coverage"))
+                                           coverage=card.get("pixel_coverage"),
+                                           verified_coverage=card.get("verified_pixel_coverage"))
             self.rx_status.setText(f"Live image · {card.get('callsign') or 'station not identified'} · {live_status}")
         if complete:
             if self.auto_armed:
@@ -4585,10 +5231,7 @@ class MainWindow(QMainWindow):
         self._flush_on_air_rx()
         self.rx_timer.stop(); self._drain_rx()
         self.auto_receive_timer.stop()
-        if self.rx_audio: self.rx_audio.stop()
-        self.rx_audio = None; self.rx_device = None
-        if self.test_rx_socket is not None:
-            self.test_rx_socket.close(); self.test_rx_socket.deleteLater(); self.test_rx_socket = None
+        self._stop_local_receive_capture()
         self.test_rx_pending = {}; self.test_rx_expected = None
         self.test_rx_final_pending = False; self.live_decode_final = False
         self.listen_indicator.setText("● PROCESSING")
@@ -4638,7 +5281,7 @@ class MainWindow(QMainWindow):
 
     def _add_session_wall_card(self, report):
         card = report.get("card") or {}
-        if not card.get("exact"):
+        if not self._assembly_verified(report):
             return
         key = received_card_key(report)
         if key in self.session_wall_keys:
@@ -4708,7 +5351,7 @@ class MainWindow(QMainWindow):
                           and new_card.get("card_id") is not None), None)
         if duplicate is not None:
             attempts = int(duplicate.get(attempts_key, 1)) + 1
-            if bucket == "received_cards" and new_card.get("exact"):
+            if bucket == "received_cards" and self._assembly_verified(card_data):
                 duplicate.update(card_data)
             duplicate[attempts_key] = attempts
         else:
@@ -4721,9 +5364,37 @@ class MainWindow(QMainWindow):
             self.active_qso_log["peer_callsign"] = meta.get("callsign", self.active_qso_log.get("peer_callsign", "Unknown"))
             self.active_qso_log["peer_grid"] = meta.get("grid", self.active_qso_log.get("peer_grid", ""))
         self.active_qso_log["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        self.qso_log_dir.mkdir(parents=True, exist_ok=True)
-        self._active_qso_path.write_text(json.dumps(self.active_qso_log, indent=2))
+        self._persist_active_qso_log()
         self.refresh_qso_log()
+
+    def _persist_active_qso_log(self):
+        if self.active_qso_log is None or self._active_qso_path is None:
+            return False
+        temporary = None
+        try:
+            self.qso_log_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=self.qso_log_dir,
+                    prefix=".qso-", suffix=".tmp", delete=False) as output:
+                temporary = Path(output.name)
+                json.dump(self.active_qso_log, output, indent=2)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, self._active_qso_path)
+        except OSError as exc:
+            message = f"Could not save QSO log: {exc}"
+            if hasattr(self, "exchange_log"):
+                self.exchange_log.append(message)
+            if hasattr(self, "rx_status"):
+                self.rx_status.setText(message)
+            return False
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        return True
 
     def _local_card_snapshot(self, card, message_type="card", snr_db=None):
         pixels = []
@@ -4742,7 +5413,10 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self._closing = True
         self.data2g_handoff_pending = False
+        if self.data2g_connect_worker is not None:
+            self.data2g_connect_worker.cancel()
         self._flush_on_air_rx()
+        self._stop_local_receive_capture()
         if self.on_air:
             self.on_air.emit("client_leave", {"dropped_jobs": self.on_air.dropped,
                                              "write_errors": self.on_air.errors,

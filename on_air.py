@@ -207,19 +207,22 @@ class SessionRecorder:
         path = os.environ.get("PIXELQSO_ON_AIR_CONFIG")
         return cls(json.loads(Path(path).read_text())) if path else None
 
-    def emit(self, kind, details=None, pcm=None, rate=48000):
+    def emit(self, kind, details=None, pcm=None, rate=48000, binary=None):
         event = {"schema": 1, "session_id": self.session, "station_id": self.station,
                  "event_id": uuid.uuid4().hex, "kind": kind,
                  "utc_ns": time.time_ns(), "monotonic_ns": time.monotonic_ns(),
                  "source": self.config.get("source", "radio-audio"),
                  "details": copy.deepcopy(details or {})}
-        size = len(pcm) if pcm else 0
+        binary = bytes(binary) if binary is not None else b""
+        size = (len(pcm) if pcm else 0) + len(binary)
         with self.lock:
-            if self.closed or self.pending_bytes + size > 64 * 1024 * 1024:
+            if self.closed:
+                return None
+            if self.pending_bytes + size > 64 * 1024 * 1024:
                 self.dropped += 1
                 return None
             try:
-                self.jobs.put_nowait((event, pcm, rate, size))
+                self.jobs.put_nowait((event, pcm, rate, size, binary))
             except queue.Full:
                 self.dropped += 1
                 return None
@@ -233,7 +236,7 @@ class SessionRecorder:
             if job is None:
                 self.jobs.task_done()
                 return
-            event, pcm, rate, size = job
+            event, pcm, rate, size, binary = job
             try:
                 if pcm:
                     stem = f'{event["utc_ns"]}-{event["kind"]}-{event["event_id"]}'
@@ -244,10 +247,20 @@ class SessionRecorder:
                     levels, spectra = signal_data(audio, rate)
                     np.savez_compressed(self.folder / (stem + ".npz"), **spectra)
                     event["audio"] = {**levels, "wav": stem + ".wav", "spectra": stem + ".npz"}
+                if binary:
+                    stem = f'{event["utc_ns"]}-{event["kind"]}-{event["event_id"]}.bin'
+                    (self.folder / stem).write_bytes(binary)
+                    event["binary_capture"] = {
+                        "file": stem, "bytes": len(binary),
+                        "sha256": hashlib.sha256(binary).hexdigest(),
+                        "storage": "local_only",
+                    }
                 with (self.folder / "events.jsonl").open("a") as file:
                     file.write(json.dumps(event, allow_nan=False) + "\n")
                 if self.url:
-                    request = Request(self.url + "/events", data=json.dumps(event, allow_nan=False).encode(),
+                    remote_event = copy.deepcopy(event)
+                    remote_event.pop("binary_capture", None)
+                    request = Request(self.url + "/events", data=json.dumps(remote_event, allow_nan=False).encode(),
                                       headers={"Authorization": "Bearer " + self.token,
                                                "Content-Type": "application/json"})
                     try:
@@ -270,4 +283,31 @@ class SessionRecorder:
         except queue.Full:
             return False
         self.thread.join(timeout)
-        return not self.thread.is_alive()
+        drained = not self.thread.is_alive()
+        if not drained:
+            return False
+        summary = {
+            "schema": 1,
+            "session_id": self.session,
+            "station_id": self.station,
+            "drained": True,
+            "dropped_jobs": self.dropped,
+            "write_errors": self.errors,
+            "network_errors": self.network_errors,
+            "clean": self.dropped == 0 and self.errors == 0,
+        }
+        temporary = self.folder / ".capture-summary.tmp"
+        try:
+            with temporary.open("w", encoding="utf-8") as output:
+                json.dump(summary, output, separators=(",", ":"), allow_nan=False)
+                output.write("\n")
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, self.folder / "capture-summary.json")
+        except OSError:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+        return True

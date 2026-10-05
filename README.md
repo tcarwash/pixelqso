@@ -20,6 +20,20 @@ Example cards made in the editor:
 Python 3.10 or newer is required. The standard install includes the pinned
 Data2G host runtime without PyTorch:
 
+The managed host uses [PyAudio, a PortAudio binding](https://people.csail.mit.edu/hubert/pyaudio/).
+On Debian or Ubuntu, install the PortAudio
+development package before installing Pixel QSO; on macOS, install PortAudio
+with Homebrew first. These are the same system prerequisites used by the
+desktop build workflow.
+
+```sh
+# Debian / Ubuntu
+sudo apt-get install portaudio19-dev
+
+# macOS
+brew install portaudio
+```
+
 ```sh
 uv sync
 uv run python app.py
@@ -42,6 +56,8 @@ Data2G is the default backend. After connecting, Pixel QSO lists the host's
 advertised modes that its broadcast API accepts for this group and that have
 enough frame capacity for a Pixel QSO card fragment. Each entry shows the exact
 host mode name, bandwidth, and maximum application-frame size.
+The transfer estimate reports RF burst airtime; Data2G host channel-access
+waits can make elapsed send time longer.
 
 Pixel QSO's local Resilient, Fast, weak-signal, and legacy modems are available
 through **Experimental modems** after enabling **Show experimental modem modes**
@@ -49,28 +65,51 @@ in Station settings. Local Resilient modes have an audio placement control that
 sets the lowest tone; 300 Hz is the recommended starting offset. It does not
 configure Data2G's audio placement.
 
+Data2G reception is selected and decoded by the connected host; it does not
+follow Pixel QSO's transmit-mode selector. The host sends checked application
+frames to Pixel QSO, where they enter the shared card assembly path. Receive-all,
+waterfall, and local audio-placement controls apply only to Experimental modems.
+
 The existing Resilient modes keep the version 3 on-air format for compatibility
 with existing local-modem stations. **Resilient v4 · whole-image check** is a
 separate experimental mode and sends a new version 4 format. Version 4 protects
 the canonical packed palette raster's CRC32 and content tag in its header, adds
-explicit block position/count fields, and accepts a complete image only after
-all checked blocks match that raster identity. Version 3 remains decodable with
+explicit block position/count fields plus a content-tag binding in every block,
+and accepts a complete image only after all checked blocks match that raster
+identity. Version 3 remains decodable with
 its original per-block CRC verification scope; it does not claim whole-image
 checksum verification. Version 4 transmissions require a peer with v4 support.
 
 ## Data2G host
 
-In Station settings, choose **Start local Data2G host** to have Pixel QSO start
-the bundled host, or choose **Remote Data2G host** and enter a host address.
-The defaults are command port 8300 and KISS port 8100. Pixel QSO discovers the
-host's mode catalog, opens the shared `PIXELQSO` broadcast group, and validates
-the catalog against that group's `BCAST MODE` support before showing choices.
+On a new install, Pixel QSO selects Data2G and starts the managed local host
+when the app opens, using the configured host audio and rigctld settings. To
+change those settings after startup, disconnect the Data2G host in Station
+settings, edit its settings, then connect again. To connect to a remote host,
+disconnect the managed host, select **Remote Data2G host**, and enter its
+address. On a fresh configuration, `PIXELQSO_DATA2G_HOST` selects a remote host
+at startup; a saved connection source takes precedence. The defaults are
+command port 8300 and KISS port 8100. Pixel QSO discovers the host's mode
+catalog, opens the shared `PIXELQSO` broadcast group, and validates the catalog
+against that group's `BCAST MODE` support before showing choices.
 
 For Data2G modes, Data2G owns radio audio and PTT. Pixel QSO releases its local
 audio receiver and CAT connection while the host is selected. Local Resilient
 modes continue using Pixel QSO's configured audio and CAT path. Do not connect
 Pixel QSO to a Data2G instance whose single-client command port is already
 owned by its GUI; use the managed host or a separate host instance instead.
+Configure the Data2G host's radio, audio devices, and rigctld endpoint in the
+host settings. Its audio selectors list PortAudio devices and pass the selected
+device index directly to the managed host; **System default** leaves selection
+to PortAudio. A successful command/KISS connection confirms transport access;
+it does not confirm that host audio or PTT is ready. If the managed host reports
+a PTT-on or PTT-off failure, Pixel QSO stops automatic exchange and blocks
+further Data2G transmission and CAT handoff. The fault remains set across app
+restarts and host reconnects. After checking that the radio is unkeyed, confirm
+the recovery prompt in Pixel QSO before resuming radio control.
+The one-shot beacon action sends through Data2G at the frequency configured on
+the host; Pixel QSO does not tune a Data2G radio. The local beacon frequency
+control applies only to Experimental modems.
 ACKMODE confirms that a local frame finished transmitting; it does not confirm
 that another station received the card. Group names and CRC masks are not
 encryption or privacy. See [the host protocol notes](DATA2G-BROADCAST-NOTES.md)
@@ -83,6 +122,27 @@ local modems enter as decoded blocks or candidate pixels. Both feed the same
 bounded card assembly service. Adding an experimental backend requires a known
 Pixel QSO framing and integrity contract; arbitrary modem formats are not
 automatically interoperable.
+
+## On-air capture
+
+Session recording is opt-in. Set `PIXELQSO_ON_AIR_CONFIG` to a JSON config
+containing `session_id`, `station_id`, and `output_dir` to create local capture
+files. Data2G receive events include the exact application frame in a `.bin`
+sidecar alongside the event record, so assembly behavior can be replayed from
+the same received frames. If a collector URL is configured, it receives the
+event metadata and frame hash; raw frame sidecars stay in the local output
+directory. Replay a capture with:
+
+```sh
+uv run python tools/replay_data2g_capture.py \
+  path/to/session/station/events.jsonl
+```
+
+The command checks sidecar hashes, compares direct fragment assembly with the
+shared assembly service, and compares replayed card references with the
+references recorded by the app. A clean result requires a closed session with
+the final `capture-summary.json` written after the recorder drains, with no
+recorder drops or write errors; partial captures are reported as inconclusive.
 
 ## Build
 

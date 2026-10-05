@@ -9,7 +9,7 @@ import math
 import importlib.util
 from dataclasses import dataclass, replace
 from typing import Protocol
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import numpy as np
 import cardmodem as pixel
@@ -19,6 +19,7 @@ AUDIO_RATE = pixel.SAMPLE_RATE
 DATA2G_PREFERRED_FRAME_BYTES = 256
 DATA2G_LENGTH_PREFIX_BYTES = 2
 DATA2G_MAX_CONTROL_CODEWORDS = 4
+DATA2G_MODE_KEY_PREFIX = "data2g_mode_"
 
 
 class CardBackend(Protocol):
@@ -151,7 +152,19 @@ class Data2GHostBackend:
 
 def data2g_mode_key(mode_name: str) -> str:
     """Return a stable, collision-safe UI/settings key for a host mode name."""
-    return "data2g_mode_" + quote(str(mode_name), safe="")
+    return DATA2G_MODE_KEY_PREFIX + quote(str(mode_name), safe="")
+
+
+def is_data2g_mode_key(mode_key: str) -> bool:
+    """Whether a persisted key names a dynamically discovered host mode."""
+    return isinstance(mode_key, str) and mode_key.startswith(DATA2G_MODE_KEY_PREFIX)
+
+
+def data2g_mode_name(mode_key: str) -> str:
+    """Recover the exact host mode name from a dynamic settings key."""
+    if not is_data2g_mode_key(mode_key):
+        return str(mode_key)
+    return unquote(mode_key[len(DATA2G_MODE_KEY_PREFIX):])
 
 
 def data2g_max_frame_bytes(mode, preferred=DATA2G_PREFERRED_FRAME_BYTES):
@@ -159,9 +172,11 @@ def data2g_max_frame_bytes(mode, preferred=DATA2G_PREFERRED_FRAME_BYTES):
     if mode is None:
         return None
     try:
+        preferred = int(preferred)
         bytes_per_codeword = int(mode.bytes_per_codeword)
         max_codewords = int(mode.max_codewords)
-        if (bytes_per_codeword <= 0 or max_codewords <= DATA2G_MAX_CONTROL_CODEWORDS or
+        if (preferred < TRANSFER_HEADER.size + 1 or bytes_per_codeword <= 0 or
+                max_codewords <= DATA2G_MAX_CONTROL_CODEWORDS or
                 not math.isfinite(float(mode.seconds_at_one)) or
                 not math.isfinite(float(mode.seconds_at_max)) or
                 mode.seconds_at_one <= 0 or mode.seconds_at_max < mode.seconds_at_one):
@@ -357,6 +372,11 @@ def register_data2g_mode_backends(backends):
     for key, spec in list(MODE_REGISTRY.items()):
         if spec.execution_path == "data2g_host":
             MODE_REGISTRY.pop(key, None)
+            # Static preset keys remain as the pre-discovery fallback. Dynamic
+            # keys belong to the last host catalog and must not remain
+            # selectable/decodable after a reconnect replaces that catalog.
+            if is_data2g_mode_key(key):
+                BACKENDS.pop(key, None)
     for key, backend in backends.items():
         BACKENDS[key] = backend
         MODE_REGISTRY[key] = ModeSpec(key, backend.label, False, "data2g_host", "host",
@@ -381,7 +401,7 @@ def normal_default_mode(keys=None, *, host_connected: bool = False) -> str:
     present = set(keys if keys is not None else (key for key, _ in available_modes()))
     if host_connected:
         return next((key for key in MODE_ORDER
-                     if key in present and key.startswith("data2g_mode_")), DEFAULT_MODE_KEY)
+                     if key in present and is_data2g_mode_key(key)), DEFAULT_MODE_KEY)
     return DEFAULT_MODE_KEY
 
 def get_backend(key: str, audio_placement: str | float = "near_carrier") -> CardBackend:
@@ -427,5 +447,6 @@ def is_available(key: str) -> bool:
         return importlib.util.find_spec("scipy") is not None
     if spec.availability == "host":
         backend = BACKENDS.get(key)
-        return isinstance(backend, Data2GHostBackend) and backend.usable
+        return (spec.adapter == "data2g_host" and
+                bool(getattr(backend, "usable", False)))
     return key == LEGACY_MODE_KEY or key in BACKENDS

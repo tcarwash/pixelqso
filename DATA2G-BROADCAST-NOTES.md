@@ -38,6 +38,24 @@ The host's KISS broadcast wire protocol is version 2. Pixel QSO's separate
 application frame uses the `PQI2` magic with application version 1; these are
 independent version fields.
 
+A successful command/KISS connection does not confirm that the host's audio
+devices or rigctld/PTT path can transmit. The host's `PTT ON/OFF` status marks
+its modem transmit state and is not a rigctld success report; PTT can also be
+disabled in host configuration. For a managed host, inspect Pixel QSO's host
+status/log for recognized rigctld failures. For a remote host, confirm its
+audio and radio/PTT configuration with that host operator before relying on
+transmission.
+
+The call sign supplied with `BCAST OPEN ... FROM` becomes the broadcast
+group's on-air identity. Pixel QSO requires that call sign to match the call
+sign in every transmitted card frame; update the card or Station settings if
+they differ.
+
+Pixel QSO's one-shot beacon action also uses the Data2G card-frame path when
+that backend is selected. It sends at the frequency configured on the host;
+Pixel QSO does not tune a managed or remote Data2G radio. The local beacon
+frequency control remains available only with Experimental modems.
+
 `HEARD`, `LOST`, `MISSED`, and `DROPPED` are host broadcast statuses.
 `MISSED` may describe another group's traffic and cannot be treated as proof
 that a particular Pixel QSO card was lost. Group names and CRC masks route and
@@ -77,16 +95,18 @@ requires a receiver that understands that version. Version 4 identifies the
 canonical raster after mapping pixels to the shared 8/16/32-color palette and
 packing those indices in raster order. Protected metadata carries its CRC32
 and a 32-bit BLAKE2s content tag. Each version 4 FEC block also carries its
-block index and count under its RS and CRC protection. Checked blocks can
+block index, count, and content tag under its RS and CRC protection, binding
+the checked block to the image header. Checked blocks can
 contribute verified regions, while the card is promoted as a complete verified
 image only when every required block passes and the reconstructed canonical
 raster matches both metadata checks. Version 3 remains decodable and retains
 only its per-block CRC verification scope; version 3 and version 4 blocks never
 share an assembly identity.
 
-For a 32×32 8-color card, the new version 4 metadata and block-position fields
-increase a clean cycle from 1,236 to 1,294 tones (about 4.7%). This is a symbol
-count comparison, not an RF recovery or sensitivity result.
+For a 32×32 8-color card, the new version 4 metadata, block-position fields, and
+per-block content binding increase a clean cycle from 1,236 to 1,428 tones
+(about 15.5%). This is a symbol count comparison, not an RF recovery or
+sensitivity result.
 
 ## Verified behavior and remaining checks
 

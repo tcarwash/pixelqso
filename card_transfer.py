@@ -1,14 +1,12 @@
 """Transport-independent, versioned card fragments for KISS or other links."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from collections import OrderedDict
 import copy
 import hashlib
 import struct
 import zlib
-from dataclasses import asdict
-from dataclasses import dataclass
 from types import MappingProxyType
 from collections.abc import Mapping
 
@@ -128,17 +126,27 @@ class CardTransferReceiver:
         expected = (width * height * bits + 7) // 8
         if total != expected:
             raise ValueError("packed raster size does not match dimensions and palette")
+        chunk_size = len(frame) - HEADER.size
+        if not chunk_size or offset + chunk_size > total:
+            raise ValueError("fragment range is outside packed raster")
         metadata = (card_id, width, height, palette_id, call, grid, crc, image_id)
         # Message stage and advertised SNR may change on a later CQ copy.
         key = (sender.upper(), None if image_id else card_id, width, height,
                palette_id, call, grid, image_id)
         assembly = self.assemblies.get(key)
+        new_assembly = assembly is None
         if assembly is None:
-            assembly = self.assemblies[key] = Assembly(metadata, total, crc, image_id)
-        elif assembly.total != total:
-            raise ValueError("conflicting total size for card identity")
-        self.assemblies.move_to_end(key)
+            assembly = Assembly(metadata, total, crc, image_id)
+        elif assembly.total != total or assembly.crc32 != crc:
+            raise ValueError("conflicting raster metadata for card identity")
+        # Assembly.add checks the full range and every overlap before it writes
+        # bytes. Do not insert a new identity or refresh cache recency until that
+        # validation succeeds, so rejected frames leave the receiver unchanged.
         assembly.add(offset, frame[HEADER.size:])
+        if new_assembly:
+            self.assemblies[key] = assembly
+        else:
+            self.assemblies.move_to_end(key)
         while len(self.assemblies) > self.max_assemblies:
             self.assemblies.popitem(last=False)
         pixels, coverage = assembly.pixels_and_coverage()
@@ -146,6 +154,7 @@ class CardTransferReceiver:
                           "grid": grid.split(b"\0", 1)[0].decode("ascii"),
                           "card_id": card_id, "width": width, "height": height,
                           "palette_id": palette_id, "message_type": MESSAGE_NAMES[kind],
+                          "application_protocol_version": VERSION,
                           "image_crc32": crc, "image_id": image_id.hex(),
                           "whole_raster_crc32_valid": (all(assembly.present) and
                                                         zlib.crc32(assembly.data) == crc),
@@ -154,6 +163,11 @@ class CardTransferReceiver:
                           "snr_db": None if snr == -128 else snr,
                           "avatar_burst": True, "exact": assembly.exact,
                           "bits_per_pixel": bits, "pixel_coverage": coverage,
+                          # A KISS frame delivered by Data2G is already checked
+                          # at the modem transport layer. Pixels fully present
+                          # in those checked bytes are trusted regions even
+                          # before the complete raster CRC/content tag passes.
+                          "verified_pixel_coverage": coverage,
                           "pixels": pixels,
                           "color_stage": "verified" if assembly.exact else
                           f"{round(assembly.coverage * 100)}% received"}
@@ -197,13 +211,13 @@ class CardPreviewAssembler:
         width, height = int(incoming_card.get("width", 32)), int(incoming_card.get("height", 32))
         count = width * height
         mode = incoming_card.get("avatar_mode", "raw")
+        protocol_version = incoming_card.get(
+            "header_version", incoming_card.get("application_protocol_version", "legacy"))
         palette = tuple(tuple(rgb) for rgb in incoming_card.get("palette", cardmodem.MINIMAL_AVATAR_PALETTE))
         content_id = incoming_card.get("image_id", incoming_card.get("image_crc32"))
         key = (str(incoming_card.get("callsign", "")).upper(),
-               str(incoming_card.get("grid", "")).upper(),
+               str(incoming_card.get("grid", "")).upper(), protocol_version,
                incoming_card.get("card_id") if content_id is None else None,
-               (incoming_card.get("message_type", "card")
-                if content_id is None else None),
                width, height, palette, mode if content_id is None else None,
                content_id)
         state = self.states.get(key)
@@ -319,6 +333,7 @@ class CardPreviewAssembler:
         state["window_id"] = self.window
         state["card"].update(incoming_card)
         merged_card = {**state["card"], "pixel_coverage": state["coverage"],
+                       "verified_pixel_coverage": state["verified_pixels"],
                        "received_blocks": state["received_blocks"] if blocks is not None else None,
                        "received_copies": state["copies"]}
         if blocks is not None:
@@ -397,7 +412,9 @@ class CardAssemblyService:
                     verified = (bool(card.get("exact")) and bool(coverage) and all(coverage) and
                                 bool(card.get("whole_raster_crc32_valid")) and
                                 bool(card.get("content_tag_valid")))
-                    scope = "whole_raster_crc32_and_content_tag"
+                    scope = ("whole_raster_crc32_and_content_tag" if verified or not any(
+                        card.get("verified_pixel_coverage") or []) else
+                        "checked_data2g_fragment_regions")
                 else:
                     verified = bool(card.get("exact")) and bool(coverage) and all(coverage)
                     scope = "whole_raster_crc32"

@@ -12,6 +12,7 @@ from data2g_transport import (Data2GError, Data2GSession, Data2GTransport, KissD
 class _CommandHandler(socketserver.BaseRequestHandler):
     commands = []
     modes_terminal_ok = True
+    refused_modes = set()
 
     def handle(self):
         buffer = bytearray()
@@ -29,7 +30,9 @@ class _CommandHandler(socketserver.BaseRequestHandler):
                                 (b"OK\r" if self.modes_terminal_ok else b""))
                 elif command in {"BCAST OPEN PIXELQSO", "BCAST OPEN PIXELQSO FROM AG7SU"}:
                     response = b"BCAST PORT 7\r"
-                elif command.startswith("BCAST MODE ") and command.endswith(" refused-mode"):
+                elif (command.startswith("BCAST MODE ") and
+                      (command.endswith(" refused-mode") or
+                       command.rsplit(" ", 1)[-1] in self.refused_modes)):
                     response = b"WRONG\r"
                 elif command.startswith(("BCAST MODE ", "BCAST CLOSE ")):
                     response = (b"OK\rBCAST 7 HEARD AG7SU\rBCAST 7 LOST 2\r"
@@ -42,6 +45,7 @@ class _CommandHandler(socketserver.BaseRequestHandler):
 
 class _KissHandler(socketserver.BaseRequestHandler):
     delay_seconds = 0
+    reply_payload = b"image-fragment"
 
     def handle(self):
         parser = KissDecoder()
@@ -51,7 +55,7 @@ class _KissHandler(socketserver.BaseRequestHandler):
                     if self.delay_seconds:
                         time.sleep(self.delay_seconds)
                     self.request.sendall(encode_kiss(port, 0x0C, payload[:2]))
-                    self.request.sendall(encode_kiss(port, 0x00, b"image-fragment"))
+                    self.request.sendall(encode_kiss(port, 0x00, self.reply_payload))
 
 
 class Data2GTransportTests(unittest.TestCase):
@@ -268,6 +272,84 @@ class Data2GTransportTests(unittest.TestCase):
             self.assertTrue(session.close())
             self.assertFalse(session.connected)
             for server in (command_server, kiss_server):
+                server.shutdown()
+                server.server_close()
+
+    def test_broadcast_mode_discovery_checks_every_advertised_mode(self):
+        _CommandHandler.commands.clear()
+        _CommandHandler.refused_modes = {"qpsk-r1/5"}
+        command_server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _CommandHandler)
+        kiss_server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _KissHandler)
+        command_server.daemon_threads = kiss_server.daemon_threads = True
+        threads = [threading.Thread(target=s.serve_forever, daemon=True)
+                   for s in (command_server, kiss_server)]
+        for thread in threads:
+            thread.start()
+        session = Data2GSession("127.0.0.1", command_server.server_address[1],
+                                kiss_server.server_address[1], callsign="AG7SU")
+        try:
+            modes = session.start(timeout=2)
+            self.assertEqual([mode.name for mode in modes], ["qpsk-r1/5", "qpsk-r1/2"])
+            checked = session.check_broadcast_modes((mode.name for mode in modes), timeout=2)
+            self.assertIsNotNone(checked["qpsk-r1/5"])
+            self.assertIsNone(checked["qpsk-r1/2"])
+            self.assertIn("BCAST MODE 7 qpsk-r1/5", _CommandHandler.commands)
+            self.assertIn("BCAST MODE 7 qpsk-r1/2", _CommandHandler.commands)
+            self.assertTrue(session.connected, "a refused catalog entry must not close the host session")
+        finally:
+            _CommandHandler.refused_modes = set()
+            session.close()
+            for server in (command_server, kiss_server):
+                server.shutdown()
+                server.server_close()
+
+    def test_two_sessions_keep_host_ports_and_frames_isolated(self):
+        class FirstKissHandler(_KissHandler):
+            reply_payload = b"first-host-card"
+
+        class SecondKissHandler(_KissHandler):
+            reply_payload = b"second-host-card"
+
+        servers = []
+        sessions = []
+        first_frames, second_frames = [], []
+        first_acks, second_acks = [], []
+        for kiss_handler in (FirstKissHandler, SecondKissHandler):
+            command_server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _CommandHandler)
+            kiss_server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), kiss_handler)
+            command_server.daemon_threads = kiss_server.daemon_threads = True
+            for server in (command_server, kiss_server):
+                threading.Thread(target=server.serve_forever, daemon=True).start()
+            servers.extend((command_server, kiss_server))
+
+        try:
+            for index, (command_server, kiss_server) in enumerate(zip(servers[::2], servers[1::2])):
+                frames = first_frames if index == 0 else second_frames
+                acks = first_acks if index == 0 else second_acks
+                sessions.append(Data2GSession(
+                    "127.0.0.1", command_server.server_address[1],
+                    kiss_server.server_address[1], callsign="AG7SU",
+                    on_frame=lambda _port, payload, target=frames: target.append(payload),
+                    on_ack=lambda _port, tag, target=acks: target.append(tag)))
+            first, second = sessions
+            first_modes = first.start(timeout=2)
+            second_modes = second.start(timeout=2)
+            self.assertEqual([mode.name for mode in first_modes], [mode.name for mode in second_modes])
+            self.assertNotEqual((first.command_port, first.kiss_port),
+                                (second.command_port, second.kiss_port))
+            first.send_frame(b"\x00\x01", b"first-test")
+            second.send_frame(b"\x00\x02", b"second-test")
+            deadline = time.monotonic() + 2
+            while (not first_acks or not second_acks or not first_frames or not second_frames) and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertEqual(first_acks, [b"\x00\x01"])
+            self.assertEqual(second_acks, [b"\x00\x02"])
+            self.assertEqual(first_frames, [b"first-host-card"])
+            self.assertEqual(second_frames, [b"second-host-card"])
+        finally:
+            for session in sessions:
+                session.close()
+            for server in servers:
                 server.shutdown()
                 server.server_close()
 

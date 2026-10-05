@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import errno
+import math
 import queue
 import socket
 import threading
@@ -13,6 +14,24 @@ from typing import Callable
 FEND, FESC, TFEND, TFESC = 0xC0, 0xDB, 0xDC, 0xDD
 KISS_DATA, KISS_ACKMODE = 0x00, 0x0C
 MAX_KISS_FRAME_BYTES = 65536
+MAX_COMMAND_LINE_BYTES = 16384
+MAX_COMMAND_QUEUE_LINES = 256
+CALL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/-"
+
+
+def normalize_data2g_callsign(callsign: str | None) -> str | None:
+    """Normalize a BCAST FROM call and enforce its packed one-token format."""
+    if not callsign:
+        return None
+    value = str(callsign).strip().upper()
+    if not value:
+        return None
+    if (len(value) > 10 or any(char.isspace() for char in value) or
+            any(char not in CALL_ALPHABET for char in value)):
+        raise ValueError(
+            "Data2G station call must be one token of up to 10 characters "
+            "from A-Z, 0-9, slash, and hyphen.")
+    return value
 
 
 class Data2GError(RuntimeError):
@@ -43,10 +62,22 @@ def parse_modes(lines: list[str]) -> list[Data2GMode]:
         if len(fields) != 7:
             raise Data2GError(f"Malformed Data2G MODE response: {line!r}")
         try:
-            modes.append(Data2GMode(fields[1], float(fields[2]), int(fields[3]),
-                                    int(fields[4]), float(fields[5]), float(fields[6])))
+            mode = Data2GMode(fields[1], float(fields[2]), int(fields[3]),
+                               int(fields[4]), float(fields[5]), float(fields[6]))
         except ValueError as exc:
             raise Data2GError(f"Malformed Data2G MODE response: {line!r}") from exc
+        if (not mode.name or
+                any(not (char.isascii() and (char.isalnum() or char in "_-/"))
+                    for char in mode.name) or
+                not math.isfinite(mode.bandwidth_hz) or mode.bandwidth_hz <= 0 or
+                mode.bytes_per_codeword <= 0 or mode.max_codewords <= 0 or
+                not math.isfinite(mode.seconds_at_one) or mode.seconds_at_one <= 0 or
+                not math.isfinite(mode.seconds_at_max) or
+                mode.seconds_at_max < mode.seconds_at_one):
+            raise Data2GError(f"Invalid values in Data2G MODE response: {line!r}")
+        if any(previous.name == mode.name for previous in modes):
+            raise Data2GError(f"Duplicate mode name in Data2G catalog: {mode.name!r}")
+        modes.append(mode)
     if not modes:
         raise Data2GError("Data2G host returned no MODE records")
     return modes
@@ -121,10 +152,12 @@ class Data2GTransport:
         self.timeout = timeout
         self.on_frame, self.on_ack, self.on_status = on_frame, on_ack, on_status
         self.command_socket = self.kiss_socket = None
-        self._command_lines: queue.Queue[str | None] = queue.Queue()
+        self._command_lines: queue.Queue[str | None] = queue.Queue(
+            maxsize=MAX_COMMAND_QUEUE_LINES)
         self._command_lock = threading.Lock()
         self._kiss_write_lock = threading.Lock()
         self._stop = threading.Event()
+        self._failure_reason = None
         self._threads: list[threading.Thread] = []
         self.modes: list[Data2GMode] = []
         self.ports: dict[str, int] = {}
@@ -133,10 +166,16 @@ class Data2GTransport:
     def connected(self) -> bool:
         return self.command_socket is not None and self.kiss_socket is not None and not self._stop.is_set()
 
-    def connect(self, *, retry_window: float = 0.0) -> list[Data2GMode]:
+    @property
+    def failure_reason(self) -> str | None:
+        return self._failure_reason
+
+    def connect(self, *, retry_window: float = 0.0,
+                cancel_event: threading.Event | None = None) -> list[Data2GMode]:
         if self.connected:
             return self.modes
         self._stop.clear()
+        self._failure_reason = None
         while True:
             try:
                 self._command_lines.get_nowait()
@@ -145,6 +184,8 @@ class Data2GTransport:
         command = kiss = None
         retry_until = time.monotonic() + max(0.0, retry_window)
         while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise Data2GError(f"Connection to Data2G host {self.host} was cancelled")
             command = kiss = None
             try:
                 command = socket.create_connection((self.host, self.command_port), self.timeout)
@@ -160,7 +201,13 @@ class Data2GTransport:
                 # sockets and only when the caller explicitly allows startup
                 # grace; remote hosts retain fail-fast behavior.
                 if exc.errno == errno.ECONNREFUSED and time.monotonic() < retry_until:
-                    time.sleep(min(0.1, max(0.0, retry_until - time.monotonic())))
+                    delay = min(0.1, max(0.0, retry_until - time.monotonic()))
+                    if cancel_event is not None:
+                        if cancel_event.wait(delay):
+                            raise Data2GError(
+                                f"Connection to Data2G host {self.host} was cancelled") from exc
+                    else:
+                        time.sleep(delay)
                     continue
                 raise Data2GError(f"Cannot connect to Data2G host {self.host}: {exc}") from exc
         # create_connection leaves its connect timeout installed. The reader
@@ -209,10 +256,16 @@ class Data2GTransport:
                     try:
                         item = self._command_lines.get(timeout=wait_for)
                     except queue.Empty:
+                        if self._stop.is_set():
+                            raise Data2GError(
+                                self._failure_reason or "Data2G command connection is closed")
                         if (modes_quiet_period is not None and response and
                                 all(value.startswith("MODE ") for value in response)):
                             return response
                         raise
+                    if self._stop.is_set():
+                        raise Data2GError(
+                            self._failure_reason or "Data2G command connection is closed")
                     if item is None:
                         raise Data2GError("Data2G command connection closed")
                     terminal = item in {"OK", "WRONG"} or item.startswith("VERSION Data2G ")
@@ -234,19 +287,26 @@ class Data2GTransport:
     def open_group(self, group: str = "PIXELQSO", callsign: str | None = None) -> int:
         if not group.strip():
             raise ValueError("Data2G group cannot be empty")
+        callsign = normalize_data2g_callsign(callsign)
         command = f"BCAST OPEN {group.strip()}"
         if callsign:
-            command += f" FROM {callsign.strip().upper()}"
+            command += f" FROM {callsign}"
         response = self.command(command)
         try:
             port = int(next(line.split()[2] for line in response if line.startswith("BCAST PORT ")))
         except (StopIteration, ValueError, IndexError) as exc:
             raise Data2GError(f"Malformed BCAST OPEN response: {response!r}") from exc
+        if not 1 <= port <= 15:
+            raise Data2GError(
+                f"Malformed BCAST OPEN response: broadcast port {port} is outside 1..15")
         self.ports[group] = port
         return port
 
     def set_mode(self, port: int, mode: str) -> None:
-        self.command(f"BCAST MODE {int(port)} {mode.strip()}")
+        mode = str(mode).strip()
+        if not mode or any(char.isspace() for char in mode):
+            raise ValueError("Data2G mode name must be one non-empty command token")
+        self.command(f"BCAST MODE {int(port)} {mode}")
 
     def close_group(self, port: int) -> None:
         self.command(f"BCAST CLOSE {int(port)}")
@@ -262,7 +322,9 @@ class Data2GTransport:
             try:
                 self.kiss_socket.sendall(encode_kiss(port, KISS_ACKMODE, tag + bytes(payload)))
             except OSError as exc:
-                raise Data2GError(f"Data2G KISS send failed: {exc}") from exc
+                message = f"Data2G KISS send failed: {exc}"
+                self._fail_connection(message)
+                raise Data2GError(message) from exc
 
     def _read_commands(self):
         buffer = bytearray()
@@ -276,6 +338,9 @@ class Data2GTransport:
                 while b"\r" in buffer:
                     raw, _, tail = buffer.partition(b"\r")
                     buffer[:] = tail
+                    if len(raw) > MAX_COMMAND_LINE_BYTES:
+                        self._fail_connection("Data2G command line exceeded the size limit")
+                        return
                     line = raw.decode("ascii", "replace").strip()
                     fields = line.split()
                     is_mode_notice = len(fields) == 2 and fields[0] == "MODE"
@@ -284,11 +349,22 @@ class Data2GTransport:
                                                not line.startswith("BCAST PORT "))):
                         self._status(line)
                     else:
-                        self._command_lines.put(line)
+                        try:
+                            self._command_lines.put_nowait(line)
+                        except queue.Full:
+                            self._fail_connection(
+                                "Data2G command response queue exceeded its size limit")
+                            return
+                if len(buffer) > MAX_COMMAND_LINE_BYTES:
+                    self._fail_connection("Data2G command line exceeded the size limit")
+                    return
         except OSError:
             pass
         finally:
-            self._command_lines.put(None)
+            try:
+                self._command_lines.put_nowait(None)
+            except queue.Full:
+                pass
             if not self._stop.is_set():
                 self._fail_connection("Data2G command connection closed")
 
@@ -301,7 +377,12 @@ class Data2GTransport:
                 if not chunk:
                     break
                 for port, command, payload in parser.feed(chunk):
-                    if command == KISS_ACKMODE and len(payload) == 2:
+                    if command == KISS_ACKMODE:
+                        if len(payload) != 2:
+                            self._fail_connection(
+                                f"Malformed Data2G ACKMODE response on port {port}: "
+                                f"expected a 2-byte tag, received {len(payload)} bytes")
+                            return
                         self._callback(self.on_ack, port, payload)
                     elif command == KISS_DATA:
                         self._callback(self.on_frame, port, payload)
@@ -316,8 +397,12 @@ class Data2GTransport:
     def _fail_connection(self, message: str):
         if self._stop.is_set():
             return
+        self._failure_reason = message
         self._stop.set()
-        self._command_lines.put(None)
+        try:
+            self._command_lines.put_nowait(None)
+        except queue.Full:
+            pass
         self._status(message)
         for sock in (self.kiss_socket, self.command_socket):
             if sock is not None:
@@ -350,7 +435,10 @@ class Data2GTransport:
                 except OSError:
                     pass
         self.kiss_socket = self.command_socket = None
-        self._command_lines.put(None)
+        try:
+            self._command_lines.put_nowait(None)
+        except queue.Full:
+            pass
         current = threading.current_thread()
         for thread in self._threads:
             if thread is not current:
@@ -374,7 +462,7 @@ class Data2GSession:
                  connect_retry_window=0.0):
         self.host, self.command_port, self.kiss_port = host, command_port, kiss_port
         self.group = group
-        self.callsign = str(callsign).strip().upper() if callsign else None
+        self.callsign = normalize_data2g_callsign(callsign)
         self.connect_retry_window = max(0.0, float(connect_retry_window))
         self.on_ready, self.on_frame, self.on_ack = on_ready, on_frame, on_ack
         self.on_status, self.on_error, self.on_closed = on_status, on_error, on_closed
@@ -384,6 +472,7 @@ class Data2GSession:
         self._startup = threading.Event()
         self._startup_error = None
         self._closed = threading.Event()
+        self._connect_cancel = threading.Event()
         self.modes = []
         self.port = None
 
@@ -401,6 +490,7 @@ class Data2GSession:
         self._startup.clear()
         self._startup_error = None
         self._closed.clear()
+        self._connect_cancel.clear()
         self._commands = queue.Queue(maxsize=64)
         self.modes = []
         self.port = None
@@ -446,10 +536,23 @@ class Data2GSession:
 
     def close(self, timeout=5.0):
         thread = self._thread
-        if thread and thread.is_alive():
-            self._commands.put(("close", None))
-            if thread is not threading.current_thread():
-                thread.join(timeout)
+        if not thread or not thread.is_alive():
+            return True
+        # Wake a startup retry immediately instead of waiting for its full
+        # grace period before the session thread can process the close action.
+        self._connect_cancel.set()
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        if thread is threading.current_thread():
+            try:
+                self._commands.put_nowait(("close", None))
+            except queue.Full:
+                return False
+            return False
+        try:
+            self._commands.put(("close", None), timeout=max(0.0, deadline - time.monotonic()))
+        except queue.Full:
+            return False
+        thread.join(max(0.0, deadline - time.monotonic()))
         return not thread or not thread.is_alive()
 
     def _run(self):
@@ -457,7 +560,8 @@ class Data2GSession:
             self.host, self.command_port, self.kiss_port,
             on_frame=self._frame, on_ack=self._ack, on_status=self._status)
         try:
-            self.modes = client.connect(retry_window=self.connect_retry_window)
+            self.modes = client.connect(retry_window=self.connect_retry_window,
+                                        cancel_event=self._connect_cancel)
             self.port = client.open_group(self.group, self.callsign)
             self._ready.set()
             self._startup.set()
@@ -467,7 +571,8 @@ class Data2GSession:
                     action, value = self._commands.get(timeout=0.25)
                 except queue.Empty:
                     if not client.connected:
-                        raise Data2GError("Data2G host connection was lost")
+                        raise Data2GError(
+                            client.failure_reason or "Data2G host connection was lost")
                     continue
                 if action == "close":
                     break
@@ -496,9 +601,12 @@ class Data2GSession:
                         _names, future = value
                         if not future.done():
                             future.set_exception(exc)
-                    Data2GTransport._callback(self.on_error, str(exc))
                     if action == "mode":
                         raise Data2GError(f"Data2G host refused selected mode {value!r}: {exc}") from exc
+                    if not client.connected:
+                        raise Data2GError(
+                            client.failure_reason or str(exc)) from exc
+                    Data2GTransport._callback(self.on_error, str(exc))
         except Exception as exc:
             if not self._ready.is_set():
                 self._startup_error = str(exc)

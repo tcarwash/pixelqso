@@ -4,9 +4,45 @@
 
 Make Pixel QSO a card-exchange application using Data2G's supported host APIs by default. Retain local and other modem implementations behind an explicit experimental backend adapter. Share card assembly, preview, integrity decisions, and QSO handling across adapters.
 
-The phases below are the implementation roadmap and current status record. The
-first two phases have code changes in this checkout; the remaining phases are
-still planned work, and runtime/on-air verification is tracked separately.
+## Wrap-up status — 2026-10-05
+
+The Data2G-first application implementation is ready for final release
+validation. Data2G is the default backend; Experimental is opt-in. Dynamic
+mode discovery, adapter ownership, checked fragment assembly, complete-card
+integrity, transmit queue/ACK handling, and both automatic QSO roles are
+implemented. The source caller and responder flows completed and persisted
+QSO logs against isolated command/KISS fixtures. The pinned Data2G host also
+accepted frames and generated audio into an in-memory sink with PTT disabled.
+These results establish software integration, not reception by another station.
+
+A shutdown guard now prevents a queued startup callback from launching a
+managed host after the window closes. GUI regression fixtures now use isolated
+settings directories and pass the current session identity to receive callbacks.
+
+Final source regression: `QT_QPA_PLATFORM=offscreen PIXELQSO_DATA2G_HOST=127.0.0.1 .venv/bin/python -m unittest discover -s tests` passed all 89 tests in 72.732 seconds. `git diff --check` passed.
+
+The final Linux rebuild succeeded: `dist/PixelQSO` is 141,343,240 bytes and includes the shutdown guard. Bundled-host `--help`, `--list-modes --kiss-bw 500`, and `--list-audio-devices` each returned exit code 0. Device enumeration does not establish physical streaming or PTT.
+
+The current Linux packaged GUI also passed the Experimental UDP-bind failure check under Xvfb/xcb with isolated settings, test audio, and CAT/PTT disabled. A Python UDP socket held the receive port; the GUI displayed “Could not open the local test-audio port …: The bound address is already in use” and `NOT LISTENING`, while remaining responsive. This establishes the packaged failure-reporting path, not successful audio reception.
+
+A source GUI handoff check completed in both directions against isolated command/KISS listeners and a real local UDP test-audio listener. Switching Data2G → Experimental sent `BCAST CLOSE 7`, released the session, and started UDP reception (`LISTENING`, receive timer active). Switching back released the UDP socket, stopped the local receive timer, and reconnected Data2G. CAT and PTT stayed inactive throughout. This closes the remote-fixture/UDP handoff path; managed-host and physical audio/CAT ownership still need validation. GitHub CLI authentication currently fails because the configured credential is invalid; no current cross-platform CI result was retrieved.
+
+The existing local-only two-host integration scripts (`tools/test_data2g_python_hosts.py` and `tools/test_data2g_native_hosts.py`, ignored by Git) now discover common dynamically named modes, require both hosts to accept `BCAST MODE`, and size fragments to the smaller selected host frame limit. Their obsolete fixed Robust ID/256-byte assumptions would have prevented validation after the catalog migration. Syntax checks passed; neither audio integration script was run in this wrap-up. No received peer capture sidecars were found in the checkout, and both environment and stored GitHub CLI credentials failed authentication.
+
+Remaining release gates:
+
+- Exercise managed/remote backend ownership handoff through actual audio/CAT.
+- Complete Windows/macOS builds and smoke checks.
+- Exercise selected physical audio devices and PTT, then a complete exchange
+  between two independent hosts, including disconnect/reconnect.
+- Capture received peer frames and verify replay parity; perform controlled
+  RF validation before claiming on-air readiness.
+
+Experimental modem acquisition measurements and real audio/RF validation remain
+experimental work. They do not establish Data2G readiness.
+
+The phase details below retain the implementation history and evidence limits;
+this summary is the current release checklist.
 
 ## Product shape
 
@@ -162,50 +198,466 @@ Keep RLE, new FEC schemes, adaptive retransmission, and arbitrary plugin discove
   Data2G and managed-host startup are the new-install defaults; local modem modes
   are classified as experimental; mode choices are stored per backend; the
   managed host has separate audio and rigctld settings; direct CAT and
-  experimental audio controls are hidden on the Data2G backend.
-- **Remaining in phase 1:** exercise backend switching and connection failure in
-  the running UI, finish any settings migration edge cases, and verify ownership
-  handoff with both managed and remote hosts.
-- **Complete in code for phase 2, pending API fixtures and host verification:**
+  experimental audio controls are hidden or disabled on the Data2G backend.
+  An unrecognized saved backend value is normalized to Data2G on startup, so
+  malformed settings cannot persist a stale backend selection.
+  A legacy saved local mode is retained in the separate experimental-mode
+  setting, and Data2G-default upgrades receive a one-time notice explaining
+  how to select it.
+  A saved local audio-only test preference no longer changes the Data2G TX
+  label, beacon controls, or status banner, so it cannot imply that host PTT is
+  disabled. During Data2G shutdown, backend/mode switching and host settings
+  remain locked until the session close callback completes, preventing a rapid
+  switch back from reusing a session that is already closing. The Receive panel
+  now distinguishes Data2G host reception, local audio reception, and the
+  Data2G-to-local handoff state. Backend selection stays locked while a managed
+  Data2G host is starting, and its delayed connection step checks that the app
+  still targets Data2G before proceeding. Once connection discovery starts,
+  backend selection and the option that reveals Experimental remain available;
+  choosing Experimental closes the pending session before CAT/audio resume and
+  is reported as a handoff rather than a host failure. Modulation choices remain
+  locked until discovery or handoff finishes, and backend switching remains
+  locked during active transmission. The Connect control and handler also
+  reject duplicate connect requests until managed-host startup completes.
+  If discovery completes at the same time as a requested handoff, the UI keeps
+  Data2G ownership until the close callback confirms release. Switching during
+  managed-host startup waits for that process to stop. Both paths resume local
+  CAT and audio only after Data2G relinquishes ownership, including when the
+  connection attempt fails after the backend switch.
+  Station call-sign editing is locked while the Data2G connection is opening,
+  active, or closing, so the host group identity cannot diverge from card identity.
+  The transport owns one station-call normalizer enforcing the pinned host's
+  10-character packed-call and single-token `FROM` requirements; both app
+  preflight and direct session/group creation use it.
+  All Data2G sends now reject a card call sign that differs from the `FROM`
+  identity used to open the broadcast group.
+  The transfer summary now explains when Data2G mode discovery is needed and
+  shows the host's refusal/capacity reason for an unusable selected mode.
+- **Remaining in phase 1:** exercise backend switching and verify ownership
+  handoff with both managed and remote hosts. The packaged GUI now visibly
+  reports both remote connection refusal and managed-host command-port conflict.
+  An offscreen startup smoke check
+  confirmed a fresh window selects the Data2G adapter and Data2G mode by default.
+  A Qt regression test now opens Station settings and verifies CAT, local audio,
+  and receive-all controls hide for Data2G and return for Experimental modems;
+  Data2G connection and managed-server controls now sit together in a backend-
+  specific group. Offscreen renders of both settings states were inspected;
+  this is source-level UI evidence, not an interactive user-session check.
+  The host command port is now checked with its adjacent data-listener port and
+  the KISS port before CAT is handed off, with the listener layout explained in
+  Station settings. Malformed saved or environment-provided Data2G integer
+  settings fall back to usable defaults instead of aborting GUI startup. Starting
+  the managed local host no longer overwrites the separately saved remote-host
+  endpoint, and connecting to a remote host persists the Remote source choice
+  without requiring a later Station settings save. Managed-host startup now
+  reports data-directory or host-log creation failures in Station settings
+  instead of allowing the launch callback to raise. `_connect_data2g_host()`
+  now rejects its queued startup callback after window shutdown begins. An
+  offscreen lifecycle smoke that closed the default-local-host window before
+  processing the first Qt event confirmed no host process or log was created.
+- **Complete in code for phase 2, with source API fixtures passing and real-host
+  verification pending:**
   discover all catalog modes and validate each with `BCAST MODE` on the opened
   Pixel QSO group; show disabled entries with host refusal or insufficient
   capacity reasons; size fragments and airtime estimates to mode capacity.
+  The shared frame-capacity helper also rejects a configured preferred frame
+  ceiling too small to hold the transfer header plus an image byte, keeping
+  mode availability consistent with the TX chunker and airtime estimator.
+  The transport now rejects duplicate mode names and catalog records with
+  invalid bandwidth, codeword-capacity, or airtime values before mode selection.
+  If a saved dynamic mode disappears or becomes unusable, discovery now reports
+  the reason and the Data2G fallback mode in the status bar. Replacing a host's
+  discovered catalog also removes its vanished dynamic backend entries while
+  retaining static pre-discovery fallback entries. A failed discovery clears
+  that catalog too, so a disconnected host's old modes cannot remain selected
+  for transmission estimates or retries. Adapter discovery now also fails
+  closed if the host's per-mode `BCAST MODE` validation results are incomplete
+  or malformed. Dynamic host-mode key creation,
+  decoding, recognition, and cleanup now share one key-format helper instead
+  of duplicating the prefix check in UI code.
 - **Phase 3 in progress:** `backend_adapters.py` defines the initial Data2G frame
   transport and experimental local image modem contracts, with explicit radio,
   audio, receive, spectrum, provisional-pixel, TX completion, and integrity
   capabilities. App discovery, mode selection, frame submission, disconnect,
-  audio encode, and decode now pass through adapters; Data2G stop reports queued
-  cancellation separately from an in-flight frame that may still transmit. The
-  internal registry accepts compatible adapter implementations. Remaining:
-  move local receive/audio lifecycle and error ownership fully behind adapters
-  and remove remaining concrete backend checks from the exchange controller.
+  session creation/state/port access, audio encode, and decode now pass through
+  adapters; the exchange controller no longer imports or inspects the concrete
+  Data2G session type. Data2G stop reports queued cancellation separately from
+  an in-flight frame that may still transmit. The
+  UI's remaining transport-versus-local decisions now read adapter capabilities
+  and mode-registry ownership instead of downcasting selected backends in QSO
+  controls. Data2G's discovered-mode metadata remains supplied by its frame
+  transport backend, and card packing/fragment sizing now live in the Data2G
+  frame adapter instead of `MainWindow`. The runtime UI and host handoff still
+  need direct exercise.
+  internal registry accepts compatible adapter implementations. Local input
+  acquisition, UDP loopback binding, startup errors, and capture cleanup now
+  belong to the experimental adapter; an owning handle is released on stop,
+  transmit handoff, and window close. The app no longer constructs or stops
+  QAudioSource/QUdpSocket directly. Audio source/start and test-socket setup
+  exceptions now become typed receive-start errors after partial resources are
+  released. If an adapter reports or raises a capture-stop failure, the app
+  clears its local handle references and reports the failure in the exchange
+  log rather than unwinding the handoff. Kind-specific transport/local adapter
+  protocols are explicit and registry insertion now checks their required
+  operations. Qt tests verify local audio acquisition, no-device error display,
+  cleanup on transmit handoff, and shared decode-failure presentation. The
+  experimental local adapter now returns typed retryable no-match versus
+  backend-error outcomes, and both saved/live image decode workers consume that
+  contract. Decode workers resolve adapters through each mode's registry entry;
+  compatibility tests prove both selected-mode and receive-all decoding use a
+  newly registered local adapter. A stale Data2G mode-prefix exception was
+  removed from the QSO/UI decode handler, and live receive now distinguishes a
+  retryable no-match from a backend fault in the status line. The stateful WAV
+  decoder and live packet decoder now return typed adapter outcomes, including retryable misses,
+  backend failures, and the legacy END-marker completion rule. Selected legacy
+  mode and receive-all fallback enter through the same local adapter; the old
+  direct packet parsing branch has been removed from the live worker. Adapter
+  tests cover normalized legacy success, no identity, and completion evidence;
+  a worker test confirms a complete raster without the END marker is not
+  reported as a complete legacy transmission. Remaining: exercise UDP-bind
+  failure in the packaged running UI. Local host connection
+  failures now distinguish likely audio startup errors and occupied ports by
+  inspecting a bounded tail of the host log, while keeping raw log contents out
+  of the app UI. The sanitizer also recognizes Data2G's exact “no input/output
+  device matching” startup message and reports an audio-device hint. A direct
+  source helper invocation with Data2G's emitted “no input device matching”
+  message returned that sanitized audio hint. The packaged UI presentation of
+  this failure was later verified with the bundled host child below. If the managed local host exits before
+  listeners open, its
+  sanitized startup hint now appears in the QSO receive status and exchange log
+  as well as Station settings. A packaged GUI run with its command port occupied
+  confirmed the actionable hint on the main screen. Closing the frozen GUI
+  during the local-host retry now exits without the deleted-signal or QRunnable
+  exception observed before the worker cancellation fix. A remote closed-port
+  failure also appeared in the activity area. The Station settings modal did
+  not render in that WM-less Xvfb session. A later source offscreen render of
+  the dialog is recorded below; the experimental UDP-bind failure still needs
+  direct exercise.
   This turn moved resilient audio-placement capability into mode metadata and
   the backend factory; receive and TX paths no longer branch on the
   `resilient_*` name prefix. All registered local image backends now use the
   same adapter decode route, and the QSO TX fallback is limited to the legacy
   packet backend rather than duplicating avatar wire-format selection.
+  Managed-host audio choices now come from PyAudio's PortAudio catalog and
+  pass decimal device indexes to Data2G, whose CLI resolves numeric selectors
+  directly. This avoids relying on Qt device IDs matching host API names, an
+  assumption that happened to hold for the enumerated devices on this Linux
+  machine but is not guaranteed across audio backends. Existing saved Qt IDs
+  are decoded and matched against the PortAudio catalog where possible, so an
+  upgrade retains the selected device instead of silently switching to the
+  system default. The system-default choice remains available, and missing
+  optional PyAudio enumeration does not prevent connecting to a remote Data2G
+  host.
+  A stale Data2G audio-device environment or saved selection no longer raises
+  during main-window startup or silently starts the managed host on another
+  device. Station settings identifies the missing variable or saved device,
+  leaves the selection blank, and disables Connect until the operator chooses
+  an available device. Offscreen source UI runs confirmed the visible hint,
+  that no local host process started, and that choosing System default clears
+  the error and re-enables Connect. A stale saved device name remains intact
+  until the user chooses a replacement.
+  Backend adapter resolution now rejects unknown product backend values
+  instead of routing them to the experimental local adapter, preserving the
+  Data2G default if persisted or caller-provided selection data is malformed.
+  Local audio export/transmission encoding now uses the selected local adapter;
+  the Data2G frame-transport backend reports that its host generates waveforms
+  and cannot export a Pixel QSO-side WAV. The existing one-shot beacon action
+  now queues a card through Data2G at the host-configured frequency, without
+  local CAT tuning or creating a contact QSO log; the local frequency picker
+  stays available only for Experimental modems. Experimental legacy packet
+  audio generation also now dispatches through the selected adapter.
 - **Phase 4 in progress:** `CardAssemblyService` now owns both Data2G fragment
   reassembly and cross-transmission preview accumulation, preserves its caches
   across host reconnects, and returns immutable preview snapshots to the UI. It
   applies explicit whole-raster CRC/content-tag and all-checked-block completion rules;
-  candidate coverage cannot promote an image, and conflicting checked overlaps
-  are rejected before mutation. Remaining: expand automated coverage for cache
-  eviction, reconnect retention, and completion-triggered UI actions.
+  candidate coverage cannot promote an image; conflicting checked overlaps,
+  conflicting raster CRC metadata, and out-of-range transport fragments are
+  rejected before assembly or cache recency changes.
+  Tests now cover bounded preview eviction,
+  refinement after switching to another image and back in a later receive
+  window, and transport-fragment retention across a receive-window restart.
+  Preview identity now includes protocol version and stable content identity,
+  while excluding CQ/exchange stage; tests confirm legacy stage refinement and
+  isolation from version 4 content-addressed images.
+  A Qt integration test exercises the Data2G receive handler and confirms it
+  waits for the service event before wall promotion, saving, or contact handling.
+  A manual offscreen app-path smoke on 2026-10-05 then fed two synthetic
+  transport fragments through the active-session callback. After fragment one,
+  the session wall and QSO log remained empty; after fragment two, the UI
+  promoted one card, created one received-card QSO entry and one QSL capture,
+  and showed the whole-card CRC status. A repeated frame from a stale session
+  was ignored. This verifies the synthetic receive-to-app completion path, not
+  interoperability with a real Data2G peer. A second manual app-path smoke on
+  2026-10-05 delivered the first half, invoked the actual host-close callback,
+  attached a fresh session on a different KISS port, then delivered the second
+  half. The partial preview survived disconnect and completed after reconnect,
+  producing one session-wall card, QSO receive entry, and QSL capture. This
+  closes the running-app cache-retention check with synthetic frames; it does
+  not prove real-peer reconnect behavior. A complete automatic responder flow
+  against an isolated protocol fixture is recorded below; real-peer exchange
+  and reconnect behavior remain open.
+  A third offscreen smoke on 2026-10-05 completed a synthetic CQ through the
+  same callback with the window shown. It exposed the manual `Reply to W7PXQ`
+  action only after whole-card verification, mapped the reply to the exchange
+  stage, and left automatic contact progression idle. This verifies CQ reply
+  action readiness; the subsequent responder-flow check below verifies the
+  automatic path against a protocol fixture.
+  A fourth offscreen app smoke on 2026-10-05 armed the automatic responder and
+  delivered a synthetic CQ in two fragments. The partial fragment left the
+  peer and contact stage untouched; verified completion paired the peer, moved
+  to `send_exchange`, recorded the received card, and scheduled
+  `transmit_exchange` after the 600 ms guard. This confirms automatic exchange
+  gating and progression at the app boundary; no frame was transmitted.
   It now attaches an `assembly_event` with content identity, integrity scope,
   candidate/verified pixel counts, and the authoritative completion decision.
   Live and saved receive flows use that event for wall promotion, logging,
   contact handling, and on-air verified-capture evidence. Data2G completion
   validates both the full-raster CRC32 and transmitted BLAKE2s content tag; the
   service sanitizes incoming completion flags before merging pixel evidence.
+  Checked Data2G transport fragments now mark fully received pixels as verified
+  regions before whole-raster completion; candidate pixels cannot overwrite
+  those regions. A regression test proves partial checked coverage stays
+  provisional at the card level and authoritative at the pixel-region level.
+  Completed Data2G capture filenames now sanitize remote callsigns and are
+  atomically published; QSL write failures are reported without unwinding the
+  live frame handler. Active QSO logs now use atomic replacement for received
+  and sent cards and completed contacts. QSO log directory creation failures
+  are reported in the UI and no longer escape receive/contact callbacks during
+  gallery refresh; filesystem failure can still prevent a log from being saved.
+- **Phase 6 progress:** the compact receive preview now reports received pixel
+  coverage separately from verified-region coverage, while labeling the card
+  complete only when the assembly service verifies the whole image. Contact
+  handling, QSO updates, session-wall promotion, and duplicate saved-card
+  refreshes now use that same completion decision; startup QSL deduplication
+  recomputes verification from saved evidence instead of trusting a stored
+  `exact` flag. Data2G TX queue state is now committed only after synchronous
+  mode selection succeeds, so a stale or overloaded session cannot leave the
+  UI stuck in a phantom transmission state.
 - **Phase 5 in progress:** experimental Resilient v4 now carries protected
-  whole-raster CRC32/content identity and explicit checked-block positions.
+  whole-raster CRC32/content identity and explicit checked-block positions;
+  every block carries the image tag so checked blocks from a different raster
+  cannot be attached to its header.
   Complete-card verification requires every block and both raster checks;
   legacy version 3 resilient and raw bursts remain decodable with their actual
   integrity scope. Existing Resilient mode keys continue transmitting v3;
   v4 has a separate explicitly selected experimental mode, avoiding a silent
-  on-air format change. Tests cover clean v4 raster identity, damaged-block
+  on-air format change. Tests cover clean v4 raster identity, mixed-raster
+  block rejection, damaged-block
   preview, v3 raw and FEC decoding, and content identity across changed numeric
-  IDs, and repeated v3/v4 cycles. Remaining: exercise partial mixed-copy
-  rejection, capture acquisition metrics, and validate against real audio and
-  RF. Phase 6/7 UI actions, host fixtures, package/platform checks, and
-  controlled two-instance audio/RF validation also remain outstanding.
+  IDs, repeated v3/v4 cycles, and mixed-copy block rejection. The 32×32
+  eight-color symbol count is measured at 1,236 tones for v3 and 1,428 for v4.
+  Remaining: capture acquisition metrics and validate against real audio and
+  RF.
+- **Phase 7 in progress:** transport tests exercise the supported command and
+  KISS APIs, mode discovery without an `OK` terminator, host mode refusal, lost
+  connections, reconnect without replay, ACKMODE/frame delivery, and status
+  events, including a command-session fixture that validates every advertised
+  mode and keeps the session alive when one broadcast mode is refused. A
+  `BCAST OPEN` response is now checked against the host's supported KISS
+  broadcast port range (1–15) before the session accepts the port; `BCAST MODE`
+  mode names must be a single command token. A
+  BUSY-aware ACK wait now allows the pinned host's default 60-second continuous
+  channel wait, scales its clear-channel wait to the selected mode's maximum
+  airtime, and keeps a five-minute watchdog for a stuck BUSY state. The UI
+  reports when the host is holding a queued frame. A simultaneous two-session
+  fixture uses distinct command/KISS ports and
+  verifies that each client's ACK and received frame stay with its own host.
+  Connected host status now explicitly says audio/PTT readiness is unverified,
+  including the receive-only case when no broadcast mode fits.
+  The managed-host log monitor surfaces recognized rigctld PTT-on and PTT-off
+  failures in the app without copying raw log lines or endpoint details into
+  the UI. A managed-host PTT fault now blocks further Data2G transmissions and
+  stops automatic exchange; the fault persists across app restarts and host
+  reconnects until the operator explicitly confirms the radio is unkeyed before
+  the next transmission or CAT handoff. Automatic CAT reconnect stays
+  suppressed while the fault is unresolved. Fault and recovery writes are
+  synchronized immediately to settings. Explicit recovery also resets the
+  log monitor's deduplication state so a later same-class PTT failure relatches
+  the interlock and refreshes the receive status hint after the operator clears
+  it. Automatic exchange startup refuses an unusable or undiscovered Data2G
+  mode before arming receive/transmit state, and the Start control reflects
+  host/mode readiness while retaining access to the PTT recovery prompt. The
+  CAT connection operation itself now rejects connection attempts while a
+  Data2G session is active or taking ownership, even if invoked outside the UI
+  controls. An unexpected host close now stops automatic exchange even if it
+  was waiting for an incoming card with no frame queue active. Host disconnect
+  status retains the last failure cause until the
+  operator retries connection, and stale discovery, frame, ACK, status, error,
+  or close callbacks from an older session cannot mutate a newer connection.
+  A close during mode discovery is retained until its discovery result arrives,
+  preserving the actionable connection failure instead of dropping it as stale.
+  A KISS socket send failure now tears down
+  the failed host connection;
+  host-reported send errors end the Pixel QSO frame queue
+  immediately, identifies any in-flight frame as uncertain, and prevents
+  automatic exchange from advancing on an incomplete transmission. The KISS
+  reader rejects malformed ACKMODE acknowledgements and preserves the specific
+  connection failure reason so the active send can report it without waiting
+  for its ACK timeout; the MODES catalog parser also rejects malformed numeric
+  values, duplicate names, and command-unsafe mode tokens before discovery can
+  proceed. Command responses now have 16 KiB line and 256-line queue limits
+  (4 MiB maximum payload); this leaves room for the pinned host's 48-mode
+  catalog. An overlong or flooded response fails closed instead of growing
+  memory without limit. Pending commands surface the recorded failure
+  immediately even when a full response queue cannot accept its shutdown
+  sentinel.
+  Fatal session errors are surfaced once before shutdown.
+  Session shutdown now bounds both control-queue insertion and thread join by
+  its timeout, including when close is requested from the session worker.
+  `pixelqso.spec` now explicitly collects the Data2G and PyAudio package trees
+  and binaries. The Linux frozen host's
+  `--run-data2g-host --list-audio-devices` command successfully enumerated
+  PyAudio devices on 2026-10-05; ALSA/JACK emitted missing-device/server
+  warnings in this container, but enumeration completed with exit code 0.
+  Enumeration alone does not prove that a selected device can be opened or
+  streamed through, or that PTT works. A local loopback smoke on 2026-10-05
+  then launched the packaged host with ALSA's discard-only `null` PCM for both
+  input and output and rigctld PTT disabled. Pixel QSO's `Data2GSession`
+  connected on ephemeral localhost ports, discovered 20 modes, and got host
+  acceptance for a 200 Hz mode. It sent a KISS ACKMODE frame and received the
+  matching port/tag acknowledgement. This exercises packaged audio stream
+  startup and the command/KISS transmit path without acoustic output or radio
+  transmission;
+  it does not establish operation through an actual device or RF reception.
+  The host settings now clarify that command/KISS connectivity does not prove
+  host audio or PTT operation; remote host readiness must be checked there.
+  The exchange activity document retains at most 2,000 entries so long-running
+  host status reporting cannot grow the UI log without limit.
+  Assembly and Qt tests exercise Data2G completion gating.
+  Opt-in on-air recording now saves each received Data2G application frame as a
+  local `.bin` sidecar with byte count and SHA-256 in its event record; a remote
+  collector receives only the event metadata and frame hash. No frame captures
+  are present in this checkout yet. `tools/replay_data2g_capture.py` checks
+  sidecar hashes, compares direct fragment assembly with the shared assembly
+  service, and compares replayed card references with the references recorded
+  by the app. The recorder writes a final summary only after queued capture jobs
+  drain; post-close events stay outside the capture window. The replay command
+  reports incomplete sessions, recorder drops, missing references, or write
+  failures as inconclusive; real-host replay parity still requires a captured
+  session.
+  `.github/workflows/build-desktop.yml` now runs host help, mode-catalog, and
+  PyAudio device-enumeration checks on Linux, Windows, and macOS bundles, and
+  push triggers now include the active `d2g_first` branch. A
+  fresh PyInstaller build from the current
+  worktree completed on Linux on 2026-10-05 and produced `dist/PixelQSO`
+  (141 MB). That executable passed
+  `--run-data2g-host --help` and `--run-data2g-host --list-modes --kiss-bw 500`
+  with exit code 0. Host options require the `--run-data2g-host` prefix;
+  passing `--list-modes` directly to Pixel QSO starts the GUI instead. The same
+  executable also passed `--run-data2g-host --list-audio-devices` with exit
+  code 0 and listed 34 devices; ALSA/JACK emitted 29 diagnostics in this host
+  environment. This covers PyAudio initialization and enumeration, not opening
+  a selected physical device or PTT. Cross-platform CI results remain pending.
+  The packaged GUI also started on 2026-10-05
+  under Xvfb with an isolated data directory and a deliberately closed remote
+  host port; Data2G remained the selected backend and the refused connection
+  appeared in the exchange activity area. The Station settings modal did not
+  render under this Xvfb session without a window manager. A separate packaged GUI run held its
+  managed-host command port open; the bundled host failed before audio opened,
+  the sanitized occupied-port hint appeared on the main screen, and the app
+  exited cleanly. Closing a packaged GUI during that connection retry also
+  returned exit code 0 without an unhandled worker-signal error. The current
+  session transport now interrupts its managed-host startup retry as soon as
+  shutdown begins. A direct runtime check closed a session retrying a refused
+  local port in under 1 ms and joined its startup worker immediately; this
+  removes the prior six-second wait when the window closes during discovery.
+  After the final recorder-drain summary change, a fresh PyInstaller build from
+  the current worktree completed on Linux with Python 3.13.6 and PyInstaller
+  6.22.3, producing `dist/PixelQSO` (141,337,880 bytes). On 2026-10-05 that
+  exact executable passed `--run-data2g-host --help`, `--list-modes --kiss-bw
+  500`, and `--list-audio-devices`, each with exit code 0. The mode command
+  listed 20 modes; device enumeration completed despite ALSA/JACK diagnostics
+  in this environment. The build console warned that `scipy.special._cdflib`
+  was not found, but the generated PyInstaller warning report does not list
+  it. The build environment's SciPy 1.18.1 also has no importable
+  `scipy.special._cdflib` module (`find_spec` returns `None`), so the console
+  warning is for an absent optional/module name rather than a missing installed
+  SciPy component. This closes the current Linux host CLI smoke gate; selected physical
+  device streaming, Windows/macOS bundle success, and the remaining hardware
+  gates are still open.
+  After changing managed-host audio selectors to PyAudio device indexes and
+  adding saved-Qt-ID migration, a fresh Linux build completed on 2026-10-05.
+  That executable passed host `--help`, mode listing (20 modes), and audio-device
+  enumeration (33 listed devices) with exit code 0. The packaged GUI initialized
+  under Xvfb with an isolated data directory and remained running until the
+  10-second smoke timeout; PortAudio emitted ALSA/JACK diagnostics in this
+  container. A source offscreen render of the Station settings dialog was then
+  inspected on 2026-10-05. It showed the Data2G host section, System default
+  choices, and the PortAudio catalog (19 input / 31 output devices), with
+  selected items carrying the matching decimal host indexes. The bundled
+  packaged dialog itself remains unverified; physical audio path is not
+  established by enumeration.
+  A packaged run then selected the PortAudio `pulse` input and output devices
+  through the new settings path. The managed host opened its command, data, and
+  KISS listeners, opened the `PIXELQSO` broadcast group, accepted 49
+  `BCAST MODE` checks, and closed the group cleanly when the app exited. The
+  pinned host opens its PyAudio input/output streams before logging the listener
+  startup, so this verifies PortAudio index selection, virtual PulseAudio stream
+  startup, packaged Data2G discovery, and orderly disconnect without RF. It
+  does not verify a physical radio audio interface, PTT, or reception.
+  The latest frozen build also passed host `--help` and 500 Hz mode listing
+  (20 modes). With a removed Data2G input device seeded in `settings.ini`, the
+  packaged GUI remained running through an eight-second Xvfb smoke window,
+  created no `data2g-host.log`, and preserved the removed device name and ID.
+  This confirms it did not launch with an unintended fallback device. The
+  source offscreen Station dialog visibly presents the unavailable-device hint;
+  choosing System default clears it and enables Connect. The packaged dialog
+  has not yet been captured visually.
+  A source `MainWindow` then launched the bundled `dist/PixelQSO
+  --run-data2g-host` child with an input selector changed to invalid PortAudio
+  index 999 after catalog enumeration. The packaged host exited before opening
+  audio streams, and the UI showed the sanitized audio-startup hint in host
+  status, receive status, and exchange activity. The child was reaped and no
+  host process remained. This exercises the frozen host's selected-device
+  failure and app presentation together; it does not verify the frozen parent
+  GUI's dialog rendering.
+  During an unintended app-to-host smoke on 2026-10-05, the app's queued
+  startup callback ran before the script replaced its default ports and
+  connected to an existing managed host. The app submitted one frame but
+  received no ACK before shutdown; the real transmission outcome is unknown.
+  The isolated managed host was then stopped with SIGTERM through its graceful
+  shutdown handler; its process exited and a read-only rigctld query returned
+  PTT state 0. This attempt is not counted as transmit validation. It exposed
+  the closed-window callback race fixed above. A later controlled app
+  transport smoke used an isolated fixture and did not contact the configured
+  radio host.
+  After suppressing the queued startup callback during fixture setup, a
+  controlled source-app transport smoke on 2026-10-05 connected to an isolated
+  command/KISS protocol fixture on dynamically assigned localhost ports. The
+  app discovered two modes, opened `PIXELQSO`, selected a mode, generated six
+  234/256-byte Pixel QSO application frames, and received six unique ACKMODE
+  acknowledgements on broadcast port 7. The UI completed the queue and stated
+  that local ACKs do not confirm remote card receipt. This verifies the app's
+  Data2G mode-selection, frame submission, queue, and ACK path against a
+  protocol fixture only; it does not exercise the pinned host, audio waveform,
+  PTT, or RF.
+  A separate source-app smoke then connected to the installed pinned Data2G
+  `serve()` implementation with an in-memory PortAudio shim: capture supplied
+  paced zero samples and playback counted generated float audio without opening
+  an OS audio device. The host advertised all 48 modes, opened the group, and
+  transmitted three repeated CQ application frames; the app received three
+  ACKMODE acknowledgements and completed its queue. The sink observed
+  1,093,809 nonzero samples at peak 1.0. The host rigctld port was 0, disabling
+  PTT. This verifies Pixel QSO's supported host API and the pinned waveform
+  generation/queue path against a software sink, not a real PortAudio stream,
+  radio, or RF.
+  A source-app automatic responder smoke on 2026-10-05 then connected through
+  `Data2GSession` to an isolated command/KISS fixture. After an injected
+  verified CQ, the app sent its exchange and reached `await_report73`. After an
+  injected verified 73 with SNR, it sent final 73, completed the contact, and
+  persisted a `Complete` QSO log with sent stages `exchange`/`73` and received
+  stages `cq`/`73`. Four application frames received four ACKMODE acknowledgements.
+  This verifies the complete app responder state machine and persistence with
+  synthetic peer frames and fixture acknowledgements; it does not verify a
+  remote peer or RF.
+  A caller-role smoke against the same isolated fixture also completed on
+  2026-10-05. `start_auto_exchange()` sent CQ, a verified synthetic exchange
+  advanced the app to `send_report73`, the report send reached
+  `await_final73`, and a verified final 73 completed the contact. The persisted
+  QSO log was `Complete` with sent stages `cq`/`73` and received stages
+  `exchange`/`73`; all four application frames were ACKed. This verifies both
+  automatic roles at the app/API boundary with synthetic peer cards, not a
+  real Data2G peer or RF.
+  Windows/macOS bundle success, operation through selected physical audio
+  devices, actual PTT, independent two-host audio operation, and RF reception
+  remain release gates.

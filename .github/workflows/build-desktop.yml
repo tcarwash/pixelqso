@@ -3,7 +3,7 @@ name: Build desktop applications
 on:
   workflow_dispatch:
   push:
-    branches: [main, data2g_integration]
+    branches: [main, d2g_first, data2g_integration]
     tags: ["v*"]
   pull_request:
     branches: [main]
@@ -46,6 +46,17 @@ jobs:
         run: python -m pip install --upgrade pip PyInstaller .
       - name: Build desktop application
         run: python -m PyInstaller --clean --noconfirm pixelqso.spec
+      - name: Smoke test bundled Data2G host CLI
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Windows) app=dist/PixelQSO.exe ;;
+            macOS) app=dist/PixelQSO.app/Contents/MacOS/PixelQSO ;;
+            *) app=dist/PixelQSO ;;
+          esac
+          "$app" --run-data2g-host --help
+          "$app" --run-data2g-host --list-modes --kiss-bw 500
+          "$app" --run-data2g-host --list-audio-devices
       - name: Package Linux / Windows output
         if: runner.os != 'macOS'
         shell: bash

@@ -59,16 +59,30 @@ AVATAR_META_TONE_COUNT = (AVATAR_META_DATA_SYMBOLS + 2) * 2
 AVATAR_META_V4_DATA_SYMBOLS = (AVATAR_META_V4_STRUCT.size + 2) * 8 // 6 + (((AVATAR_META_V4_STRUCT.size + 2) * 8) % 6 != 0)
 AVATAR_META_V4_TONE_COUNT = (AVATAR_META_V4_DATA_SYMBOLS + 2) * 2
 AVATAR_BLOCK_ID_SYMBOLS = 2
-AVATAR_V4_PIXELS_PER_BLOCK = ((AVATAR_RS_K - AVATAR_BLOCK_ID_SYMBOLS) * 6) // 5
+AVATAR_BLOCK_IMAGE_TAG_SYMBOLS = 6
+AVATAR_V4_BLOCK_OVERHEAD = AVATAR_BLOCK_ID_SYMBOLS + AVATAR_BLOCK_IMAGE_TAG_SYMBOLS
+AVATAR_V4_PIXELS_PER_BLOCK = ((AVATAR_RS_K - AVATAR_V4_BLOCK_OVERHEAD) * 6) // 3
 AVATAR_MESSAGE_CODES = {"card": 0, "cq": 1, "exchange": 2, "73": 3}
 AVATAR_MESSAGE_NAMES = {value: key for key, value in AVATAR_MESSAGE_CODES.items()}
 AVATAR_BURST_CODES = {"fast_avatar": 1, "fast_avatar_fec": 2}
-FAST_AVATAR_RESILIENT_CYCLE_SYMBOLS = (len(FRAME_SYNC) + AVATAR_META_V4_TONE_COUNT +
-                                       8 * (AVATAR_RS_N * 2 + 6) +
-                                       (512 - 8 * (AVATAR_RS_K - AVATAR_BLOCK_ID_SYMBOLS) + 4) * 2 + 6)
-FAST_AVATAR_RESILIENT_CYCLE_SYMBOLS_V3 = (len(FRAME_SYNC) + AVATAR_META_TONE_COUNT +
-                                          8 * (AVATAR_RS_N * 2 + 6) +
-                                          (512 - 8 * AVATAR_RS_K + 2) * 2 + 6)
+
+
+def _resilient_cycle_tone_count(wire_version: int) -> int:
+    bpp = 3
+    pixel_count = MINIMAL_AVATAR_WIDTH * MINIMAL_AVATAR_HEIGHT
+    overhead = 0 if wire_version == 3 else AVATAR_V4_BLOCK_OVERHEAD
+    pixels_per_block = ((AVATAR_RS_K - overhead) * 6) // bpp
+    total = len(FRAME_SYNC) + (AVATAR_META_TONE_COUNT if wire_version == 3
+                               else AVATAR_META_V4_TONE_COUNT)
+    for start in range(0, pixel_count, pixels_per_block):
+        pixels = min(pixels_per_block, pixel_count - start)
+        data_symbols = (pixels * bpp + 5) // 6 + overhead
+        total += (data_symbols + 2) * 2 + 6
+    return total
+
+
+FAST_AVATAR_RESILIENT_CYCLE_SYMBOLS = _resilient_cycle_tone_count(4)
+FAST_AVATAR_RESILIENT_CYCLE_SYMBOLS_V3 = _resilient_cycle_tone_count(3)
 
 
 @dataclass(frozen=True)
@@ -688,16 +702,19 @@ def minimal_avatar_resilient_cycle_symbols(card: Card, *, include_sync: bool = T
     pixels = [mapping[int(index)] for index in card.pixels]
     if wire_version not in (3, 4):
         raise ValueError("resilient avatar wire version must be 3 or 4")
-    pixels_per_block = (((AVATAR_RS_K - AVATAR_BLOCK_ID_SYMBOLS) * 6) // bpp
+    pixels_per_block = (((AVATAR_RS_K - AVATAR_V4_BLOCK_OVERHEAD) * 6) // bpp
                         if wire_version == 4 else (AVATAR_RS_K * 6) // bpp)
     block_count = (len(pixels) + pixels_per_block - 1) // pixels_per_block
     body: list[int] = _encode_avatar_metadata(card, resilient=True,
                                               message_type=message_type, snr_db=snr_db,
                                               wire_version=wire_version)
+    image_tag_symbols = (_bytes_to_gf64(hashlib.blake2s(
+        minimal_avatar_payload(card), digest_size=4).digest()) if wire_version == 4 else [])
     for block_index, start in enumerate(range(0, len(pixels), pixels_per_block)):
         block_pixels = pixels[start:start + pixels_per_block]
         block_values = (_pixels_to_gf64(block_pixels, bpp) if wire_version == 3 else
-                        [block_index, block_count] + _pixels_to_gf64(block_pixels, bpp))
+                        [block_index, block_count] + image_tag_symbols +
+                        _pixels_to_gf64(block_pixels, bpp))
         body.extend(_avatar_block_symbols(block_values))
     tones = tuple(body)
     return (FRAME_SYNC + tones) if include_sync else tones
@@ -797,7 +814,7 @@ def decode_minimal_avatar_resilient_symbols(symbols: Iterable[int], *, require_s
                (metadata["callsign"].upper(), metadata["grid"].upper(), metadata["card_id"],
                 width, height, metadata["palette_id"], metadata.get("message_type", "card"),
                 metadata.get("snr_db")))
-        pixels_per_block = ((AVATAR_RS_K - AVATAR_BLOCK_ID_SYMBOLS) * 6 // bpp
+        pixels_per_block = ((AVATAR_RS_K - AVATAR_V4_BLOCK_OVERHEAD) * 6 // bpp
                             if new_format else (AVATAR_RS_K * 6) // bpp)
         block_count = (pixel_count + pixels_per_block - 1) // pixels_per_block
         group = groups.setdefault(key, {"pixels": [0] * pixel_count, "received": [False] * block_count,
@@ -811,7 +828,7 @@ def decode_minimal_avatar_resilient_symbols(symbols: Iterable[int], *, require_s
             first_pixel = block_index * pixels_per_block
             current_pixel_count = min(pixels_per_block, pixel_count - first_pixel)
             pixel_data_count = (current_pixel_count * bpp + 5) // 6
-            data_count = pixel_data_count + (AVATAR_BLOCK_ID_SYMBOLS if new_format else 0)
+            data_count = pixel_data_count + (AVATAR_V4_BLOCK_OVERHEAD if new_format else 0)
             coded_tone_count = (data_count + 2) * 2
             tone_count = coded_tone_count + 6
             block_end = block_start + tone_count
@@ -825,7 +842,7 @@ def decode_minimal_avatar_resilient_symbols(symbols: Iterable[int], *, require_s
                 # provisional; a later checked copy replaces it.
                 raw_values = _tones_to_gf64(data_symbols_tones[:minimum_data_tones])
                 if new_format:
-                    raw_values = raw_values[AVATAR_BLOCK_ID_SYMBOLS:]
+                    raw_values = raw_values[AVATAR_V4_BLOCK_OVERHEAD:]
                 candidate_pixels = _gf64_to_pixels(raw_values, current_pixel_count, bpp)
                 first_pixel = block_index * pixels_per_block
                 for pixel_offset, value in enumerate(candidate_pixels):
@@ -855,9 +872,11 @@ def decode_minimal_avatar_resilient_symbols(symbols: Iterable[int], *, require_s
                             raise
                         values, corrected = recovered
                     if new_format:
-                        if values[0] != block_index or values[1] != block_count:
-                            raise ValueError("avatar block position check failed")
-                        values = values[AVATAR_BLOCK_ID_SYMBOLS:]
+                        expected_tag_symbols = _bytes_to_gf64(bytes.fromhex(metadata["image_tag"]))
+                        if (values[0] != block_index or values[1] != block_count or
+                                values[AVATAR_BLOCK_ID_SYMBOLS:AVATAR_V4_BLOCK_OVERHEAD] != expected_tag_symbols):
+                            raise ValueError("avatar block identity or position check failed")
+                        values = values[AVATAR_V4_BLOCK_OVERHEAD:]
                     block_pixels = _gf64_to_pixels(values, current_pixel_count, bpp)
                     group["pixels"][first_pixel:first_pixel + current_pixel_count] = block_pixels
                     group["coverage"][first_pixel:first_pixel + current_pixel_count] = [True] * current_pixel_count

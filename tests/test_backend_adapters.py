@@ -1,7 +1,9 @@
 import unittest
+from unittest.mock import patch
 
 from backend_adapters import (AdapterKind, DATA2G_ADAPTER, EXPERIMENTAL_ADAPTER,
-                              AdapterCapabilities, IntegrityScope,
+                              AdapterCapabilities, ExperimentalLocalAdapter,
+                              DecodeFailureKind, IntegrityScope, ReceiveStartError,
                               adapter_for_backend_selection, register_adapter)
 
 
@@ -34,7 +36,7 @@ class BackendAdapterTests(unittest.TestCase):
         self.assertIs(adapter_for_backend_selection("experimental"), EXPERIMENTAL_ADAPTER)
 
     def test_internal_registry_can_add_a_compatible_experimental_adapter(self):
-        class CompatibleAdapter:
+        class CompatibleAdapter(ExperimentalLocalAdapter):
             key = "test-compatible"
             capabilities = AdapterCapabilities(
                 AdapterKind.LOCAL_IMAGE_MODEM, "pixelqso", "pixelqso_cat_or_test_audio",
@@ -44,11 +46,22 @@ class BackendAdapterTests(unittest.TestCase):
         adapter = CompatibleAdapter()
         register_adapter(adapter)
         try:
-            self.assertIs(adapter_for_backend_selection("experimental", adapter.key), adapter)
+                self.assertIs(adapter_for_backend_selection("experimental", adapter.key), adapter)
         finally:
             # Keep the process-wide registry isolated for the remaining tests.
             from backend_adapters import ADAPTERS
             ADAPTERS.pop(adapter.key, None)
+
+    def test_internal_registry_rejects_adapters_missing_kind_specific_operations(self):
+        class IncompleteAdapter:
+            key = "test-incomplete"
+            capabilities = AdapterCapabilities(
+                AdapterKind.LOCAL_IMAGE_MODEM, "pixelqso", "pixelqso_cat_or_test_audio",
+                "local_waveform_decode", "local_audio_completion",
+                IntegrityScope.CHECKED_REGION, True, True, True)
+
+        with self.assertRaisesRegex(ValueError, "decode_capture, start_receive, stop_receive"):
+            register_adapter(IncompleteAdapter())
 
     def test_capabilities_report_distinct_ownership_and_integrity(self):
         host = DATA2G_ADAPTER.capabilities
@@ -99,6 +112,144 @@ class BackendAdapterTests(unittest.TestCase):
             backend, "card", 2, "cq", None), ("card", 2, "cq", None))
         self.assertEqual(EXPERIMENTAL_ADAPTER.decode(
             backend, b"audio", 48000), (b"audio", 48000))
+
+    def test_local_adapter_normalizes_decode_miss_and_backend_failure(self):
+        class NoMatchBackend:
+            def decode(self, *_args):
+                raise ValueError("no valid avatar identity header received yet")
+
+        no_match = EXPERIMENTAL_ADAPTER.decode_capture(NoMatchBackend(), b"noise", 48000)
+        self.assertIsNone(no_match.report)
+        self.assertEqual(no_match.failure.kind, DecodeFailureKind.NO_MATCH)
+        self.assertTrue(no_match.failure.retryable)
+        self.assertEqual(no_match.failure.adapter_key, EXPERIMENTAL_ADAPTER.key)
+
+        class BrokenBackend:
+            def decode(self, *_args):
+                raise RuntimeError("decoder worker failed")
+
+        failed = EXPERIMENTAL_ADAPTER.decode_capture(BrokenBackend(), b"audio", 48000)
+        self.assertIsNone(failed.report)
+        self.assertEqual(failed.failure.kind, DecodeFailureKind.BACKEND_ERROR)
+        self.assertFalse(failed.failure.retryable)
+
+    def test_legacy_wav_decode_is_normalized_and_preserves_completion_evidence(self):
+        packet = type("Packet", (), {"packet_type": 1, "card_id": 9, "seq": 2,
+                                     "corrected_bits": 0, "payload": b"payload"})()
+        card = {"card_id": 9, "exact": True}
+        with patch("backend_adapters.modem.decode_wav_with_state",
+                   return_value=([packet], [], 48000, {"profile": "wide"})), \
+                patch("backend_adapters.modem.reconstruct", return_value=(card, [])), \
+                patch("backend_adapters.modem.is_complete_card", return_value=True):
+            outcome = EXPERIMENTAL_ADAPTER.decode_legacy_wav("capture.wav", "state.json")
+
+        self.assertIsNone(outcome.failure)
+        self.assertEqual(outcome.report["valid_packets"][0]["payload_hex"], b"payload".hex())
+        self.assertTrue(outcome.report["complete"])
+        self.assertEqual(outcome.report["card"], card)
+
+    def test_legacy_audio_without_card_identity_is_a_retryable_miss(self):
+        with patch("backend_adapters.modem.select_capture_profile", return_value="profile"), \
+                patch("backend_adapters.modem.receive_capture_evidence", return_value=([], 0, 0, 1)), \
+                patch("backend_adapters.modem.decode_packet_evidence", return_value=([], [])), \
+                patch("backend_adapters.modem.reconstruct", return_value=({"card_id": None}, [])):
+            outcome = EXPERIMENTAL_ADAPTER.decode_legacy_audio([0.0] * 48000, 48000)
+
+        self.assertIsNone(outcome.report)
+        self.assertEqual(outcome.failure.kind, DecodeFailureKind.NO_MATCH)
+        self.assertTrue(outcome.failure.retryable)
+
+    def test_local_adapter_decode_outcome_contains_one_result(self):
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            from backend_adapters import DecodeOutcome
+            DecodeOutcome()
+
+    def test_local_receive_adapter_owns_audio_and_udp_resource_lifecycle(self):
+        class Device:
+            def isFormatSupported(self, audio_format):
+                return True
+
+        class Source:
+            def __init__(self, device, audio_format, parent):
+                self.stopped = 0
+
+            def start(self):
+                return "audio-stream"
+
+            def stop(self):
+                self.stopped += 1
+
+        sources = []
+
+        def source_factory(*args):
+            source = Source(*args)
+            sources.append(source)
+            return source
+
+        audio = EXPERIMENTAL_ADAPTER.start_receive(
+            device=Device(), audio_format="48k-mono", parent=None,
+            audio_source_factory=source_factory)
+        self.assertIs(audio.audio_source, sources[0])
+        self.assertEqual(audio.audio_stream, "audio-stream")
+        self.assertEqual(EXPERIMENTAL_ADAPTER.stop_receive(audio), ())
+        self.assertEqual(sources[0].stopped, 1)
+        self.assertEqual(EXPERIMENTAL_ADAPTER.stop_receive(audio), ())
+        self.assertEqual(sources[0].stopped, 1)
+
+        class Socket:
+            def __init__(self):
+                self.closed = 0
+                self.deleted = 0
+
+            def close(self):
+                self.closed += 1
+
+            def deleteLater(self):
+                self.deleted += 1
+
+        sockets = []
+        def socket_factory(parent):
+            sock = Socket()
+            sockets.append(sock)
+            return sock
+
+        udp = EXPERIMENTAL_ADAPTER.start_receive(
+            device=None, audio_format=None, parent=None,
+            audio_source_factory=source_factory, test_port=40001,
+            test_socket_factory=socket_factory,
+            test_bind=lambda sock, port: port == 40001)
+        self.assertTrue(udp.test_mode)
+        self.assertIs(udp.test_socket, sockets[0])
+        self.assertEqual(EXPERIMENTAL_ADAPTER.stop_receive(udp), ())
+        self.assertEqual((sockets[0].closed, sockets[0].deleted), (1, 1))
+
+    def test_local_receive_adapter_reports_failed_acquisition_and_cleans_up(self):
+        class UnsupportedDevice:
+            def isFormatSupported(self, audio_format):
+                return False
+
+        with self.assertRaisesRegex(ReceiveStartError, "does not support"):
+            EXPERIMENTAL_ADAPTER.start_receive(
+                device=UnsupportedDevice(), audio_format=None, parent=None,
+                audio_source_factory=lambda *_args: self.fail("unsupported format must not open"))
+
+        class FailedSource:
+            def __init__(self):
+                self.stopped = 0
+
+            def start(self):
+                return None
+
+            def stop(self):
+                self.stopped += 1
+
+        failed = FailedSource()
+        with self.assertRaisesRegex(ReceiveStartError, "could not open"):
+            EXPERIMENTAL_ADAPTER.start_receive(
+                device=type("Device", (), {"isFormatSupported": lambda *_: True})(),
+                audio_format=None, parent=None,
+                audio_source_factory=lambda *_args: failed)
+        self.assertEqual(failed.stopped, 1)
 
 
 if __name__ == "__main__":

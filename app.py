@@ -1024,6 +1024,10 @@ class MainWindow(QMainWindow):
         heading = QHBoxLayout(); heading.addWidget(QLabel("My cards"), 1)
         create = QPushButton("Create card"); create.clicked.connect(self.create_library_card); heading.addWidget(create)
         open_button = QPushButton("Open selected"); open_button.clicked.connect(self.open_selected_library_card); heading.addWidget(open_button)
+        self.export_card_button = QPushButton("Export selected…")
+        self.export_card_button.setEnabled(False)
+        self.export_card_button.clicked.connect(self.export_selected_card)
+        heading.addWidget(self.export_card_button)
         duplicate = QPushButton("Duplicate"); duplicate.clicked.connect(self.duplicate_library_card); heading.addWidget(duplicate)
         delete = QPushButton("Delete"); delete.clicked.connect(self.delete_library_card); heading.addWidget(delete)
         layout.addLayout(heading)
@@ -1033,6 +1037,7 @@ class MainWindow(QMainWindow):
         self.library_list.setIconSize(QSize(190, 238)); self.library_list.setGridSize(QSize(218, 288))
         self.library_list.setMovement(QListWidget.Movement.Static); self.library_list.setSpacing(8)
         self.library_list.itemClicked.connect(lambda _item: self._activate_library_list(self.library_list))
+        self.library_list.itemSelectionChanged.connect(self._update_export_buttons)
         self.library_list.setResizeMode(QListWidget.ResizeMode.Adjust); self.library_list.itemDoubleClicked.connect(lambda _item: self.open_selected_library_card())
         layout.addWidget(self.library_list, 2)
         divider = QFrame(); divider.setFrameShape(QFrame.Shape.HLine); divider.setFrameShadow(QFrame.Shadow.Sunken)
@@ -1044,6 +1049,7 @@ class MainWindow(QMainWindow):
         self.sent_library_list.setIconSize(QSize(190, 238)); self.sent_library_list.setGridSize(QSize(218, 288))
         self.sent_library_list.setMovement(QListWidget.Movement.Static); self.sent_library_list.setSpacing(8)
         self.sent_library_list.itemClicked.connect(lambda _item: self._activate_library_list(self.sent_library_list))
+        self.sent_library_list.itemSelectionChanged.connect(self._update_export_buttons)
         self.sent_library_list.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.sent_library_list.itemDoubleClicked.connect(lambda _item: self.open_selected_library_card())
         self.active_library_list = self.library_list
@@ -1060,13 +1066,18 @@ class MainWindow(QMainWindow):
         self.log_search = QLineEdit(); self.log_search.setPlaceholderText("Find a callsign or grid…")
         controls.addWidget(self.log_search, 1)
         self.log_sort = QComboBox(); self.log_sort.addItems(["Newest first", "Oldest first", "Callsign A–Z"])
-        controls.addWidget(self.log_sort); layout.addLayout(controls)
+        controls.addWidget(self.log_sort)
+        self.export_qso_button = QPushButton("Export selected QSO…")
+        self.export_qso_button.setEnabled(False)
+        self.export_qso_button.clicked.connect(self.export_selected_qso)
+        controls.addWidget(self.export_qso_button); layout.addLayout(controls)
         self.log_gallery = QListWidget(); self.log_gallery.setViewMode(QListWidget.ViewMode.IconMode)
         self.log_gallery.setMovement(QListWidget.Movement.Static)
         self.log_gallery.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.log_gallery.setIconSize(QSize(220, 275)); self.log_gallery.setGridSize(QSize(250, 325))
         self.log_gallery.setSpacing(8); self.log_gallery.itemClicked.connect(self.show_log_deck)
         self.log_gallery.itemActivated.connect(self.show_log_deck)
+        self.log_gallery.itemSelectionChanged.connect(self._update_export_buttons)
         layout.addWidget(self.log_gallery, 1)
         self.log_status = QLabel(); layout.addWidget(self.log_status)
         self.log_search.textChanged.connect(self.refresh_qso_log)
@@ -1197,29 +1208,33 @@ class MainWindow(QMainWindow):
     def _save_quick_draw_to_sent_library(self, card):
         if card is None:
             return False
-        folder = DATA / "sent-cards"
-        folder.mkdir(parents=True, exist_ok=True)
+        folders = (DATA / "sent-cards", DATA / "cards")
+        for folder in folders:
+            folder.mkdir(parents=True, exist_ok=True)
         slug = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in card.callsign)
-        target = folder / f"{time.strftime('%Y%m%d-%H%M%S')}-{slug}-{card.card_id:04x}.json"
+        stem = f"{time.strftime('%Y%m%d-%H%M%S')}-{slug}-{card.card_id:04x}"
+        target = folders[0] / f"{stem}.json"
         suffix = 2
-        while target.exists():
-            target = folder / f"{time.strftime('%Y%m%d-%H%M%S')}-{slug}-{card.card_id:04x}-{suffix}.json"
+        while any((folder / target.name).exists() for folder in folders):
+            target = folders[0] / f"{stem}-{suffix}.json"
             suffix += 1
         pixels = list(card.pixels)
         data = {"callsign": card.callsign, "grid": card.grid, "palette": card.palette,
                 "pixels": pixels, "card_id": card.card_id, "width": card.width,
                 "height": card.height, "base_pixels": pixels, "stamp_layers": [],
                 "archive_reason": "quick_draw_transmission"}
-        target.write_text(json.dumps(data, indent=2) + "\n")
+        serialized = json.dumps(data, indent=2) + "\n"
+        target.write_text(serialized)
+        (folders[1] / target.name).write_text(serialized)
         self.refresh_card_library()
-        self._activate_library_list(self.sent_library_list)
-        for row in range(self.sent_library_list.count()):
-            item = self.sent_library_list.item(row)
+        self._activate_library_list(self.library_list)
+        for row in range(self.library_list.count()):
+            item = self.library_list.item(row)
             if Path(item.data(Qt.ItemDataRole.UserRole)) == target:
-                self.sent_library_list.setCurrentItem(item)
+                self.library_list.setCurrentItem(item)
                 item.setSelected(True)
                 break
-        self.library_status.setText(f"Saved sent quick draw to Sent cards · {target.stem}")
+        self.library_status.setText(f"Saved quick draw to My Cards and Sent cards · {target.stem}")
         return True
 
     def create_library_card(self):
@@ -1319,6 +1334,83 @@ class MainWindow(QMainWindow):
             self.log_gallery.addItem(item)
         self.log_status.setText(f"{len(entries)} contact decks" if entries else
                                "No matching contacts." if query else "Your first contact deck will appear here after you exchange cards.")
+        self._update_export_buttons()
+
+    def _update_export_buttons(self, *_):
+        if hasattr(self, "export_card_button"):
+            self.export_card_button.setEnabled(self._selected_library_item()[0] is not None)
+        if hasattr(self, "export_qso_button"):
+            self.export_qso_button.setEnabled(
+                hasattr(self, "log_gallery") and self.log_gallery.currentItem() is not None)
+
+    def export_selected_card(self):
+        item, _widget = self._selected_library_item()
+        if item is None:
+            return
+        source = Path(item.data(Qt.ItemDataRole.UserRole))
+        try:
+            data = json.loads(source.read_text())
+            card = modem.Card(str(data["callsign"]), str(data.get("grid", "")),
+                              [tuple(map(int, color)) for color in data["palette"]],
+                              list(map(int, data["pixels"])), int(data.get("card_id", 0xC0DE)),
+                              int(data.get("width", 32)), int(data.get("height", 32)))
+            card.validate()
+            default_name = f"{source.stem}.json"
+            target_name, file_filter = QFileDialog.getSaveFileName(
+                self, "Export card", str(DATA / "exports" / default_name),
+                "Pixel QSO card (*.json);;PNG image (*.png)")
+            if not target_name:
+                return
+            target = Path(target_name)
+            if target.resolve() == source.resolve():
+                QMessageBox.warning(self, "Couldn't export card", "Choose a different file from the saved card.")
+                return
+            if "PNG" in file_filter:
+                image = QImage(card.width, card.height, QImage.Format.Format_RGB32)
+                for index, palette_index in enumerate(card.pixels):
+                    image.setPixelColor(index % card.width, index // card.width,
+                                        QColor(*(channel * 17 for channel in card.palette[palette_index])))
+                if target.suffix.lower() != ".png":
+                    target = target.with_suffix(".png")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if not image.save(str(target), "PNG"):
+                    raise OSError("Qt could not write the PNG image")
+            else:
+                if target.suffix.lower() != ".json":
+                    target = target.with_suffix(".json")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(source.read_bytes())
+            self.library_status.setText(f"Exported {target.name}")
+        except Exception as exc:
+            QMessageBox.warning(self, "Couldn't export card", str(exc))
+
+    def export_selected_qso(self):
+        item = self.log_gallery.currentItem() if hasattr(self, "log_gallery") else None
+        if item is None:
+            return
+        source = Path(item.data(Qt.ItemDataRole.UserRole))
+        try:
+            entry = json.loads(source.read_text())
+            callsign = "".join(ch if ch.isalnum() or ch in "-_" else "_"
+                               for ch in str(entry.get("peer_callsign", "Unknown")))
+            date = "".join(ch for ch in str(entry.get("started_at", ""))[:10]
+                           if ch.isalnum() or ch == "-")
+            target_name, _ = QFileDialog.getSaveFileName(
+                self, "Export QSO archive", str(DATA / "exports" / f"qso-{callsign}-{date}.json"),
+                "Pixel QSO contact archive (*.json)")
+            if not target_name:
+                return
+            target = Path(target_name)
+            if target.resolve() == source.resolve():
+                QMessageBox.warning(self, "Couldn't export QSO", "Choose a different file from the saved contact archive.")
+                return
+            if target.suffix.lower() != ".json":
+                target = target.with_suffix(".json")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
+            self.log_status.setText(f"Exported QSO archive to {target.name}")
+        except Exception as exc:
+            QMessageBox.warning(self, "Couldn't export QSO", str(exc))
 
     def show_log_deck(self, item=None, *_):
         item = item or self.log_gallery.currentItem()
@@ -2058,6 +2150,9 @@ class MainWindow(QMainWindow):
         wall_layout.addWidget(wall_list_panel, 1)
         self.receive_preview_box = QGroupBox("Live preview")
         self.receive_preview_box.setFixedWidth(218)
+        self.receive_preview_box.setToolTip(
+            "Received pixels remain visible provisionally even when a block or whole-card CRC fails. "
+            "Later copies can refine them; only CRC-verified pixels are accepted as final.")
         preview_layout = QVBoxLayout(self.receive_preview_box)
         preview_layout.setContentsMargins(8, 8, 8, 8)
         self.receive_stack.addWidget(self.session_wall_page)
@@ -2475,8 +2570,9 @@ class MainWindow(QMainWindow):
             palette_id = int(metadata["palette_id"])
             palette = [list(color) for color in modem.AVATAR_PALETTES[palette_id]]
             card = {**metadata, "palette": palette, "avatar_burst": True,
-                    "verified_pixel_coverage": metadata["pixel_coverage"],
                     "received_copies": 1}
+            if metadata.get("exact"):
+                card["verified_pixel_coverage"] = metadata["pixel_coverage"]
             report = {"sample_rate": 0, "receive_profile": "Data2G host/KISS",
                       "valid_packets": [], "valid_packet_count": 1, "errors": [],
                       "card": card, "pixels": pixels}
@@ -4195,10 +4291,11 @@ class MainWindow(QMainWindow):
                     state["pixels"][index] = pixels[index]
                     changed = True
                 state["verified_pixels"][index] = True
-            elif more_evidence and not state["verified_pixels"][index]:
+            elif (not state["verified_pixels"][index] and
+                  (more_evidence or not state["coverage"][index])):
                 value = int(pixels[index])
                 if 0 <= value < len(state["pixel_votes"][index]):
-                    weight = max(1, copies - state["copies"])
+                    weight = max(1, copies - state["copies"]) if more_evidence else 1
                     state["pixel_votes"][index][value] += weight
                     previous = state["pixels"][index]
                     best_votes = max(state["pixel_votes"][index])

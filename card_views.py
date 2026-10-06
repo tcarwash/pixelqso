@@ -1,6 +1,6 @@
 """Trading-card presentation for the local contact collection."""
 from PySide6.QtCore import Qt, QSize, QRectF
-from PySide6.QtGui import QColor, QPainter, QPixmap, QIcon, QFont
+from PySide6.QtGui import QColor, QPainter, QPixmap, QIcon, QFont, QImage
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget, QListWidgetItem, QSizePolicy
 
 
@@ -12,7 +12,40 @@ def deck_events(entry):
 def stage_label(card):
     meta = card.get('card') or {}
     kind = meta.get('message_type', 'card')
-    return {'cq': 'CQ', 'exchange': 'EXCHANGE', '73': '73 · REPORT' if meta.get('snr_db') is not None else '73 · GOODBYE'}.get(kind, 'IMAGE CARD')
+    return {'cq': 'CQ', 'exchange': 'EXCHANGE', '73': 'RR73 · REPORT' if meta.get('snr_db') is not None else '73 · GOODBYE'}.get(kind, 'IMAGE CARD')
+
+
+def deck_image(entry, image_for_card):
+    """Render every stage in order as a shareable contact sheet."""
+    events = deck_events(entry)
+    if not events:
+        raise ValueError('This contact has no saved cards to export.')
+    columns = min(4, len(events))
+    rows = (len(events) + columns - 1) // columns
+    image = QImage(columns * 260 + 32, rows * 350 + 116, QImage.Format.Format_RGB32)
+    if image.isNull():
+        raise ValueError('This contact is too large to render as one PNG.')
+    image.fill(QColor('#101b16'))
+    painter = QPainter(image)
+    try:
+        painter.setPen(QColor('#d9efc6'))
+        font = QFont(); font.setPixelSize(24); font.setBold(True); painter.setFont(font)
+        painter.drawText(QRectF(24, 16, image.width()-48, 34), Qt.AlignmentFlag.AlignLeft,
+                         f"Contact with {entry.get('peer_callsign', 'Unknown')}")
+        font.setPixelSize(14); font.setBold(False); painter.setFont(font)
+        painter.drawText(QRectF(24, 54, image.width()-48, 30), Qt.AlignmentFlag.AlignLeft,
+                         f"{entry.get('peer_grid', '')} · {entry.get('started_at', '')} · {entry.get('status', 'Saved')}")
+        for index, (direction, card) in enumerate(events):
+            x, y = 16 + (index % columns)*260, 96 + (index // columns)*350
+            meta = card.get('card') or {}
+            tile = card_art(image_for_card(card), str(meta.get('callsign', 'Unknown')),
+                            stage_label(card), QSize(240, 300))
+            painter.drawPixmap(x+10, y, tile)
+            painter.drawText(QRectF(x, y+304, 260, 30), Qt.AlignmentFlag.AlignCenter,
+                             f"{index+1} · {'Sent' if direction == 'sent_cards' else 'Received'}")
+    finally:
+        painter.end()
+    return image
 
 
 def card_art(image, title, subtitle='', size=QSize(240, 300), stacked=False):

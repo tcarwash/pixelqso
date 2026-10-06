@@ -49,7 +49,7 @@ from data2g_runtime import (data2g_audio_device_selector,
                             local_host_arguments, local_host_command,
                             validate_data2g_ports)
 from on_air import SessionRecorder, card_reference, decoded_reference
-from card_views import DeckDialog, card_art, deck_events
+from card_views import DeckDialog, card_art, deck_events, deck_image
 from webserver import CompanionServer
 
 APP_ICON_PATH = Path(__file__).resolve().with_name("icon.png")
@@ -513,6 +513,7 @@ class CardCanvas(QWidget):
         self.drag_offset = (0, 0)
         self.setAcceptDrops(True)
         self.setMinimumSize(320, 320)
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.setMouseTracking(True)
 
     def sizeHint(self):
@@ -1149,6 +1150,9 @@ class MainWindow(QMainWindow):
         self.editor_dialog.resize(1080, 780)
         save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self.editor_dialog)
         save_shortcut.activated.connect(self.save_card)
+        self.paste_image_shortcut = QShortcut(QKeySequence("Ctrl+V"), self.canvas)
+        self.paste_image_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+        self.paste_image_shortcut.activated.connect(self.paste_card_image)
         self.tabs.addTab(self.make_exchange_tab(), "QSO")
         self.tabs.addTab(self.make_library_tab(), "My Cards")
         self.tabs.addTab(self.make_qso_log_tab(), "QSO Log")
@@ -1173,6 +1177,10 @@ class MainWindow(QMainWindow):
         self.export_card_button.setEnabled(False)
         self.export_card_button.clicked.connect(self.export_selected_card)
         heading.addWidget(self.export_card_button)
+        self.copy_card_button = QPushButton("Copy PNG")
+        self.copy_card_button.clicked.connect(self.copy_selected_card)
+        self.copy_card_button.setEnabled(False)
+        heading.addWidget(self.copy_card_button)
         duplicate = QPushButton("Duplicate"); duplicate.clicked.connect(self.duplicate_library_card); heading.addWidget(duplicate)
         delete = QPushButton("Delete"); delete.clicked.connect(self.delete_library_card); heading.addWidget(delete)
         layout.addLayout(heading)
@@ -1215,7 +1223,11 @@ class MainWindow(QMainWindow):
         self.export_qso_button = QPushButton("Export selected QSO…")
         self.export_qso_button.setEnabled(False)
         self.export_qso_button.clicked.connect(self.export_selected_qso)
-        controls.addWidget(self.export_qso_button); layout.addLayout(controls)
+        controls.addWidget(self.export_qso_button)
+        self.copy_qso_button = QPushButton("Copy PNG")
+        self.copy_qso_button.clicked.connect(self.copy_selected_qso)
+        self.copy_qso_button.setEnabled(False)
+        controls.addWidget(self.copy_qso_button); layout.addLayout(controls)
         self.log_gallery = QListWidget(); self.log_gallery.setViewMode(QListWidget.ViewMode.IconMode)
         self.log_gallery.setMovement(QListWidget.Movement.Static)
         self.log_gallery.setResizeMode(QListWidget.ResizeMode.Adjust)
@@ -1495,9 +1507,38 @@ class MainWindow(QMainWindow):
     def _update_export_buttons(self, *_):
         if hasattr(self, "export_card_button"):
             self.export_card_button.setEnabled(self._selected_library_item()[0] is not None)
+            self.copy_card_button.setEnabled(self.export_card_button.isEnabled())
         if hasattr(self, "export_qso_button"):
             self.export_qso_button.setEnabled(
                 hasattr(self, "log_gallery") and self.log_gallery.currentItem() is not None)
+            self.copy_qso_button.setEnabled(self.export_qso_button.isEnabled())
+
+    def copy_selected_card(self):
+        item, _widget = self._selected_library_item()
+        if item is None:
+            return
+        try:
+            data = json.loads(Path(item.data(Qt.ItemDataRole.UserRole)).read_text())
+            card = modem.Card(data["callsign"], data.get("grid", ""),
+                              [tuple(color) for color in data["palette"]], data["pixels"],
+                              data.get("card_id", 0xC0DE), data.get("width", 32), data.get("height", 32))
+            card.validate()
+            image = self.card_image({"card": data, "pixels": data["pixels"]})
+            QApplication.clipboard().setImage(image)
+            self.library_status.setText("Card image copied · paste into an image editor or message")
+        except Exception as exc:
+            QMessageBox.warning(self, "Couldn't copy card", str(exc))
+
+    def copy_selected_qso(self):
+        item = self.log_gallery.currentItem()
+        if item is None:
+            return
+        try:
+            entry = json.loads(Path(item.data(Qt.ItemDataRole.UserRole)).read_text())
+            QApplication.clipboard().setImage(deck_image(entry, self.card_image))
+            self.log_status.setText("QSO contact sheet copied · paste into an image editor or message")
+        except Exception as exc:
+            QMessageBox.warning(self, "Couldn't copy QSO", str(exc))
 
     def export_selected_card(self):
         item, _widget = self._selected_library_item()
@@ -1511,10 +1552,10 @@ class MainWindow(QMainWindow):
                               list(map(int, data["pixels"])), int(data.get("card_id", 0xC0DE)),
                               int(data.get("width", 32)), int(data.get("height", 32)))
             card.validate()
-            default_name = f"{source.stem}.json"
+            default_name = f"{source.stem}.png"
             target_name, file_filter = QFileDialog.getSaveFileName(
                 self, "Export card", str(DATA / "exports" / default_name),
-                "Pixel QSO card (*.json);;PNG image (*.png)")
+                "PNG image (*.png);;Pixel QSO card (*.json)")
             if not target_name:
                 return
             target = Path(target_name)
@@ -1551,20 +1592,25 @@ class MainWindow(QMainWindow):
                                for ch in str(entry.get("peer_callsign", "Unknown")))
             date = "".join(ch for ch in str(entry.get("started_at", ""))[:10]
                            if ch.isalnum() or ch == "-")
-            target_name, _ = QFileDialog.getSaveFileName(
-                self, "Export QSO archive", str(DATA / "exports" / f"qso-{callsign}-{date}.json"),
-                "Pixel QSO contact archive (*.json)")
+            target_name, file_filter = QFileDialog.getSaveFileName(
+                self, "Export QSO", str(DATA / "exports" / f"qso-{callsign}-{date}.png"),
+                "PNG contact sheet (*.png);;Pixel QSO contact archive (*.json)")
             if not target_name:
                 return
             target = Path(target_name)
             if target.resolve() == source.resolve():
                 QMessageBox.warning(self, "Couldn't export QSO", "Choose a different file from the saved contact archive.")
                 return
-            if target.suffix.lower() != ".json":
+            if "PNG" in file_filter:
+                target = target.with_suffix(".png")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if not deck_image(entry, self.card_image).save(str(target), "PNG"):
+                    raise OSError("Qt could not write the PNG contact sheet")
+            else:
                 target = target.with_suffix(".json")
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(source.read_bytes())
-            self.log_status.setText(f"Exported QSO archive to {target.name}")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(source.read_bytes())
+            self.log_status.setText(f"Exported QSO to {target.name}")
         except Exception as exc:
             QMessageBox.warning(self, "Couldn't export QSO", str(exc))
 
@@ -1719,7 +1765,7 @@ class MainWindow(QMainWindow):
         remove_placed = QPushButton("Remove placed stamp"); remove_placed.clicked.connect(self.remove_placed_stamp); side.addWidget(remove_placed)
         self.load_stamps()
         buttons = QHBoxLayout()
-        for label, handler in (("New", self.new_card), ("Open…", self.open_card), ("Save", self.save_card), ("Export WAV…", self.export_wav)):
+        for label, handler in (("New", self.new_card), ("Open…", self.open_card), ("Save", self.save_card), ("Paste image", self.paste_card_image), ("Export WAV…", self.export_wav)):
             b = QPushButton(label); b.clicked.connect(handler); buttons.addWidget(b)
         side.addLayout(buttons)
         side.addStretch()
@@ -2007,6 +2053,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing stamp", "That saved stamp could not be opened."); return
         self.place_stamp_image(image)
 
+    def paste_card_image(self):
+        image = QApplication.clipboard().image()
+        if image.isNull():
+            self.status.setText("No image on the clipboard. Copy an image first.")
+            return
+        self.place_stamp_image(image)
+
     def place_stamp_image(self, image):
         if image.width() > self.card.width or image.height() > self.card.height:
             image = self._fit_stamp_to_grid(image, min(16, self.card.width, self.card.height))
@@ -2284,7 +2337,7 @@ class MainWindow(QMainWindow):
         self.manual_stage_group = QButtonGroup(self); self.manual_stage_group.setExclusive(True)
         self.manual_stage_buttons = {}
         for stage, title in (("cq", "CQ"), ("exchange", "Exchange"),
-                              ("report73", "73 · with SNR"), ("final73", "73 · final")):
+                              ("report73", "RR73 · report"), ("final73", "73 · final")):
             combo = QComboBox(); combo.setIconSize(QSize(48, 48))
             combo.currentIndexChanged.connect(self._save_auto_stage_cards)
             combo.currentIndexChanged.connect(self._refresh_transfer_summary)
@@ -2308,6 +2361,9 @@ class MainWindow(QMainWindow):
         transfer_form.addRow(mode_form); transfer_form.addRow(self.profile_form_widget)
         transfer_form.addRow(self.role_widget); transfer_form.addRow(self.auto_stage_group)
         transfer_form.addRow(self.frequency_controls)
+        self.exchange_status = QLabel("CQ → Reply / Exchange → RR73 → 73\nCall CQ, or click Reply on a received CQ to start automatic sequencing.")
+        self.exchange_status.setWordWrap(True)
+        transfer_form.addRow(self.exchange_status)
         self.transfer_summary = QLabel(); self.transfer_summary.setWordWrap(True); self.transfer_summary.setStyleSheet("color:#a9b8ae; padding:4px")
         transfer_form.addRow(self.transfer_summary)
         self.tx_btn = QPushButton("Send selected stage"); self.tx_btn.setObjectName("primaryAction"); self.tx_btn.clicked.connect(self.transmit_exchange)
@@ -3421,13 +3477,18 @@ class MainWindow(QMainWindow):
         self.quick_draw_status.setVisible(not automatic and not beacon and not self.auto_armed)
         self.clear_quick_draw_button.setVisible(self.quick_reply_card is not None and not automatic and not beacon and not self.auto_armed)
         legacy = self.selected_mode() == "standard"
-        self.role_widget.setVisible(automatic)
+        self.role_widget.setVisible(False)
         self.auto_stage_group.setVisible(not beacon)
         for button in self.manual_stage_buttons.values():
             button.setEnabled(not automatic and not beacon)
+        for combo in self.stage_card_combos.values():
+            combo.setEnabled(not self.auto_armed)
         self.manual_card_widget.setVisible(not automatic and not beacon and legacy)
         self.manual_card_label.setVisible(not automatic and not beacon and legacy)
         self.auto_controls.setVisible(automatic)
+        self.auto_start_btn.setVisible(False)
+        self.auto_stop_btn.setVisible(self.auto_armed)
+        self.exchange_status.setVisible(automatic)
         self.manual_tx_controls.setVisible(not automatic and not beacon)
         self.cq_controls.setVisible(not beacon)
         self.tx_btn.setText("Send selected stage" if not automatic else "Transmit stage")
@@ -3456,12 +3517,19 @@ class MainWindow(QMainWindow):
             if state == "listen_cq":
                 stage = "cq" if getattr(self, "auto_role", "responder") == "responder" else "exchange"
         else:
+            self.exchange_status.setText("CQ → Reply / Exchange → RR73 → 73\nCall CQ, or click Reply on a received CQ to start automatic sequencing.")
             return
+        labels = {"send_cq": "Sending CQ", "listen_cq": "Listening for an exchange" if self.auto_role == "caller" else "Choose a CQ and click Reply",
+                  "send_exchange": "Sending exchange", "await_report73": "Waiting for RR73",
+                  "send_report73": "Sending RR73", "await_final73": "Waiting for final 73",
+                  "send_final73": "Sending final 73", "idle": "Contact complete"}
+        self.exchange_status.setText(labels.get(state, state) + (f" · {self.auto_peer}" if self.auto_peer else ""))
         button = buttons.get(stage)
         if button and not button.isChecked():
             button.setChecked(True)
-        self.auto_start_btn.setVisible(not self.auto_armed)
+        self.auto_start_btn.setVisible(False)
         self.auto_stop_btn.setVisible(self.auto_armed)
+        self.call_cq_button.setEnabled(not self.auto_peer)
 
     def selected_profile(self):
         return self.profile_combo.currentData() or modem.DEFAULT_PROFILE
@@ -3978,8 +4046,13 @@ class MainWindow(QMainWindow):
             return
         stage = card.get("message_type", "card")
         if stage == "cq":
-            next_stage = "exchange"
-        elif stage == "exchange":
+            if self.auto_armed or not self._assembly_verified(report):
+                return
+            self.exchange_mode.setCurrentIndex(1)
+            self.exchange_role.setCurrentIndex(1)
+            self.start_auto_exchange(reply_report=report)
+            return
+        if stage == "exchange":
             next_stage = "report73"
         elif stage == "73" and card.get("snr_db") is not None:
             next_stage = "final73"
@@ -3995,14 +4068,14 @@ class MainWindow(QMainWindow):
         self.transmit_exchange()
 
     def _show_reply_action(self, report):
-        self.reply_report = report
         card = report.get("card") or {}
         if self.auto_armed:
             self.reply_to_button.setVisible(False)
             self.quick_draw_button.setVisible(False)
             return
+        self.reply_report = report
         kind = card.get("message_type", "card")
-        next_stage = {"cq": f"Reply to {card.get('callsign') or 'CQ'}", "exchange": "Send 73 with SNR"}.get(kind)
+        next_stage = {"cq": f"Reply to {card.get('callsign') or 'CQ'}", "exchange": "Send RR73"}.get(kind)
         if kind == "73" and card.get("snr_db") is not None:
             next_stage = "Send final 73"
         self.reply_to_button.setText(next_stage or "Reply")
@@ -4021,7 +4094,7 @@ class MainWindow(QMainWindow):
             return "final73"
         return None
 
-    def _handle_contact_message(self, report):
+    def _handle_contact_message(self, report, *, initiated=False):
         card = report.get("card") or {}
         if not self._assembly_verified(report) or not card.get("avatar_burst"):
             return
@@ -4043,6 +4116,13 @@ class MainWindow(QMainWindow):
         if self.auto_peer and callsign != self.auto_peer:
             self.exchange_log.append(f"Ignoring {callsign}; current contact is with {self.auto_peer}.")
             return
+        expected = ((kind == "cq" and self.auto_role == "responder" and initiated and self.contact_stage == "listen_cq") or
+                    (kind == "exchange" and self.auto_role == "caller" and self.contact_stage == "listen_cq") or
+                    (kind == "73" and self.auto_role == "responder" and self.contact_stage == "await_report73") or
+                    (kind == "73" and self.auto_role == "caller" and self.contact_stage == "await_final73"))
+        if not expected:
+            return
+        self.reply_report = report
         if not self.auto_peer:
             self.auto_peer = callsign
         if kind == "cq" and self.auto_role == "responder":
@@ -4050,7 +4130,7 @@ class MainWindow(QMainWindow):
             self.contact_stage = "send_exchange"
             self._refresh_contact_stage_indicator()
             self.exchange_log.append(f"CQ received from {callsign}; sending exchange card.")
-            QTimer.singleShot(AUTO_REPLY_GUARD_MS, self.transmit_exchange)
+            self._schedule_contact_transmit()
         elif kind == "exchange" and self.auto_role == "caller":
             self.cq_timer.stop()
             if self.active_qso_log is None:
@@ -4062,17 +4142,24 @@ class MainWindow(QMainWindow):
             self.tx_snr_db = card.get("measured_snr_db")
             self.contact_stage = "send_report73"
             self._refresh_contact_stage_indicator()
-            self.exchange_log.append(f"Exchange received from {callsign}; sending 73 with measured SNR.")
-            QTimer.singleShot(AUTO_REPLY_GUARD_MS, self.transmit_exchange)
+            self.exchange_log.append(f"Exchange received from {callsign}; sending RR73 with measured SNR.")
+            self._schedule_contact_transmit()
         elif (kind == "73" and self.auto_role == "responder" and
               self.contact_stage == "await_report73"):
             self.contact_stage = "send_final73"
             self._refresh_contact_stage_indicator()
             report = "with reported SNR " + str(card["snr_db"]) if card.get("snr_db") is not None else "without an SNR report"
             self.exchange_log.append(f"73 {report} received from {callsign}; sending final 73.")
-            QTimer.singleShot(AUTO_REPLY_GUARD_MS, self.transmit_exchange)
-        elif kind == "73" and card.get("snr_db") is None and self.auto_role == "caller":
+            self._schedule_contact_transmit()
+        elif kind == "73" and self.auto_role == "caller":
             self._complete_contact()
+
+    def _schedule_contact_transmit(self):
+        generation, stage = self.auto_generation, self.contact_stage
+        def send():
+            if self.auto_armed and self.auto_generation == generation and self.contact_stage == stage:
+                self.transmit_exchange()
+        QTimer.singleShot(AUTO_REPLY_GUARD_MS, send)
 
     def _complete_contact(self):
         self.contact_stage = "idle"
@@ -4088,6 +4175,8 @@ class MainWindow(QMainWindow):
         self.auto_peer = ""
         self.last_cq_snapshot = None
         self.exchange_log.append("Contact exchange complete; all stage cards are in the QSO deck.")
+        if self.auto_armed and self.auto_role == "responder":
+            self.stop_auto_exchange("Automatic reply complete; listening for another CQ.")
         if self.auto_armed and self.auto_role == "caller":
             self.contact_stage = "listen_cq"
             self._refresh_contact_stage_indicator()
@@ -4347,7 +4436,7 @@ class MainWindow(QMainWindow):
             return
         self._start_tx_audio()
 
-    def start_auto_exchange(self):
+    def start_auto_exchange(self, *, reply_report=None):
         if os.environ.get("PIXELQSO_AUDIO_ROLE") == "websdr-rx":
             self.exchange_log.append("WebSDR window is receive-only; transmit manually in the TX window.")
             return
@@ -4403,9 +4492,12 @@ class MainWindow(QMainWindow):
                        self.rig_host, self.rig_port, self.rig_button, self.rig_refresh, self.output_device,
                        self.input_device, self.station_call, self.station_grid, self.audio_test_mode):
             widget.setEnabled(False)
+        self._update_exchange_controls()
         self._update_transfer_controls()
         self.exchange_log.append(f"Automatic {self.auto_role} flow armed.")
-        if self.auto_role == "caller": self.transmit_exchange()
+        if reply_report is not None:
+            self._handle_contact_message(reply_report, initiated=True)
+        elif self.auto_role == "caller": self.transmit_exchange()
         else: self.start_receive()
 
     def stop_auto_exchange(self, log_message="Automatic exchange stopped by operator."):
@@ -4414,6 +4506,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "call_cq_button"):
             with QSignalBlocker(self.call_cq_button): self.call_cq_button.setChecked(False)
             self.call_cq_button.setText("Call CQ")
+        self.cq_interval.setEnabled(True)
+        self.call_cq_button.setEnabled(True)
         self.auto_generation += 1
         self.auto_armed = False
         if self.data2g_tx_total:

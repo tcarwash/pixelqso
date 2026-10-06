@@ -784,8 +784,12 @@ class CardCanvas(QWidget):
 
     def mouseMoveEvent(self, event):
         if not event.buttons() & (Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton):
-            x, y = self.card_position(event.position().toPoint())
-            layer = self._hit_layer(x, y) if x is not None else None
+            point = event.position().toPoint()
+            x, y = self.card_position(point)
+            # The close control may cover transparent pixels or extend beyond a small stamp.
+            layer = (self.hover_layer if self.hover_layer is not None and
+                     self.hover_remove_rect.contains(point) else
+                     self._hit_layer(x, y) if x is not None else None)
             if layer != self.hover_layer:
                 self.hover_layer = layer
                 self._update_hover_remove_rect()
@@ -2255,22 +2259,6 @@ class MainWindow(QMainWindow):
         mode_form = QFormLayout()
         mode_form.addRow("Modem backend", self.backend_combo)
         mode_form.addRow("Transmission type", self.mode_combo)
-        self.audio_placement_combo = QComboBox()
-        for label, value in (("Near carrier", "near_carrier"), ("Centered at 1500 Hz", "centered"),
-                             ("Custom lowest tone", "custom")):
-            self.audio_placement_combo.addItem(label, value)
-        placement_index = self.audio_placement_combo.findData(self.settings.value("transfer/audio_placement", "custom"))
-        self.audio_placement_combo.setCurrentIndex(max(0, placement_index))
-        self.audio_low_hz = QSpinBox()
-        self.audio_low_hz.setRange(25, 2200)
-        self.audio_low_hz.setSuffix(" Hz")
-        self.audio_low_hz.setValue(int(self.settings.value("transfer/audio_low_hz", 300)))
-        self.audio_placement_combo.setToolTip("Audio frequency placement inside the radio passband; this is not an RF dial offset. Both stations should use the same setting for narrow Resilient modes.")
-        self.audio_low_hz.setToolTip("Lowest of the eight audio tones. The default is 300 Hz. Both stations should use the same value for narrow Resilient modes.")
-        self.audio_placement_combo.currentIndexChanged.connect(self._audio_placement_changed)
-        self.audio_low_hz.valueChanged.connect(self._audio_placement_changed)
-        mode_form.addRow("Audio placement", self.audio_placement_combo)
-        mode_form.addRow("Lowest tone", self.audio_low_hz)
         self.receive_all_modes = QCheckBox("Receive all local audio modem types")
         self.receive_all_modes.setChecked(self.settings.value("transfer/receive_all", True, type=bool))
         self.receive_all_modes.setToolTip(
@@ -2328,20 +2316,26 @@ class MainWindow(QMainWindow):
         self.manual_tx_controls = QWidget(); self.manual_tx_controls.setLayout(tx_row); transfer_form.addRow(self.manual_tx_controls)
         auto_row = QHBoxLayout()
         self.auto_start_btn = QPushButton("Start automatic exchange"); self.auto_start_btn.clicked.connect(self.start_auto_exchange); auto_row.addWidget(self.auto_start_btn)
-        self.auto_stop_btn = QPushButton("Stop exchange"); self.auto_stop_btn.setEnabled(False); self.auto_stop_btn.setVisible(False); self.auto_stop_btn.clicked.connect(self.stop_auto_exchange); auto_row.addWidget(self.auto_stop_btn)
+        self.auto_stop_btn = QPushButton("Stop exchange"); self.auto_stop_btn.setEnabled(False); self.auto_stop_btn.setVisible(False); self.auto_stop_btn.clicked.connect(lambda _checked=False: self.stop_auto_exchange()); auto_row.addWidget(self.auto_stop_btn)
         self.auto_controls = QWidget(); self.auto_controls.setLayout(auto_row); transfer_form.addRow(self.auto_controls)
         self.call_cq_button = QPushButton("Call CQ")
         self.call_cq_button.setCheckable(True)
         self.call_cq_button.toggled.connect(self._toggle_call_cq)
-        self.cq_interval = QSpinBox(); self.cq_interval.setRange(1, 60)
-        self.cq_interval.setValue(int(self.settings.value("transfer/cq_interval_minutes", 5)))
-        self.cq_interval.setSuffix(" min")
-        self.cq_interval.valueChanged.connect(lambda value: self.settings.setValue("transfer/cq_interval_minutes", value))
+        self.cq_interval = QSpinBox(); self.cq_interval.setRange(1, 3600)
+        self.cq_interval.setValue(int(self.settings.value("transfer/cq_interval_seconds", 5)))
+        self.cq_interval.setSuffix(" s")
+        self.cq_interval.valueChanged.connect(lambda value: self.settings.setValue("transfer/cq_interval_seconds", value))
         cq_row = QHBoxLayout(); cq_row.addWidget(self.call_cq_button); cq_row.addWidget(QLabel("Repeat every")); cq_row.addWidget(self.cq_interval)
         self.cq_controls = QWidget(); self.cq_controls.setLayout(cq_row); transfer_form.addRow(self.cq_controls)
-        self.beacon_freq = QSpinBox(); self.beacon_freq.setRange(100_000, 1_300_000_000); self.beacon_freq.setValue(28_200_000); self.beacon_freq.setSuffix(" Hz")
-        self.beacon_button = QPushButton("Transmit beacon"); self.beacon_button.clicked.connect(self.transmit_beacon)
-        beacon_form = QFormLayout(); beacon_form.addRow("Frequency", self.beacon_freq); beacon_form.addRow(self.beacon_button)
+        self.beacon_timer = QTimer(self)
+        self.beacon_timer.timeout.connect(self.transmit_beacon)
+        self.beacon_interval = QSpinBox(); self.beacon_interval.setRange(1, 1440)
+        self.beacon_interval.setValue(int(self.settings.value("transfer/beacon_interval_minutes", 5)))
+        self.beacon_interval.setSuffix(" min")
+        self.beacon_interval.valueChanged.connect(lambda value: self.settings.setValue("transfer/beacon_interval_minutes", value))
+        self.beacon_button = QPushButton("Start beacon"); self.beacon_button.setCheckable(True)
+        self.beacon_button.toggled.connect(self._toggle_beacon)
+        beacon_form = QFormLayout(); beacon_form.addRow("Send card every", self.beacon_interval); beacon_form.addRow(self.beacon_button)
         self.beacon_controls = QWidget(); self.beacon_controls.setLayout(beacon_form); transfer_form.addRow(self.beacon_controls)
         self._update_transfer_controls()
         self._refresh_transfer_summary()
@@ -3442,11 +3436,9 @@ class MainWindow(QMainWindow):
                      AdapterKind.FRAME_TRANSPORT)
         local_audio_test = self.audio_test_mode.isChecked() and not host_mode
         self.beacon_controls.setVisible(beacon and not local_audio_test)
-        self.beacon_freq.setVisible(not host_mode)
-        self.beacon_button.setText("Send beacon at host frequency" if host_mode else "Transmit beacon")
-        self.beacon_button.setToolTip(
-            "Uses the frequency configured on the Data2G host; Pixel QSO does not tune it."
-            if host_mode else "Tunes the connected local radio to the selected beacon frequency.")
+        if not beacon and self.beacon_button.isChecked():
+            self.beacon_button.setChecked(False)
+        self.beacon_button.setToolTip("Repeatedly sends the card at the current radio or Data2G host frequency.")
         self.frequency_controls.setVisible(not beacon and not local_audio_test and not host_mode)
 
     def _refresh_contact_stage_indicator(self):
@@ -3497,8 +3489,8 @@ class MainWindow(QMainWindow):
         return adapter_for_backend_selection(self.backend_combo.currentData(), mode_adapter)
 
     def selected_audio_placement(self):
-        placement = self.audio_placement_combo.currentData()
-        return self.audio_low_hz.value() if placement == "custom" else placement
+        # Local narrow modes use a fixed lowest tone; Data2G owns its audio settings.
+        return 300
 
     @staticmethod
     def _audio_device_identifier(device):
@@ -3572,12 +3564,6 @@ class MainWindow(QMainWindow):
         snapshot = self.card_assembly.preview_snapshot()
         if snapshot and snapshot.card.get("exact"):
             self.card_assembly.clear_current_preview()
-
-    def _audio_placement_changed(self, *_):
-        self.settings.setValue("transfer/audio_placement", self.audio_placement_combo.currentData())
-        self.settings.setValue("transfer/audio_low_hz", self.audio_low_hz.value())
-        self._update_transfer_controls()
-        self._refresh_transfer_summary()
 
     def receive_mode(self):
         return "auto" if self.receive_all_modes.isChecked() else self.selected_mode()
@@ -3657,11 +3643,6 @@ class MainWindow(QMainWindow):
         self._mode_has_explicit_selection = selected != fallback
 
     def _update_transfer_controls(self, *_):
-        if hasattr(self, "audio_placement_combo"):
-            narrow = mode_supports_audio_placement(self.selected_mode())
-            self.audio_placement_combo.setEnabled(narrow and not self.auto_armed)
-            self.audio_low_hz.setEnabled(narrow and not self.auto_armed and
-                                         self.audio_placement_combo.currentData() == "custom")
         if hasattr(self, "repeat_count"):
             backend = self.selected_backend()
             maximum = getattr(backend, "max_repeats", 20)
@@ -3829,7 +3810,7 @@ class MainWindow(QMainWindow):
         local_audio_test = (self.audio_test_mode.isChecked() and not data2g_selected)
         self.tx_btn.setText("Send test audio" if local_audio_test else "Send selected stage")
         if hasattr(self, "beacon_button"):
-            self.beacon_button.setEnabled(ready and not local_audio_test)
+            self.beacon_button.setEnabled((ready or self.beacon_button.isChecked()) and not local_audio_test)
 
     def rig_changed(self, connected, message):
         self.rig_status.setText(message)
@@ -4111,7 +4092,7 @@ class MainWindow(QMainWindow):
             self.contact_stage = "listen_cq"
             self._refresh_contact_stage_indicator()
             if self.call_cq_active:
-                self.cq_timer.start(self.cq_interval.value() * 60 * 1000)
+                self.cq_timer.start(self.cq_interval.value() * 1000)
             self.auto_should_listen = True
             QTimer.singleShot(300, self.start_receive)
 
@@ -4298,7 +4279,7 @@ class MainWindow(QMainWindow):
                 if sent_stage == "send_cq":
                     self.contact_stage = "listen_cq"
                     if self.call_cq_active:
-                        self.cq_timer.start(self.cq_interval.value() * 60 * 1000)
+                        self.cq_timer.start(self.cq_interval.value() * 1000)
                 elif sent_stage == "send_exchange":
                     self.contact_stage = "await_report73"
                 elif sent_stage == "send_report73":
@@ -4539,6 +4520,10 @@ class MainWindow(QMainWindow):
         self.rig.request("set_ptt 1", 1, lambda response: self._ptt_started(response, generation))
 
     def _ptt_started(self, response, generation=None):
+        if self.tx_label == "one-shot card beacon" and not self.beacon_pending:
+            if response == ["RPRT 0"]:
+                self.rig.request("set_ptt 0", 1, lambda _result: self.refresh_tx_button())
+            return
         if generation is not None and (not self.auto_armed or generation != self.auto_generation):
             if response == ["RPRT 0"]:
                 def cancelled(_result):
@@ -4675,7 +4660,7 @@ class MainWindow(QMainWindow):
                     self.contact_stage = "listen_cq"
                     self._refresh_contact_stage_indicator()
                     if self.call_cq_active:
-                        self.cq_timer.start(self.cq_interval.value() * 60 * 1000)
+                        self.cq_timer.start(self.cq_interval.value() * 1000)
                 elif sent_stage == "send_exchange":
                     self.contact_stage = "await_report73"
                     self._refresh_contact_stage_indicator()
@@ -4739,8 +4724,22 @@ class MainWindow(QMainWindow):
         self.exchange_log.append("Response window ended; checking the capture for a complete card.")
         self.stop_receive()
 
+    def _toggle_beacon(self, enabled):
+        self.beacon_interval.setEnabled(not enabled)
+        self.beacon_button.setText("Stop beacon" if enabled else "Start beacon")
+        if enabled:
+            self.beacon_timer.start(self.beacon_interval.value() * 60 * 1000)
+            self.transmit_beacon()
+        else:
+            self.beacon_timer.stop()
+            self.beacon_pending = False
+            self.exchange_log.append("Periodic beacon stopped.")
+
     def transmit_beacon(self):
-        """Send a one-shot card beacon through the selected backend."""
+        """Send the card at the current frequency, skipping a tick while busy."""
+        if (self.tx_timer.isActive() or self.ptt_active or self.data2g_tx_total or
+                getattr(self, "beacon_pending", False) or self.auto_armed):
+            return
         if os.environ.get("PIXELQSO_AUDIO_ROLE") == "websdr-rx":
             return
         if self.selected_adapter().capabilities.kind is AdapterKind.FRAME_TRANSPORT:
@@ -4755,39 +4754,23 @@ class MainWindow(QMainWindow):
                 backend, message_type="card", card_override=self.card, beacon=True)
             return
         if not self.rig.connected():
-            QMessageBox.warning(self, "CAT unavailable", "Connect to rigctld; PixelQSO will tune the radio to the selected beacon frequency.")
+            QMessageBox.warning(self, "CAT unavailable", "Connect to rigctld to send a beacon at the current radio frequency.")
             return
         self.beacon_pending = True
-        self.frequency.setValue(self.beacon_freq.value())
         self.tx_message_type = "card"
         self.tx_snr_db = None
         self.tx_btn.setEnabled(False)
-        self.beacon_button.setEnabled(False)
-        self.rig.request(f"set_freq {self.beacon_freq.value()}", 1, self._beacon_frequency_set)
-
-    def _beacon_frequency_set(self, response):
-        if not response or response[0] != "RPRT 0":
-            self.beacon_pending = False
-            self.refresh_tx_button()
-            self.beacon_button.setEnabled(True)
-            QMessageBox.warning(self, "Could not tune beacon frequency", "The radio did not accept the requested frequency: " + " ".join(response or []))
-            return
-        self.exchange_log.append(f"CAT tuned to beacon frequency {self.beacon_freq.value()} Hz; verifying frequency and mode.")
         self.read_rig(self._preflight_and_confirm_beacon)
 
     def _preflight_and_confirm_beacon(self, read_ok):
+        if not self.beacon_pending:
+            return
         if not read_ok or not self.rig.connected() or not self.rig_freq_read or not self.rig_mode:
             self.beacon_pending = False
             self.refresh_tx_button()
             QMessageBox.warning(self, "Rig readback failed", "Could not freshly read the rig frequency and mode. No beacon was started.")
             return
         actual_frequency = self.frequency.value()
-        selected_frequency = self.beacon_freq.value()
-        if abs(actual_frequency - selected_frequency) > 10:
-            self.beacon_pending = False
-            self.refresh_tx_button()
-            QMessageBox.warning(self, "Beacon frequency not reached", f"CAT reports {actual_frequency} Hz after the tune request; the target is {selected_frequency} Hz. No beacon was started.")
-            return
         if self.rig_mode not in {"USB", "USB-D", "PKTUSB", "DATA-U"}:
             self.beacon_pending = False
             self.refresh_tx_button()
@@ -4813,6 +4796,8 @@ class MainWindow(QMainWindow):
         self.read_rig(lambda ok: self._confirm_beacon_readback(ok, actual_frequency, self.rig_mode))
 
     def _confirm_beacon_readback(self, read_ok, frequency, mode):
+        if not self.beacon_pending:
+            return
         if (not read_ok or not self.rig.connected() or abs(self.frequency.value()-frequency) > 10
                 or self.rig_mode != mode or self.frequency.value() != self._confirmed_frequency
                 or self.rig_mode != self._confirmed_mode):
@@ -5411,6 +5396,7 @@ class MainWindow(QMainWindow):
                           "snr_db": snr_db}, "pixels": pixels}
 
     def closeEvent(self, event):
+        self.beacon_timer.stop()
         self._closing = True
         self.data2g_handoff_pending = False
         if self.data2g_connect_worker is not None:

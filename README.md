@@ -56,22 +56,53 @@ Data2G is the default backend. After connecting, Pixel QSO lists the host's
 advertised modes that its broadcast API accepts for this group and that have
 enough frame capacity for a Pixel QSO card fragment. Each entry shows the exact
 host mode name, bandwidth, and maximum application-frame size.
+Usable QPSK rate-1/2 modes near 1.2 kHz and 500 Hz, and a 16-QAM rate-1/2
+mode near 1.2 kHz, appear first as **Everyday HF**, **Narrow HF**, and
+**Faster · strong path** when available. A separator puts all other host modes
+below this shortlist. Your selected mode is retained; unavailable modes are
+never recommended.
 The transfer estimate reports RF burst airtime; Data2G host channel-access
 waits can make elapsed send time longer.
 
-Pixel QSO's local Resilient, Fast, weak-signal, and legacy modems are available
+Pixel QSO's local 8-FSK, QPSK, and progressive 4-FSK modems are available
 through **Experimental modems** after enabling **Show experimental modem modes**
-in Station settings. Local Resilient modes have an audio placement control that
+in Station settings. The narrow 8-FSK modes have an audio placement control that
 sets the lowest tone; 300 Hz is the recommended starting offset. It does not
 configure Data2G's audio placement.
+
+Four additional single-burst experiments are available: **8-FSK · soft LDPC**
+(5.005 s), **QPSK · LDPC + adaptive equalizer** (4.622 s),
+**8-FSK · strong RS + outer parity** (5.480 s), and **16-FSK · soft LDPC**
+(5.640 s). They carry fixed 32×32, eight-color cards. The outer-parity mode
+provides checked partial previews; the LDPC modes release pixels after whole-card
+verification. See [experimental burst formats and validation](docs/EXPERIMENTAL-BURSTS.md).
+
+The experimental names describe modulation and decoding: **8-FSK · RS + soft Chase**
+uses Reed–Solomon with bounded soft recovery; **8-FSK · raw pixels** leaves image
+pixels unchecked; **QPSK · soft LDPC** uses iterative soft decoding, with a
+separate copy-combining choice for repeated transmissions; **4-FSK · soft Viterbi**
+uses convolutional coding and progressive packets. Hover over a mode for its
+error correction and checksum details. Display names do not change saved mode
+IDs or on-air formats.
 
 Data2G reception is selected and decoded by the connected host; it does not
 follow Pixel QSO's transmit-mode selector. The host sends checked application
 frames to Pixel QSO, where they enter the shared card assembly path. Receive-all,
 waterfall, and local audio-placement controls apply only to Experimental modems.
 
-The existing Resilient modes keep the version 3 on-air format for compatibility
-with existing local-modem stations. **Resilient v4 · whole-image check** is a
+The receive panel shows **Receiving signal** and an animated activity bar as
+soon as the Data2G host reports a busy channel. This identifies modem activity;
+card identity and image coverage appear when checked application frames arrive.
+The host currently delivers those frames after decoding a burst, so Pixel QSO
+cannot preview pixels within an unfinished Data2G burst. Lost-frame notices
+show that another copy is needed. The Reed–Solomon 8-FSK modes expose checked identity
+headers and provisional pixels before the first image block finishes. Receive-all
+publishes its first preview while other decoders continue searching. QPSK tries
+the strongest copy before demodulating later copies, combining them if needed;
+it releases pixels only after the card checksum passes.
+
+The existing 8-FSK RS modes keep the version 3 on-air format for compatibility
+with existing local-modem stations. **8-FSK · RS + soft Chase · 400 baud · v4 CRC32** is a
 separate experimental mode and sends a new version 4 format. Version 4 protects
 the canonical packed palette raster's CRC32 and content tag in its header, adds
 explicit block position/count fields plus a content-tag binding in every block,
@@ -94,7 +125,7 @@ catalog, opens the shared `PIXELQSO` broadcast group, and validates the catalog
 against that group's `BCAST MODE` support before showing choices.
 
 For Data2G modes, Data2G owns radio audio and PTT. Pixel QSO releases its local
-audio receiver and CAT connection while the host is selected. Local Resilient
+audio receiver and CAT connection while the host is selected. Local 8-FSK
 modes continue using Pixel QSO's configured audio and CAT path. Do not connect
 Pixel QSO to a Data2G instance whose single-client command port is already
 owned by its GUI; use the managed host or a separate host instance instead.

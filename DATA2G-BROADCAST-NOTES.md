@@ -90,7 +90,7 @@ card JSON remains independent of that waveform format.
 
 The established local Resilient modes continue to transmit version 3 so an
 upgrade does not silently change their on-air format. The separate
-**Resilient v4 · whole-image check** experimental mode transmits version 4 and
+**8-FSK · RS + soft Chase · 400 baud · v4 CRC32** experimental mode transmits version 4 and
 requires a receiver that understands that version. Version 4 identifies the
 canonical raster after mapping pixels to the shared 8/16/32-color palette and
 packing those indices in raster order. Protected metadata carries its CRC32

@@ -2,19 +2,33 @@ import unittest
 
 from card_backends import (BACKENDS, DEFAULT_MODE_KEY, LEGACY_MODE_KEY, MODE_REGISTRY, audio_backend_keys, available_modes,
                            data2g_mode_key, get_backend, host_mode_backends, is_experimental_mode,
-                           mode_supports_audio_placement, normal_default_mode)
+                           mode_supports_audio_placement, normal_default_mode, recommended_data2g_modes)
 from data2g_transport import Data2GMode
 import cardmodem
 
 
 class ModePolicyTests(unittest.TestCase):
+    def test_recommended_modes_are_short_usable_and_ordered(self):
+        modes = [Data2GMode(name, bandwidth, 116, 64, 1.0, 60.0)
+                 for name, bandwidth in (("n4-qpsk-r1/2", 200),
+                     ("n10-qpsk-r1/2", 500), ("qpsk-r1/2", 1200),
+                     ("16qam-r1/2", 1200), ("qpsk-r1/5", 1200))]
+        catalog = host_mode_backends(modes, {mode.name for mode in modes})
+        shortlist = recommended_data2g_modes(catalog)
+        self.assertEqual([catalog[key].mode_name for key, _ in shortlist],
+                         ["qpsk-r1/2", "n10-qpsk-r1/2", "16qam-r1/2"])
+        catalog[data2g_mode_key("qpsk-r1/2")] = host_mode_backends([modes[2]], set())[data2g_mode_key("qpsk-r1/2")]
+        self.assertNotIn(data2g_mode_key("qpsk-r1/2"),
+                         dict(recommended_data2g_modes(catalog)))
+        self.assertEqual(recommended_data2g_modes({}), [])
+
     def test_registry_covers_backend_modes_and_records_policy(self):
         self.assertTrue(set(MODE_REGISTRY) - {LEGACY_MODE_KEY} <= set(BACKENDS))
         self.assertEqual(MODE_REGISTRY["resilient_100"].execution_path, "pixelqso_audio")
         self.assertTrue(is_experimental_mode("resilient_100"))
         self.assertTrue(MODE_REGISTRY["experimental_qpsk_5s"].experimental)
         self.assertEqual(MODE_REGISTRY["experimental_qpsk_5s"].availability, "scipy")
-        self.assertEqual(MODE_REGISTRY[LEGACY_MODE_KEY].label, "Legacy packet · experimental")
+        self.assertEqual(MODE_REGISTRY[LEGACY_MODE_KEY].label, "4-FSK · soft Viterbi · progressive packets")
         self.assertTrue(mode_supports_audio_placement("resilient_100"))
         self.assertFalse(mode_supports_audio_placement("fast_avatar_fec_v4"))
         self.assertEqual(get_backend("resilient_100", 300).profile.tones_hz[0], 300)

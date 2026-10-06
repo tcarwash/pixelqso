@@ -29,6 +29,56 @@ class LivePreviewTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_data2g_activity_precedes_frames_and_does_not_erase_completion(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), \
+                patch("app.QTimer.singleShot"):
+            window = MainWindow()
+            session = SimpleNamespace(port=2, close=Mock(), connected=False)
+            window.data2g_session = session
+            window._data2g_host_status(SimpleNamespace(port=2), "BUSY ON")
+            self.assertTrue(window.receive_preview_box.isHidden())
+            window._data2g_host_status(session, "BUSY ON")
+            self.assertFalse(window.receive_preview_box.isHidden())
+            self.assertIn("Signal detected", window.rx_status.text())
+            self.assertEqual(window.listen_indicator.text(), "● RECEIVING SIGNAL")
+            self.assertEqual(window.receive_progress.maximum(), 0)
+            self.assertFalse(window.receive_activity_timeout.isActive())
+            window._data2g_host_status(session, "BUSY OFF")
+            self.assertTrue(window.receive_activity_timeout.isActive())
+            source = pixel.example_card()
+            packed = pixel.minimal_avatar_payload(source)
+            with patch.object(window, "save_received_report"), \
+                    patch.object(window, "_record_received_card"), \
+                    patch.object(window, "_handle_contact_message"):
+                window._data2g_rx_frame(session, 2, fragment(source, packed, 0, packed))
+            self.assertEqual(window.receive_progress.maximum(), 100)
+            self.assertEqual(window.receive_progress.value(), 100)
+            self.assertFalse(window.receive_activity_timeout.isActive())
+            status = window.rx_status.text()
+            window._data2g_host_status(session, "BUSY OFF")
+            self.assertEqual(window.rx_status.text(), status)
+            window.close()
+
+    def test_receive_all_publishes_preview_before_next_decoder(self):
+        report = {"card": {"exact": False}, "pixels": []}
+        published = []
+        backend = SimpleNamespace(minimum_audio_seconds=lambda: 0)
+        adapter = Mock()
+        from backend_adapters import DecodeOutcome
+        def decode(*_args):
+            if adapter.decode_capture.call_count == 2:
+                self.assertEqual(published, [report])
+            return DecodeOutcome(report=report)
+        adapter.decode_capture.side_effect = decode
+        with patch("app.available_modes", return_value=[("resilient_100", backend),
+                                                       ("resilient_50", backend)]), \
+                patch("app.get_backend", return_value=backend), \
+                patch("app.local_adapter_for_mode", return_value=adapter):
+            outcome = decode_all_card_backends([0.0] * 32, 48000,
+                on_preview=published.append)
+        self.assertIs(outcome.report, report)
+        self.assertEqual(published, [report])
+
     def test_station_settings_follow_backend_ownership(self):
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), \
                 patch("app.QTimer.singleShot"), patch("app.QDialog.exec", return_value=0):

@@ -21,6 +21,51 @@ DATA2G_LENGTH_PREFIX_BYTES = 2
 DATA2G_MAX_CONTROL_CODEWORDS = 4
 DATA2G_MODE_KEY_PREFIX = "data2g_mode_"
 
+# Display names only; persistent IDs and on-air formats stay stable.
+EXPERIMENTAL_MODE_LABELS = {
+    "experimental_8fsk_ldpc": "8-FSK · soft LDPC · single burst",
+    "experimental_qpsk_equalized": "QPSK · LDPC + adaptive equalizer",
+    "experimental_8fsk_outer_rs": "8-FSK · strong RS + outer parity",
+    "experimental_16fsk_ldpc": "16-FSK · soft LDPC · single burst",
+    **{f"resilient_{baud}": f"8-FSK · RS + soft Chase · {baud} baud · ≈{9 * baud} Hz"
+       for baud in (100, 50, 25)},
+    "fast_avatar_fec": "8-FSK · RS + soft Chase · 400 baud · block CRC",
+    "fast_avatar_fec_v4": "8-FSK · RS + soft Chase · 400 baud · v4 CRC32",
+    "fast_avatar": "8-FSK · raw pixels · 400 baud · unchecked",
+    "experimental_qpsk_5s": "QPSK · soft LDPC · single burst",
+    "experimental_qpsk_combined": "QPSK · soft LDPC + copy combining",
+    "standard": "4-FSK · soft Viterbi · progressive packets",
+}
+
+EXPERIMENTAL_MODE_DESCRIPTIONS = {
+    "experimental_8fsk_ldpc": "One 5.005-second, 32×32 eight-color burst. "
+        "600-baud Gray-labelled 8-FSK, interleaved rate-matched LDPC, pilot timing, and whole-card CRC32. "
+        "Fixed tones 450–2550 Hz; requires a receiver supporting this experimental format.",
+    "experimental_qpsk_equalized": "One 4.622-second, 32×32 eight-color QPSK burst. "
+        "Soft LDPC with a 21-tap fractionally spaced adaptive equalizer, training, pilot and "
+        "confidence-gated decision-directed NLMS. Uses the existing QPSK wire format.",
+    "experimental_8fsk_outer_rs": "One 5.480-second, 32×32 eight-color burst. "
+        "400-baud 8-FSK with shortened RS(63,53), soft Chase recovery and per-shard CRC16. "
+        "Outer systematic RS(16,12) reconstructs up to four missing shards; whole-card CRC32 gates completion. "
+        "Checked pixels appear early. Fixed tones 800–2200 Hz; new experimental wire format.",
+    "experimental_16fsk_ldpc": "One 5.640-second, 32×32 eight-color burst. "
+        "400-baud Gray-labelled 16-FSK, interleaved rate-matched LDPC, pilot timing and whole-card CRC32. "
+        "Fixed tones 375–2625 Hz; overlapping tones trade bandwidth for decoder difficulty. New experimental wire format.",
+    **{key: "8-tone FSK with shortened Reed–Solomon RS(63,61), bounded soft-decision "
+       "Chase recovery, and per-block CRC16. Provisional pixels appear before block verification."
+       for key in ("resilient_100", "resilient_50", "resilient_25", "fast_avatar_fec")},
+    "fast_avatar_fec_v4": "8-tone FSK with Reed–Solomon and soft Chase recovery. "
+        "Version 4 binds blocks to the image and verifies the whole raster with CRC32 and a content tag.",
+    "fast_avatar": "8-tone FSK with a protected identity header and hard-decision raw image pixels. "
+        "Image pixels have no FEC or checksum verification.",
+    "experimental_qpsk_5s": "Shaped QPSK with soft-decision LDPC decoding and whole-card CRC32. "
+        "Sends one 4.622-second burst; the receiver can combine copies when needed.",
+    "experimental_qpsk_combined": "Shaped QPSK with soft-decision LDPC decoding and whole-card CRC32. "
+        "Sends repeated bursts; the receiver combines noise-weighted soft bit evidence when needed.",
+    "standard": "4-tone FSK with rate-1/2 K=7 convolutional coding, soft-decision Viterbi decoding, "
+        "packet CRC16, and soft combining across repeated packets. Image detail arrives progressively.",
+}
+
 
 class CardBackend(Protocol):
     key: str
@@ -82,7 +127,8 @@ class AvatarBackend:
     def minimum_audio_seconds(self):
         header = (pixel.AVATAR_META_V4_TONE_COUNT if self.wire_version == 4
                   else pixel.AVATAR_META_TONE_COUNT)
-        symbols = len(pixel.FRAME_SYNC) + header + (132 if self.checked else 32)
+        # A protected identity is useful before the first image block finishes.
+        symbols = len(pixel.FRAME_SYNC) + header
         return symbols / self.profile.baud
 
 
@@ -216,6 +262,31 @@ def host_mode_backends(modes, supported_names=None):
     return result
 
 
+def recommended_data2g_modes(backends):
+    """Small HF shortlist, resolved only from usable advertised host modes."""
+    recommended = []
+    used = set()
+    for role, suffix, target, ceiling in (
+            ("Everyday HF", "qpsk-r1/2", 1200, None),
+            ("Narrow HF", "qpsk-r1/2", 500, 500),
+            ("Faster · strong path", "16qam-r1/2", 1200, None)):
+        candidates = [(key, backend) for key, backend in backends.items()
+                      if backend.usable and key not in used and
+                      (backend.mode_name == suffix or backend.mode_name.endswith("-" + suffix)) and
+                      (ceiling is None or backend.mode.bandwidth_hz <= ceiling)]
+        if not candidates:
+            continue
+        key, _backend = min(candidates, key=lambda item: (
+            abs(item[1].mode.bandwidth_hz - target), item[1].mode_name))
+        used.add(key)
+        recommended.append((key, role))
+    if not recommended:
+        key = preferred_data2g_mode_key(backends, "robust")
+        if key in backends and backends[key].usable:
+            recommended.append((key, "HF starting point"))
+    return recommended
+
+
 def preferred_data2g_mode_key(backends, preset="robust"):
     """Resolve legacy Robust/Fast preferences against a dynamic host catalog."""
     usable = [(key, backend) for key, backend in backends.items() if backend.usable]
@@ -258,7 +329,7 @@ def preferred_data2g_mode_key(backends, preset="robust"):
 @dataclass(frozen=True)
 class WeakSignalBackend:
     key: str = "experimental_qpsk_5s"
-    label: str = "Weak signal · 32×32 · experimental"
+    label: str = EXPERIMENTAL_MODE_LABELS["experimental_qpsk_5s"]
     checked: bool = True
     max_repeats: int = 1
 
@@ -286,7 +357,7 @@ class WeakSignalBackend:
 @dataclass(frozen=True)
 class WeakSignalCombinedBackend(WeakSignalBackend):
     key: str = "experimental_qpsk_combined"
-    label: str = "Weak signal · combined copies · experimental"
+    label: str = EXPERIMENTAL_MODE_LABELS["experimental_qpsk_combined"]
     max_repeats: int = 8
 
     def encode(self, card, repeats, message_type, snr_db):
@@ -303,17 +374,54 @@ class WeakSignalCombinedBackend(WeakSignalBackend):
         return repeats * weak.seconds()
 
 
+@dataclass(frozen=True)
+class ExperimentalBurstBackend:
+    """New single-burst experiments; codecs stay lazy and CPU-only."""
+    key: str
+    checked: bool = True
+    max_repeats: int = 1
+
+    @property
+    def label(self):
+        return EXPERIMENTAL_MODE_LABELS[self.key]
+
+    def encode(self, card, repeats, message_type, snr_db):
+        if repeats != 1:
+            raise ValueError("This experimental modem sends one burst")
+        import experimental_burst_modem as burst
+        return burst.encode(self.key, card, message_type, snr_db)
+
+    def estimate_seconds(self, card, repeats):
+        if repeats != 1:
+            raise ValueError("This experimental modem sends one burst")
+        import weak_signal_modem as weak
+        import experimental_burst_modem as burst
+        weak.packet(card)
+        return burst.seconds(self.key)
+
+    def minimum_audio_seconds(self):
+        import experimental_burst_modem as burst
+        return burst.minimum_seconds(self.key)
+
+    def decode(self, audio, sample_rate):
+        import experimental_burst_modem as burst
+        return burst.decode(self.key, audio, sample_rate)
+
+
 # The two legacy keys are retained only to migrate saved preferences and to
 # represent the not-yet-discovered Data2G selection before a host connects.
 BACKENDS: dict[str, CardBackend] = {
+    **{key: ExperimentalBurstBackend(key) for key in (
+        "experimental_8fsk_ldpc", "experimental_qpsk_equalized",
+        "experimental_8fsk_outer_rs", "experimental_16fsk_ldpc")},
     "experimental_qpsk_5s": WeakSignalBackend(),
     "experimental_qpsk_combined": WeakSignalCombinedBackend(),
-    "fast_avatar": AvatarBackend("fast_avatar", "Fast · unverified · experimental", False),
-    "fast_avatar_fec": AvatarBackend("fast_avatar_fec", "Resilient · 400 baud · experimental", True),
-    "fast_avatar_fec_v4": AvatarBackend("fast_avatar_fec_v4", "Resilient v4 · whole-image check · experimental", True,
+    "fast_avatar": AvatarBackend("fast_avatar", EXPERIMENTAL_MODE_LABELS["fast_avatar"], False),
+    "fast_avatar_fec": AvatarBackend("fast_avatar_fec", EXPERIMENTAL_MODE_LABELS["fast_avatar_fec"], True),
+    "fast_avatar_fec_v4": AvatarBackend("fast_avatar_fec_v4", EXPERIMENTAL_MODE_LABELS["fast_avatar_fec_v4"], True,
                                          wire_version=4),
     **{f"resilient_{baud}": AvatarBackend(
-        f"resilient_{baud}", f"Resilient · ≈{9 * baud} Hz · {baud} baud", True,
+        f"resilient_{baud}", EXPERIMENTAL_MODE_LABELS[f"resilient_{baud}"], True,
         pixel.ModemProfile(f"avatar-{baud}", f"Narrow avatar · {baud} baud", baud,
                            tuple((i + 1) * baud for i in range(8)), 9 * baud))
        for baud in (100, 50, 25)},
@@ -350,15 +458,18 @@ class ModeSpec:
 # BACKENDS; this policy remains the source of ordering, visibility, execution
 # path, and dependency/connection requirements.
 MODE_REGISTRY: dict[str, ModeSpec] = {
-    "resilient_100": ModeSpec("resilient_100", "Resilient · 900 Hz · 100 baud · experimental", True, "pixelqso_audio", supports_audio_placement=True),
-    "resilient_50": ModeSpec("resilient_50", "Resilient · 450 Hz · 50 baud · experimental", True, "pixelqso_audio", supports_audio_placement=True),
-    "resilient_25": ModeSpec("resilient_25", "Resilient · 225 Hz · 25 baud · experimental", True, "pixelqso_audio", supports_audio_placement=True),
-    "fast_avatar_fec": ModeSpec("fast_avatar_fec", "Resilient · 400 baud · experimental", True, "pixelqso_audio"),
-    "fast_avatar_fec_v4": ModeSpec("fast_avatar_fec_v4", "Resilient v4 · whole-image check · experimental", True, "pixelqso_audio"),
-    "fast_avatar": ModeSpec("fast_avatar", "Fast · experimental", True, "pixelqso_audio"),
-    "experimental_qpsk_5s": ModeSpec("experimental_qpsk_5s", "Weak signal · experimental", True, "pixelqso_audio", "scipy"),
-    "experimental_qpsk_combined": ModeSpec("experimental_qpsk_combined", "Weak signal combined · experimental", True, "pixelqso_audio", "scipy"),
-    "standard": ModeSpec("standard", "Legacy packet · experimental", True, "pixelqso_audio"),
+    **{key: ModeSpec(key, EXPERIMENTAL_MODE_LABELS[key], True, "pixelqso_audio", "scipy")
+       for key in ("experimental_8fsk_ldpc", "experimental_qpsk_equalized",
+                   "experimental_8fsk_outer_rs", "experimental_16fsk_ldpc")},
+    "resilient_100": ModeSpec("resilient_100", EXPERIMENTAL_MODE_LABELS["resilient_100"], True, "pixelqso_audio", supports_audio_placement=True),
+    "resilient_50": ModeSpec("resilient_50", EXPERIMENTAL_MODE_LABELS["resilient_50"], True, "pixelqso_audio", supports_audio_placement=True),
+    "resilient_25": ModeSpec("resilient_25", EXPERIMENTAL_MODE_LABELS["resilient_25"], True, "pixelqso_audio", supports_audio_placement=True),
+    "fast_avatar_fec": ModeSpec("fast_avatar_fec", EXPERIMENTAL_MODE_LABELS["fast_avatar_fec"], True, "pixelqso_audio"),
+    "fast_avatar_fec_v4": ModeSpec("fast_avatar_fec_v4", EXPERIMENTAL_MODE_LABELS["fast_avatar_fec_v4"], True, "pixelqso_audio"),
+    "fast_avatar": ModeSpec("fast_avatar", EXPERIMENTAL_MODE_LABELS["fast_avatar"], True, "pixelqso_audio"),
+    "experimental_qpsk_5s": ModeSpec("experimental_qpsk_5s", EXPERIMENTAL_MODE_LABELS["experimental_qpsk_5s"], True, "pixelqso_audio", "scipy"),
+    "experimental_qpsk_combined": ModeSpec("experimental_qpsk_combined", EXPERIMENTAL_MODE_LABELS["experimental_qpsk_combined"], True, "pixelqso_audio", "scipy"),
+    "standard": ModeSpec("standard", EXPERIMENTAL_MODE_LABELS["standard"], True, "pixelqso_audio"),
 }
 MODE_ORDER = tuple(MODE_REGISTRY)
 EXPERIMENTAL_MODE_KEYS = frozenset(key for key, spec in MODE_REGISTRY.items() if spec.experimental)

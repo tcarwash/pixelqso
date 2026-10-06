@@ -34,6 +34,8 @@ hidden = [
     "weak_signal_modem",
     "weak_signal_ldpc",
     "weak_signal_ldpc_data",
+    "experimental_burst_modem",
+    "experimental_fec",
     "webserver",
     "PySide6.QtNetwork",
     "PySide6.QtMultimedia",

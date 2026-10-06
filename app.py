@@ -41,7 +41,8 @@ from card_backends import (BACKENDS, DEFAULT_MODE_KEY, LEGACY_MODE_KEY, MODE_REG
                            available_modes, get_backend,
                            data2g_mode_name, host_mode_backends, is_card_backend, is_experimental_mode,
                            is_data2g_mode_key, mode_supports_audio_placement,
-                           preferred_data2g_mode_key, register_data2g_mode_backends)
+                           preferred_data2g_mode_key, recommended_data2g_modes,
+                           register_data2g_mode_backends, EXPERIMENTAL_MODE_DESCRIPTIONS)
 from card_transfer import CardAssemblyService
 from data2g_transport import Data2GMode
 from data2g_runtime import (data2g_audio_device_selector,
@@ -158,6 +159,7 @@ class RigctlClient(QObject):
 
 class DecodeSignals(QObject):
     finished = Signal(object)
+    preview = Signal(object)
 
 
 class Data2GSignals(QObject):
@@ -292,7 +294,8 @@ class RxAudioWaterfall(QWidget):
 
 
 def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
-                             preferred_mode=None, include_experimental=False):
+                             preferred_mode=None, include_experimental=False,
+                             on_preview=None):
     """Try the selected format first, then fall back to all installed formats."""
     preview = None
     last_failure = None
@@ -323,15 +326,17 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
             report = outcome.report
             if report["card"].get("exact"):
                 return DecodeOutcome(report=report)
-            if preview is None:
+            if preview is None or (preview.get("receive_activity") and not report.get("receive_activity")):
                 preview = report
+                if on_preview is not None:
+                    on_preview(report)
     # The receive-all path includes the legacy packet modem after all card
     # waveform adapters have had a chance to return a complete card.
     if len(audio) >= sample_rate:
         legacy = local_adapter_for_mode(LEGACY_MODE_KEY).decode_legacy_audio(
             audio, sample_rate, "auto")
         if legacy.report is not None:
-            if legacy.report["card"].get("exact") or preview is None:
+            if legacy.report["card"].get("exact") or preview is None or preview.get("receive_activity"):
                 return legacy
         elif (legacy.failure and legacy.failure.kind is DecodeFailureKind.BACKEND_ERROR
               and preview is None):
@@ -385,11 +390,15 @@ class DecodeWorker(QRunnable):
                 if outcome.failure:
                     self.signals.finished.emit((str(self.path), None, outcome.failure))
                     return
+                if outcome.report.get("receive_activity"):
+                    raise ValueError("Synchronization found, but the capture has no decoded card data yet")
                 self.signals.finished.emit((str(self.path), outcome.report, None))
                 return
             if is_card_backend(self.mode):
                 outcome = local_adapter_for_mode(self.mode).decode_capture(
                     get_backend(self.mode, self.audio_placement), audio, sr)
+                if outcome.report and outcome.report.get("receive_activity"):
+                    raise ValueError("Synchronization found, but the capture has no decoded card data yet")
                 self.signals.finished.emit((str(self.path), outcome.report, outcome.failure))
                 return
             raise ValueError(f"No decoder is registered for mode {self.mode!r}")
@@ -425,12 +434,14 @@ class LiveDecodeWorker(QRunnable):
             audio = np.frombuffer(self.samples, dtype="<i2").astype(np.float32) / 32768.0
             if self.mode == "auto":
                 outcome = decode_all_card_backends(audio, self.sample_rate, self.audio_placement,
-                                                   self.preferred_mode, self.include_experimental)
+                                                   self.preferred_mode, self.include_experimental,
+                                                   on_preview=lambda report: self.signals.preview.emit(
+                                                       (self.generation, report)))
                 if outcome.failure:
                     self._finish(None, False, outcome.failure, started)
                     return
                 result = outcome.report
-                result["valid_packet_count"] = 0
+                result.setdefault("valid_packet_count", 0)
                 self._finish(result, bool(result["card"].get("exact")), None, started)
                 return
             if self.mode == LEGACY_MODE_KEY:
@@ -450,9 +461,9 @@ class LiveDecodeWorker(QRunnable):
                     return
                 result = outcome.report
                 card = result["card"]
-                self._finish({"valid_packet_count": 0,
-                    "card": card, "pixels": result["pixels"], "fresh_packets": [],
-                    "receive_profile": result["receive_profile"]}, bool(card.get("exact")), None, started)
+                result.setdefault("valid_packet_count", 0)
+                result.setdefault("fresh_packets", [])
+                self._finish(result, bool(card.get("exact")), None, started)
                 return
             # Compatibility fallback for an unregistered legacy selection.
             # Keep packet parsing and its integrity rules inside the adapter.
@@ -1132,6 +1143,10 @@ class MainWindow(QMainWindow):
         self.rx_timer = QTimer(self); self.rx_timer.setInterval(200); self.rx_timer.timeout.connect(self._drain_rx)
         self.live_preview_timeout = QTimer(self); self.live_preview_timeout.setSingleShot(True)
         self.live_preview_timeout.timeout.connect(self._return_to_session_wall)
+        self.receive_activity_timeout = QTimer(self)
+        self.receive_activity_pending = False
+        self.receive_activity_timeout.setSingleShot(True)
+        self.receive_activity_timeout.timeout.connect(self._receive_activity_expired)
         self.auto_receive_timer = QTimer(self); self.auto_receive_timer.setSingleShot(True)
         self.auto_receive_timer.timeout.connect(self._auto_receive_timeout)
         self.cq_timer = QTimer(self); self.cq_timer.setSingleShot(True)
@@ -2319,11 +2334,13 @@ class MainWindow(QMainWindow):
         self.receive_all_modes.toggled.connect(lambda value: self.settings.setValue("transfer/receive_all", value))
         mode_form.addRow("Receive", self.receive_all_modes)
         self.receive_all_modes_label = mode_form.labelForField(self.receive_all_modes)
-        self.repeat_count = QSpinBox(); self.repeat_count.setRange(1, 20); self.repeat_count.setValue(int(self.settings.value("transfer/repeats", 3)))
+        # Retain saved repetition and mode limits without exposing another
+        # main-panel choice. Single-burst modes still clamp this to one.
+        self.repeat_count = QSpinBox(self); self.repeat_count.hide()
+        self.repeat_count.setRange(1, 20); self.repeat_count.setValue(int(self.settings.value("transfer/repeats", 3)))
         self.repeat_count.setToolTip("Repeat the same one-way burst. The receiver combines independently checked image blocks.")
         self.repeat_count.valueChanged.connect(lambda value: self.settings.setValue("transfer/repeats", value))
         self.repeat_count.valueChanged.connect(self._refresh_transfer_summary)
-        mode_form.addRow("Copies", self.repeat_count)
         self.card_combo = QComboBox()
         self.card_combo.setIconSize(QSize(42, 42))
         self.card_combo.currentIndexChanged.connect(self._refresh_transfer_summary)
@@ -3016,6 +3033,10 @@ class MainWindow(QMainWindow):
                 "Automatic exchange stopped because the Data2G host disconnected.")
         self.data2g_session = None
         self.data2g_channel_busy = False
+        if self.receive_activity_pending:
+            self._hide_receive_preview()
+        if self.backend_combo.currentData() == "data2g":
+            self.listen_indicator.setText("● HOST DISCONNECTED")
         self.data2g_modes = {}
         register_data2g_mode_backends(self.data2g_modes)
         self.data2g_host_connect.setEnabled(True)
@@ -3111,6 +3132,16 @@ class MainWindow(QMainWindow):
             return
         if message in {"BUSY ON", "BUSY OFF"}:
             self.data2g_channel_busy = message == "BUSY ON"
+            if (self.data2g_tx_waiting is None and not self.ptt_active and
+                    (self.data2g_channel_busy or self.receive_activity_pending)):
+                self._show_receive_activity(
+                    "Signal detected · waiting for Data2G card frames"
+                    if self.data2g_channel_busy else
+                    "Signal ended · Data2G is checking the received burst")
+                if self.data2g_channel_busy:
+                    self.receive_activity_timeout.stop()
+                else:
+                    self.receive_activity_timeout.start(15000)
             if self.data2g_tx_waiting is not None:
                 timeout = (DATA2G_BUSY_ACK_TIMEOUT_MS if self.data2g_channel_busy
                            else self.data2g_ack_timeout_ms)
@@ -3119,6 +3150,17 @@ class MainWindow(QMainWindow):
                     "Data2G host is holding the queued frame while the channel is busy"
                     if self.data2g_channel_busy else
                     "Data2G channel is clear · awaiting host ACK")
+        fields = message.split()
+        if (len(fields) >= 3 and fields[0] == "BCAST" and
+                fields[1] == str(DATA2G_ADAPTER.group_port(session))):
+            if fields[2] == "HEARD":
+                snapshot = self.card_assembly.preview_snapshot()
+                if not snapshot or not snapshot.card.get("exact"):
+                    self._show_receive_activity(
+                        f"Receiving Data2G burst from {fields[3] if len(fields) > 3 else 'a station'} · checking card frames")
+                    self.receive_activity_timeout.start(15000)
+            elif fields[2] in {"LOST", "DROPPED"}:
+                self.rx_status.setText("Data2G lost card frames · waiting for another copy")
         if message.startswith(("BCAST ", "PTT ", "BUSY ", "BUFFER ", "MODE ")):
             self.exchange_log.append("Data2G: " + message)
             if self.on_air:
@@ -3596,6 +3638,10 @@ class MainWindow(QMainWindow):
                               verified_coverage=None):
         if image is None:
             return
+        self.receive_activity_timeout.stop()
+        self.receive_activity_pending = False
+        self.receive_progress.setRange(0, 100)
+        self.listen_indicator.setText("● LISTENING" if exact else "● RECEIVING CARD")
         self.receive_view.setPixmap(QPixmap.fromImage(image).scaled(
             184, 184, Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.FastTransformation))
@@ -3616,8 +3662,34 @@ class MainWindow(QMainWindow):
             self.live_preview_timeout.stop()
 
     def _hide_receive_preview(self):
+        self.receive_activity_timeout.stop()
+        self.receive_activity_pending = False
         self.live_preview_timeout.stop()
         self.receive_preview_box.hide()
+
+    def _show_receive_activity(self, message):
+        self.receive_activity_pending = True
+        self.listen_indicator.setText("● RECEIVING SIGNAL")
+        self.rx_status.setText(message)
+        self.live_preview_timeout.stop()
+        snapshot = self.card_assembly.preview_snapshot()
+        if not snapshot or snapshot.card.get("exact"):
+            self.receive_view.clear()
+            self.receive_view.setText("Receiving signal…\nWaiting for card data")
+            self.receive_progress.setRange(0, 0)
+        self.receive_preview_box.show()
+
+    def _receive_activity_expired(self):
+        self.receive_activity_pending = False
+        snapshot = self.card_assembly.preview_snapshot()
+        if snapshot and not snapshot.card.get("exact"):
+            self._show_receive_preview(self.card_image(
+                {"card": dict(snapshot.card), "pixels": list(snapshot.pixels)}),
+                coverage=snapshot.coverage, verified_coverage=snapshot.verified_pixels)
+        else:
+            self._hide_receive_preview()
+        self.rx_status.setText("Listening · waiting for card data or another copy")
+        self.listen_indicator.setText("● LISTENING")
 
     @staticmethod
     def _coverage_percent(coverage):
@@ -3665,12 +3737,16 @@ class MainWindow(QMainWindow):
 
     def _set_mode_options(self, preferred):
         data2g = self.backend_combo.currentData() == "data2g"
+        recommendations = dict(recommended_data2g_modes(self.data2g_modes)) if data2g else {}
         show_experimental = self.show_experimental_modes.isChecked()
         if data2g:
             entries = list(self.data2g_modes.items())
             if not entries:
                 entries = [("data2g_1200_robust", Data2GHostBackend(
                     "data2g_1200_robust", "Data2G · connect to discover modes"))]
+            if recommendations:
+                entries = ([(key, self.data2g_modes[key]) for key in recommendations] +
+                           [(key, backend) for key, backend in entries if key not in recommendations])
             fallback = "data2g_1200_robust"
         elif show_experimental:
             entries = [(key, backend) for key, backend in
@@ -3694,8 +3770,17 @@ class MainWindow(QMainWindow):
         with QSignalBlocker(self.mode_combo):
             self.mode_combo.clear()
             for key, backend in entries:
-                label = "Legacy packet · experimental" if key == LEGACY_MODE_KEY else backend.label
+                if recommendations and key not in recommendations and self.mode_combo.count() == len(recommendations):
+                    self.mode_combo.insertSeparator(self.mode_combo.count())
+                    self.mode_combo.addItem("All other Data2G modes")
+                    self.mode_combo.model().item(self.mode_combo.count() - 1).setEnabled(False)
+                label = MODE_REGISTRY[key].label if key == LEGACY_MODE_KEY else backend.label
+                if key in recommendations:
+                    label = f"★ {recommendations[key]} · {backend.label.removeprefix('Data2G · ')}"
                 self.mode_combo.addItem(label, key)
+                if key in EXPERIMENTAL_MODE_DESCRIPTIONS:
+                    self.mode_combo.setItemData(self.mode_combo.count() - 1,
+                        EXPERIMENTAL_MODE_DESCRIPTIONS[key], Qt.ItemDataRole.ToolTipRole)
                 if (MODE_REGISTRY.get(key) is not None and
                         MODE_REGISTRY[key].adapter == DATA2G_ADAPTER.key and
                         not getattr(backend, "usable", False)):
@@ -3729,6 +3814,8 @@ class MainWindow(QMainWindow):
                                         "Combine soft evidence from repeated 4.622-second bursts; 4 copies take 18.488 seconds."
                                         if self.selected_mode() == "experimental_qpsk_combined" else
                                         "Repeat the same one-way burst. The receiver combines independently checked image blocks.")
+            if maximum == 1 and self.selected_mode() in EXPERIMENTAL_MODE_DESCRIPTIONS:
+                self.repeat_count.setToolTip(EXPERIMENTAL_MODE_DESCRIPTIONS[self.selected_mode()])
         if hasattr(self, "profile_combo"):
             legacy = self.selected_mode() == "standard"
             self.profile_combo.setEnabled(not self.auto_armed and legacy)
@@ -3776,7 +3863,7 @@ class MainWindow(QMainWindow):
                     " · host channel-access waits can extend elapsed time · "
                     "radio/audio/PTT are controlled by the Data2G host", True)
         except Exception as exc:
-            set_summary(str(exc) if self.selected_mode() == "experimental_qpsk_5s" else
+            set_summary(str(exc) if getattr(self.selected_backend(), "max_repeats", None) == 1 else
                         "Choose a card and burst type to see estimated send time.",
                         self.selected_adapter().capabilities.kind is AdapterKind.FRAME_TRANSPORT)
 
@@ -4962,9 +5049,9 @@ class MainWindow(QMainWindow):
                 checked = sum(bool(value) for value in card["received_blocks"])
                 total_blocks = len(card.get("received_blocks") or [])
                 quality = "all blocks verified" if card.get("exact") else f"{checked}/{total_blocks} verified blocks; missing blocks remain blank"
-                self.rx_status.setText(f"Resilient burst · {quality} · saved {result_path.name}")
+                self.rx_status.setText(f"8-FSK RS burst · {quality} · saved {result_path.name}")
             else:
-                self.rx_status.setText(f"Raw burst · identity decoded, pixels unverified · saved {result_path.name}")
+                self.rx_status.setText(f"8-FSK raw burst · identity decoded, pixels unverified · saved {result_path.name}")
         card_key = received_card_key(report)
         handled_live = auto_capture and card_key in self.auto_live_handled_cards
         if handled_live:
@@ -5190,11 +5277,33 @@ class MainWindow(QMainWindow):
                                   self.receive_mode(), self.selected_audio_placement(), self.selected_mode(),
                                   self.show_experimental_modes.isChecked())
         worker.signals.finished.connect(self._live_decode_finished)
+        worker.signals.preview.connect(self._live_decode_preview)
         self.live_decode_inflight = True
         self.decode_pool.start(worker)
 
     def _merge_live_preview(self, report):
         return self.card_assembly.merge_preview(report)
+
+    def _live_decode_preview(self, result):
+        generation, report = result
+        if generation != self.auto_generation or not self.rx_timer.isActive():
+            return
+        if report.get("receive_activity"):
+            self._show_receive_activity(report["receive_activity"])
+            self.receive_activity_timeout.start(12000)
+            return
+        try:
+            report, improved = self._merge_live_preview(report)
+        except ValueError:
+            return
+        if improved:
+            card = report["card"]
+            self._show_receive_preview(self.card_image(report),
+                coverage=card.get("pixel_coverage"),
+                verified_coverage=card.get("verified_pixel_coverage"))
+            self.rx_status.setText(
+                f"Receiving card from {card.get('callsign') or 'a station'} · "
+                f"{card.get('color_stage') or 'identity received'} · checking other modes")
 
     @staticmethod
     def _assembly_verified(report):
@@ -5232,6 +5341,14 @@ class MainWindow(QMainWindow):
                 self.rx_status.setText("Listening · no complete card decoded yet")
             QTimer.singleShot(0, self._drain_rx)
             return
+        if report.get("receive_activity"):
+            self._show_receive_activity(report["receive_activity"])
+            self.receive_activity_timeout.start(12000)
+            if self.on_air and on_air_details is not None:
+                self.on_air.emit("rx_decode", on_air_details)
+                self.on_air_decode_pcm = None
+            QTimer.singleShot(0, self._drain_rx)
+            return
         card = report.get("card") or {}
         if card.get("card_id") is not None and self.receive_mode() != "auto":
             self.rx_live_profile = report.get("receive_profile")
@@ -5254,13 +5371,14 @@ class MainWindow(QMainWindow):
             self.on_air_decode_pcm = None
         image = self.card_image(report) if improved else None
         if card.get("card_id") is not None or card.get("preview_received"):
-            live_status = (f"{card.get('color_stage') or 'waiting for image data'} · "
-                           f"{report.get('valid_packet_count', 0)} packets received")
+            live_status = card.get('color_stage') or 'waiting for image data'
+            if not card.get("avatar_burst"):
+                live_status += f" · {report.get('valid_packet_count', 0)} packets received"
             if image is not None and (card.get("preview_received") or card.get("avatar_burst") or card.get("raw_avatar")):
                 self._show_receive_preview(image, exact=bool(card.get("exact")),
                                            coverage=card.get("pixel_coverage"),
                                            verified_coverage=card.get("verified_pixel_coverage"))
-            self.rx_status.setText(f"Live image · {card.get('callsign') or 'station not identified'} · {live_status}")
+            self.rx_status.setText(f"Receiving card · {card.get('callsign') or 'station not identified'} · {live_status}")
         if complete:
             if self.auto_armed:
                 key = received_card_key(report)
@@ -5491,6 +5609,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.beacon_timer.stop()
+        self.receive_activity_timeout.stop()
         self._closing = True
         self.data2g_handoff_pending = False
         if self.data2g_connect_worker is not None:

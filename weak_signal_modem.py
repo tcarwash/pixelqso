@@ -213,6 +213,7 @@ def soft_frame(source, candidate):
     estimated_snr = 10*np.log10(max(float(np.mean(abs(smooth)**2)), 1e-20)/max(variance,1e-20)*2000/2500)
     return ordered, dict(acquisition_score=float(score), carrier_offset_hz=float(offset),
                          clock_ppm=(step/SPS-1)*1e6,
+                         fractional_timing_samples=float(fraction),
                          start_seconds=capture_start/FS,
                          estimated_snr_db_2500=float(estimated_snr))
 
@@ -222,33 +223,46 @@ def decode(audio, sample_rate=48000):
     source = resample_poly(np.asarray(audio, float), FS//divisor, sample_rate//divisor)
     frames = []
     error = ValueError('Incomplete experimental burst')
-    for candidate in acquire(source):
-        try:
-            frames.append(soft_frame(source, candidate))
-        except ValueError as exc:
-            error = exc
-    if not frames:
-        raise error
-    # Try the strongest individual frame first, then accumulate evidence.
-    # Different payloads must still pass whole-card CRC; no pixel guess is saved.
-    frames.sort(key=lambda item: item[1]['acquisition_score'], reverse=True)
-    attempts = [(frames[0][0], frames[:1])]
-    for count in range(2, len(frames)+1):
-        attempts.append((np.sum([frame[0] for frame in frames[:count]], axis=0), frames[:count]))
-    attempts.extend((frame[0], [frame]) for frame in frames[1:])
-    for llrs, used in attempts:
-        try:
-            bits, iterations = decode_ldpc(llrs)
-            diagnostics = dict(used[0][1], ldpc_iterations=iterations,
-                               combined_copies=len(used), acquired_copies=len(frames),
-                               copy_diagnostics=[frame[1] for frame in used])
-            pixels, metadata = unpack(bits, diagnostics)
-        except ValueError as exc:
-            error = exc
-            continue
+    candidates = sorted(acquire(source), key=lambda item: item[0], reverse=True)
+
+    def recover(llrs, used):
+        bits, iterations = decode_ldpc(llrs)
+        diagnostics = dict(used[0][1], ldpc_iterations=iterations,
+                           combined_copies=len(used), acquired_copies=len(candidates),
+                           copy_diagnostics=[frame[1] for frame in used])
+        pixels, metadata = unpack(bits, diagnostics)
         metadata['received_copies'] = len(used)
         metadata['color_stage'] = f'CRC checked card · {len(used)} combined copies'
         snr = np.mean([frame[1]['estimated_snr_db_2500'] for frame in used])
         metadata['measured_snr_db'] = max(-127, min(127, round(snr)))
         return pixels, metadata
+
+    for candidate in candidates:
+        try:
+            frames.append(soft_frame(source, candidate))
+        except ValueError as exc:
+            error = exc
+            continue
+        if len(frames) == 1:
+            # A clean strongest copy needs neither later-copy demodulation
+            # nor combining. CRC remains the gate for releasing any pixels.
+            try:
+                return recover(frames[0][0], frames[:1])
+            except ValueError as exc:
+                error = exc
+    if not frames:
+        raise error
+    # Try the strongest individual frame first, then accumulate evidence.
+    # Different payloads must still pass whole-card CRC; no pixel guess is saved.
+    frames.sort(key=lambda item: item[1]['acquisition_score'], reverse=True)
+    attempts = []
+    for count in range(2, len(frames)+1):
+        attempts.append((np.sum([frame[0] for frame in frames[:count]], axis=0), frames[:count]))
+    attempts.extend((frame[0], [frame]) for frame in frames[1:])
+    for llrs, used in attempts:
+        try:
+            return recover(llrs, used)
+        except ValueError as exc:
+            error = exc
+            continue
     raise error

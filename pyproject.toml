@@ -21,4 +21,4 @@ loopback = ["sounddevice>=0.4.6"]
 pixel-qso = "app:main"
 
 [tool.setuptools]
-py-modules = ["app", "cardmodem", "card_views", "card_backends", "backend_adapters", "card_transfer", "data2g_transport", "data2g_runtime", "weak_signal_modem", "weak_signal_ldpc", "weak_signal_ldpc_data", "webserver", "on_air"]
+py-modules = ["app", "cardmodem", "card_views", "card_backends", "backend_adapters", "card_transfer", "data2g_transport", "data2g_runtime", "weak_signal_modem", "weak_signal_ldpc", "weak_signal_ldpc_data", "experimental_burst_modem", "experimental_fec", "webserver", "on_air"]

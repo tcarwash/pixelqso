@@ -7,6 +7,37 @@ from card_backends import get_backend, is_available
 
 
 class NarrowModeTests(unittest.TestCase):
+    def test_identity_and_partial_systematic_pixels_before_first_block(self):
+        card = pixel.example_card()
+        expected = pixel.unpack_indices(pixel.minimal_avatar_payload(card), 1024)
+        for version in (3, 4):
+            symbols = pixel.minimal_avatar_resilient_cycle_symbols(card, wire_version=version)
+            header = len(pixel.FRAME_SYNC) + (pixel.AVATAR_META_V4_TONE_COUNT
+                       if version == 4 else pixel.AVATAR_META_TONE_COUNT)
+            overhead = pixel.AVATAR_V4_BLOCK_OVERHEAD if version == 4 else 0
+            for count in (0, 1, 7):
+                with self.subTest(version=version, symbols=count):
+                    end = header if not count else header + (overhead + count) * 2
+                    pixels, blocks, _, metadata = pixel.decode_minimal_avatar_resilient_symbols(symbols[:end])
+                    covered = sum(metadata["pixel_coverage"])
+                    self.assertEqual(metadata["callsign"], card.callsign)
+                    self.assertEqual(covered, count * 2)
+                    self.assertEqual(pixels[:covered], expected[:covered])
+                    self.assertFalse(any(blocks))
+                    self.assertFalse(metadata.get("whole_raster_valid", False))
+
+    def test_partial_audio_exposes_identity_and_pixels_before_block_crc(self):
+        card = pixel.example_card()
+        backend = get_backend("resilient_100")
+        symbols = pixel.minimal_avatar_resilient_cycle_symbols(card, wire_version=3)
+        end = len(pixel.FRAME_SYNC) + pixel.AVATAR_META_TONE_COUNT + 20
+        audio = pixel.synthesize(symbols[:end], sample_rate=8000, profile=backend.profile)
+        report = backend.decode(audio, 8000)
+        self.assertEqual(report["card"]["callsign"], card.callsign)
+        self.assertGreater(sum(report["card"]["pixel_coverage"]), 0)
+        self.assertFalse(any(report["card"]["received_blocks"]))
+        self.assertFalse(report["card"]["exact"])
+
     def test_soft_chase_recovers_crc_verified_block_with_two_weak_symbols(self):
         data = [(index * 7 + 3) % 64 for index in range(pixel.AVATAR_RS_K)]
         codeword = pixel._rs64_encode(data)

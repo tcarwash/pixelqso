@@ -834,16 +834,20 @@ def decode_minimal_avatar_resilient_symbols(symbols: Iterable[int], *, require_s
             block_end = block_start + tone_count
             data_tone_count = coded_tone_count
             data_symbols_tones = tones[block_start:min(block_end, len(tones))]
-            minimum_data_tones = data_count * 2
-            if len(data_symbols_tones) >= minimum_data_tones:
+            available_data_tones = min(len(data_symbols_tones), data_count * 2)
+            available_data_tones -= available_data_tones % 2
+            overhead = AVATAR_V4_BLOCK_OVERHEAD if new_format else 0
+            candidate_count = min(current_pixel_count,
+                                  max(0, available_data_tones // 2 - overhead) * 6 // bpp)
+            if candidate_count:
                 # The shortened RS word is systematic: its first data_count
                 # GF(64) values already make a useful preview, even before
                 # parity and block CRC arrive. Keep this candidate explicitly
                 # provisional; a later checked copy replaces it.
-                raw_values = _tones_to_gf64(data_symbols_tones[:minimum_data_tones])
+                raw_values = _tones_to_gf64(data_symbols_tones[:available_data_tones])
                 if new_format:
                     raw_values = raw_values[AVATAR_V4_BLOCK_OVERHEAD:]
-                candidate_pixels = _gf64_to_pixels(raw_values, current_pixel_count, bpp)
+                candidate_pixels = _gf64_to_pixels(raw_values, candidate_count, bpp)
                 first_pixel = block_index * pixels_per_block
                 for pixel_offset, value in enumerate(candidate_pixels):
                     pixel_index = first_pixel + pixel_offset
@@ -893,8 +897,8 @@ def decode_minimal_avatar_resilient_symbols(symbols: Iterable[int], *, require_s
     if not groups:
         raise ValueError("no valid avatar identity block received yet")
     best = max(groups.values(), key=lambda item: sum(item["received"]))
-    if not any(best["coverage"]):
-        raise ValueError("no avatar image symbols received yet")
+    # The checked identity header is itself receive progress. Return an empty
+    # raster with zero coverage until systematic image symbols arrive.
     metadata = dict(best["metadata"])
     if metadata.get("header_version") == 4 and all(best["received"]):
         packed = _pack_indices(best["pixels"], metadata["bits_per_pixel"])

@@ -233,15 +233,23 @@ class ExperimentalLocalAdapter:
         packets = (modem.make_beacon_packets(card, mode) if beacon else
                    modem.make_packets(card, mode))
         symbols = modem.repeat_symbol_stream(modem.all_symbols(packets), int(repeats))
-        return modem.synthesize(symbols, profile=profile)
+        from modem_envelope import transmit
+        payload = modem.synthesize(modem.all_symbols(packets), profile=profile)
+        return transmit('standard', card, payload, repeats, message_type, snr_db)
 
     @staticmethod
     def decode(backend, audio, sample_rate):
         return backend.decode(audio, sample_rate)
 
     @classmethod
-    def decode_capture(cls, backend, audio, sample_rate):
+    def decode_capture(cls, backend, audio, sample_rate, *, copies=None):
         try:
+            if copies is not None and hasattr(backend, 'decode_payload'):
+                from modem_envelope import decode_capture
+                return DecodeOutcome(report=decode_capture(backend.key,audio,sample_rate,
+                    backend.decode_payload,copies=copies,
+                    copy_decoder=getattr(backend,'decode_payload_copies',None),
+                    announced_decoder=getattr(backend,'decode_announced_copies',None)))
             return DecodeOutcome(report=backend.decode(audio, sample_rate))
         except ValueError as exc:
             # Decoder ValueErrors describe an absent or incomplete waveform
@@ -282,28 +290,57 @@ class ExperimentalLocalAdapter:
                 cls.key, DecodeFailureKind.BACKEND_ERROR, str(exc), False))
 
     @classmethod
-    def decode_legacy_audio(cls, audio, sample_rate, profile="auto"):
-        """Decode live packet audio and return normalized card evidence."""
-        try:
-            selected = (modem.select_capture_profile(audio, sample_rate)
-                        if profile == "auto" else modem.resolve_profile(profile))
-            evidence, _start, _shift, _period = modem.receive_capture_evidence(
-                audio, sample_rate, profile=selected)
+    def decode_legacy_audio(cls, audio, sample_rate, profile="auto", *, copies=None):
+        """Decode identity-separated copies and soft-combine checked packets."""
+        from modem_envelope import decode_capture
+        def payload_decoder(captures, rate):
+            # Every legacy tone is below 2.2 kHz. Filter once before acquisition
+            # instead of fitting thousands of 48 kHz sync templates per profile.
+            if rate > 8000:
+                from scipy.signal import resample_poly
+                import math
+                common = math.gcd(rate,8000)
+                up,down=8000//common,rate//common
+                captures = [resample_poly(capture,up,down) for capture in captures]
+                rate = 8000
+            acquired = None
+            if profile == "auto":
+                selected, acquired = modem.select_capture_evidence(captures[0], rate)
+                if len(captures[0]) > 20*rate:
+                    acquired = None  # The selector probes only a prefix.
+            else:
+                selected = modem.resolve_profile(profile)
+            evidence = {}
+            for index,capture in enumerate(captures):
+                incoming, _, _, _ = (acquired if index == 0 and acquired is not None else
+                    modem.receive_capture_evidence(capture, rate, profile=selected))
+                for key, item in (incoming or {}).items():
+                    if key not in evidence:
+                        evidence[key] = item
+                    else:
+                        evidence[key]['log_likelihood'] += item['log_likelihood']
+                        evidence[key]['copies'] += item['copies']
+                        if item.get('valid_raw') and not evidence[key].get('valid_raw'):
+                            evidence[key]['valid_raw'] = item['valid_raw']
+                            evidence[key]['valid_corrected'] = item['valid_corrected']
             packets, errors = modem.decode_packet_evidence(evidence)
             card, pixels = modem.reconstruct(packets)
-            if card.get("card_id") is None:
-                return DecodeOutcome(failure=DecodeFailure(
-                    cls.key, DecodeFailureKind.NO_MATCH,
-                    "No legacy packet card data received yet", True))
-            report = {
-                "valid_packet_count": len(packets), "card": card, "pixels": pixels,
-                "fresh_packets": [{"type": packet.packet_type, "card_id": packet.card_id,
-                                   "seq": packet.seq, "payload_hex": packet.payload.hex()}
-                                  for packet in packets],
-                "receive_profile": selected.key, "decoder_errors": errors,
-                "complete": modem.is_complete_card(packets),
-            }
+            if card.get('card_id') is None:
+                raise ValueError('No legacy packet card data received yet')
+            card['received_copies'] = max((item['copies'] for item in evidence.values()), default=1)
+            return dict(valid_packet_count=len(packets), card=card, pixels=pixels,
+                fresh_packets=[dict(type=p.packet_type,card_id=p.card_id,seq=p.seq,
+                                    payload_hex=p.payload.hex()) for p in packets],
+                receive_profile=selected.key, decoder_errors=errors,
+                complete=modem.is_complete_card(packets))
+        try:
+            report = decode_capture('standard', audio, sample_rate,
+                lambda x, rate: payload_decoder([x], rate), copies=copies,
+                copy_decoder=payload_decoder)
             return DecodeOutcome(report=report)
+        except ValueError as exc:
+            return DecodeOutcome(failure=DecodeFailure(
+                cls.key, DecodeFailureKind.NO_MATCH, str(exc), True))
         except Exception as exc:
             return DecodeOutcome(failure=DecodeFailure(
                 cls.key, DecodeFailureKind.BACKEND_ERROR, str(exc), False))

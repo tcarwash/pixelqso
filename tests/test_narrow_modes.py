@@ -3,6 +3,7 @@ import unittest
 import numpy as np
 
 import cardmodem as pixel
+from modem_envelope import HEADER_SECONDS
 from card_backends import get_backend, is_available
 
 
@@ -107,7 +108,7 @@ class NarrowModeTests(unittest.TestCase):
                     audio = backend.encode(card, 1, "cq", None)
                     self.assertAlmostEqual(len(audio) / 48000,
                                            len(pixel.minimal_avatar_resilient_cycle_symbols(
-                                               card, wire_version=3)) / baud)
+                                               card, wire_version=4)) / baud + 2*HEADER_SECONDS)
                     audio = np.pad(audio, (12000, 12000))
                     audio += np.random.default_rng(10).normal(0, .05, len(audio))
                     report = backend.decode(audio, 48000)
@@ -132,7 +133,7 @@ class NarrowModeTests(unittest.TestCase):
                 audio = backend.encode(card, 1, "exchange", -7)
                 self.assertAlmostEqual(len(audio) / 48000,
                                        len(pixel.minimal_avatar_resilient_cycle_symbols(
-                                           card, wire_version=3)) / baud)
+                                           card, wire_version=4)) / baud + 2*HEADER_SECONDS)
                 audio = np.pad(audio, (12000, 12000))
                 audio += np.random.default_rng(4).normal(0, .05, len(audio))
                 report = backend.decode(audio, 48000)

@@ -1,5 +1,11 @@
 # Single-burst experimental modems
 
+Current application TX adds a versioned common mode/copy header and trailer. All these
+formats support 1–20 copies and soft combining, including the equalized receiver.
+The timings below describe native payloads; add 3.2 seconds per copy for framing.
+See [shared copy framing and receiver hardening](../tools/COPY_COMBINING.md).
+
+
 Enable **Show experimental modem modes** in Station settings, select
 **Experimental modems**, then select one of the four new modes. Each sends one
 burst containing a 32×32 card in the canonical eight-color palette. Larger cards

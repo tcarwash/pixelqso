@@ -62,6 +62,13 @@ PALETTE = [(0, 0, 0), (15, 15, 15), (0, 0, 15), (0, 15, 15),
            (0, 15, 0), (15, 15, 0), (15, 0, 0), (15, 0, 15)]
 
 
+def pcm16_to_float32(samples):
+    """Decode a private PCM16 snapshot using one float allocation."""
+    audio=np.frombuffer(samples,dtype="<i2").astype(np.float32)
+    audio *= np.float32(1.0/32768.0)
+    return audio
+
+
 def pcm16_audio_bytes(audio):
     """Convert modem audio to PCM without hard-clipping OFDM peaks."""
     samples = np.asarray(audio, dtype=np.float32)
@@ -293,10 +300,74 @@ class RxAudioWaterfall(QWidget):
         painter.end()
 
 
+def order_receive_candidates(backends, preferred_key=None):
+    """Try the user's selected modem first, then the earliest usable decoder."""
+    ranked=[]
+    for index,(key,backend) in enumerate(backends):
+        if key == LEGACY_MODE_KEY and backend is None:
+            minimum_seconds=1.0  # enough to inspect the legacy preamble
+        else:
+            try:
+                minimum_seconds=float(backend.minimum_audio_seconds())
+                if not np.isfinite(minimum_seconds) or minimum_seconds < 0:
+                    minimum_seconds=float("inf")
+            except (AttributeError,TypeError,ValueError,OverflowError):
+                minimum_seconds=float("inf")
+        ranked.append((key,backend,(key != preferred_key,minimum_seconds,index)))
+    return [(key,backend) for key,backend,_ in sorted(ranked,key=lambda item:item[2])]
+
+
 def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
                              preferred_mode=None, include_experimental=False,
-                             on_preview=None):
+                             on_preview=None, copy_cache=None, capture_start_sample=0, announced_copies=None):
     """Try the selected format first, then fall back to all installed formats."""
+    # A verified common header routes RX before costly native decoder trials.
+    # An unannounced historical capture retains the blind receive-all path.
+    copies = announced_copies
+    if include_experimental:
+        from modem_envelope import find_copies, decode_capture
+        copies = find_copies(audio, sample_rate) if announced_copies is None else announced_copies
+        if copy_cache is not None:
+            copy_cache.update(audio,sample_rate,copies,capture_start_sample)
+            cached_audio,cached_copies=copy_cache.materialize()
+            if cached_copies:
+                audio,sample_rate,copies=cached_audio,8000,cached_copies
+        if copies:
+            preview, failure = None, None
+            for key in dict.fromkeys(copy.mode for copy in copies):
+                if key == LEGACY_MODE_KEY:
+                    outcome = local_adapter_for_mode(key).decode_legacy_audio(
+                        audio, sample_rate, 'auto', copies=copies)
+                    if outcome.report and outcome.report.get('card',{}).get('exact'):
+                        return outcome
+                    preview = outcome.report or preview
+                    failure = outcome.failure or failure
+                    continue
+                if key not in BACKENDS:
+                    continue
+                placements = (list(dict.fromkeys((audio_placement, 'near_carrier', 'centered')))
+                              if mode_supports_audio_placement(key) else [audio_placement])
+                if key == preferred_mode and preferred_mode in BACKENDS:
+                    placements.sort(key=lambda placement: placement != audio_placement)
+                for placement in placements:
+                    backend = get_backend(key, placement)
+                    try:
+                        report = decode_capture(key, audio, sample_rate,
+                            lambda x, rate: backend.decode_payload(x, rate), copies=copies,
+                            copy_decoder=(lambda xs, rate: backend.decode_payload_copies(xs, rate))
+                            if hasattr(backend, 'decode_payload_copies') else None,
+                            announced_decoder=getattr(backend,'decode_announced_copies',None))
+                        if report.get('card',{}).get('exact'):
+                            return DecodeOutcome(report=report)
+                        if preview is None or (preview.get('receive_activity') and not report.get('receive_activity')):
+                            preview = report
+                            if on_preview is not None:
+                                on_preview(report)
+                    except ValueError as exc:
+                        failure = DecodeFailure(EXPERIMENTAL_ADAPTER.key, DecodeFailureKind.NO_MATCH, str(exc), True)
+            return DecodeOutcome(report=preview) if preview is not None else DecodeOutcome(
+                failure=failure or DecodeFailure(EXPERIMENTAL_ADAPTER.key, DecodeFailureKind.NO_MATCH,
+                                                 'Announced payload is incomplete', True))
     preview = None
     last_failure = None
     backends = available_modes(include_experimental=include_experimental)
@@ -306,9 +377,31 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
     preferred_key = {"fast_avatar": "fast_avatar_fec",
                      "experimental_qpsk_combined": "experimental_qpsk_5s"}.get(
                          preferred_mode, preferred_mode)
-    if preferred_key in BACKENDS:
-        backends.sort(key=lambda item: item[0] != preferred_key)
+    # Keep the legacy packet decoder in the same latency-ordered candidate list.
+    if not any(key == LEGACY_MODE_KEY for key, _ in backends):
+        backends.append((LEGACY_MODE_KEY, None))
+    backends = order_receive_candidates(backends, preferred_key)
     for key, backend in backends:
+        if key == LEGACY_MODE_KEY:
+            if len(audio) < sample_rate:
+                continue
+            legacy = local_adapter_for_mode(LEGACY_MODE_KEY).decode_legacy_audio(
+                audio, sample_rate, "auto", copies=copies or [])
+            if legacy.failure:
+                if legacy.failure.kind is DecodeFailureKind.NO_MATCH:
+                    last_failure = legacy.failure
+                    continue
+                return legacy
+            report = legacy.report
+            if report["card"].get("exact"):
+                return legacy
+            if preview is None or (preview.get("receive_activity") and not report.get("receive_activity")):
+                preview = report
+                if on_preview is not None:
+                    on_preview(report)
+            continue
+        if getattr(backend, "requires_common_header", False):
+            continue  # Header-routed group decoders have no blind native format.
         if key in {"fast_avatar", "experimental_qpsk_combined"}:
             continue  # The resilient avatar and single QPSK decoders accept either wire variant.
         if len(audio) < backend.minimum_audio_seconds() * sample_rate:
@@ -317,7 +410,7 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
                       if mode_supports_audio_placement(key) else [audio_placement])
         for placement in placements:
             outcome = local_adapter_for_mode(key).decode_capture(
-                get_backend(key, placement), audio, sample_rate)
+                get_backend(key, placement), audio, sample_rate, copies=copies or [])
             if outcome.failure:
                 if outcome.failure.kind is DecodeFailureKind.NO_MATCH:
                     last_failure = outcome.failure
@@ -330,17 +423,6 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
                 preview = report
                 if on_preview is not None:
                     on_preview(report)
-    # The receive-all path includes the legacy packet modem after all card
-    # waveform adapters have had a chance to return a complete card.
-    if len(audio) >= sample_rate:
-        legacy = local_adapter_for_mode(LEGACY_MODE_KEY).decode_legacy_audio(
-            audio, sample_rate, "auto")
-        if legacy.report is not None:
-            if legacy.report["card"].get("exact") or preview is None or preview.get("receive_activity"):
-                return legacy
-        elif (legacy.failure and legacy.failure.kind is DecodeFailureKind.BACKEND_ERROR
-              and preview is None):
-            return legacy
     if preview is not None:
         return DecodeOutcome(report=preview)
     return DecodeOutcome(failure=last_failure or DecodeFailure(
@@ -410,8 +492,11 @@ class LiveDecodeWorker(QRunnable):
     """Decode a snapshot of the in-memory receive buffer while it is recording."""
     def __init__(self, samples: bytes, sample_rate: int, profile: str, generation: int,
                  mode="standard", audio_placement="near_carrier", preferred_mode=None,
-                 include_experimental=False):
+                 include_experimental=False, copy_cache=None, capture_start_sample=0, capture_start_utc=None):
         super().__init__()
+        self.copy_cache=copy_cache
+        self.capture_start_sample=capture_start_sample
+        self.capture_start_utc=capture_start_utc
         self.samples = samples
         self.sample_rate = sample_rate
         self.profile = profile
@@ -431,12 +516,18 @@ class LiveDecodeWorker(QRunnable):
     def run(self):
         started = time.perf_counter()
         try:
-            audio = np.frombuffer(self.samples, dtype="<i2").astype(np.float32) / 32768.0
-            if self.mode == "auto":
+            audio = pcm16_to_float32(self.samples)
+            announced = None
+            if self.copy_cache is not None:
+                from modem_envelope import find_copies
+                announced = find_copies(audio,self.sample_rate, capture_start_utc=self.capture_start_utc)
+            if self.mode == "auto" or announced or (self.copy_cache is not None and self.copy_cache.entries):
                 outcome = decode_all_card_backends(audio, self.sample_rate, self.audio_placement,
-                                                   self.preferred_mode, self.include_experimental,
+                                                   self.preferred_mode, self.include_experimental or self.mode != "auto",
                                                    on_preview=lambda report: self.signals.preview.emit(
-                                                       (self.generation, report)))
+                                                       (self.generation, report)),
+                                                   copy_cache=self.copy_cache,
+                                                   capture_start_sample=self.capture_start_sample, announced_copies=announced)
                 if outcome.failure:
                     self._finish(None, False, outcome.failure, started)
                     return
@@ -1138,6 +1229,9 @@ class MainWindow(QMainWindow):
         self.rx_rate = modem.SAMPLE_RATE
         self.rx_live_profile = None
         self.auto_decode_paths = set()
+        from modem_envelope import CopyCaptureCache
+        self.copy_capture_cache = CopyCaptureCache()
+        self.rx_capture_sample_offset = 0
         self.live_decode_inflight = False
         self.live_decode_samples = 0
         self.rx_timer = QTimer(self); self.rx_timer.setInterval(200); self.rx_timer.timeout.connect(self._drain_rx)
@@ -2327,6 +2421,20 @@ class MainWindow(QMainWindow):
         mode_form = QFormLayout()
         mode_form.addRow("Modem backend", self.backend_combo)
         mode_form.addRow("Transmission type", self.mode_combo)
+        self.grid_tx_latency = QSpinBox()
+        self.grid_tx_latency.setRange(0, 2000)
+        self.grid_tx_latency.setSuffix(" ms")
+        self.grid_tx_latency.setValue(self.settings.value("grid/tx_latency_ms", 0, type=int))
+        self.grid_tx_latency.setToolTip("UTC grid test modem only: measured output delay from queued audio to radio audio. Calibrate with a loopback capture.")
+        self.grid_tx_latency.valueChanged.connect(lambda value: self.settings.setValue("grid/tx_latency_ms", value))
+        mode_form.addRow("Grid TX audio delay", self.grid_tx_latency)
+        self.grid_rx_latency = QSpinBox()
+        self.grid_rx_latency.setRange(0, 2000)
+        self.grid_rx_latency.setSuffix(" ms")
+        self.grid_rx_latency.setValue(self.settings.value("grid/rx_latency_ms", 0, type=int))
+        self.grid_rx_latency.setToolTip("UTC grid acquisition: measured input startup delay. Timing remains approximate; full acquisition is retained.")
+        self.grid_rx_latency.valueChanged.connect(lambda value: self.settings.setValue("grid/rx_latency_ms", value))
+        mode_form.addRow("Grid RX audio delay", self.grid_rx_latency)
         self.receive_all_modes = QCheckBox("Receive all local audio modem types")
         self.receive_all_modes.setChecked(self.settings.value("transfer/receive_all", True, type=bool))
         self.receive_all_modes.setToolTip(
@@ -2338,7 +2446,7 @@ class MainWindow(QMainWindow):
         # main-panel choice. Single-burst modes still clamp this to one.
         self.repeat_count = QSpinBox(self); self.repeat_count.hide()
         self.repeat_count.setRange(1, 20); self.repeat_count.setValue(int(self.settings.value("transfer/repeats", 3)))
-        self.repeat_count.setToolTip("Repeat the same one-way burst. The receiver combines independently checked image blocks.")
+        self.repeat_count.setToolTip("Send copies of the same card; RX combines soft evidence before integrity checks.")
         self.repeat_count.valueChanged.connect(lambda value: self.settings.setValue("transfer/repeats", value))
         self.repeat_count.valueChanged.connect(self._refresh_transfer_summary)
         self.card_combo = QComboBox()
@@ -2538,6 +2646,9 @@ class MainWindow(QMainWindow):
         options_form.addRow("My grid square", self.station_grid)
         options_form.addRow("Experimental audio test", self.audio_test_mode)
         options_form.addRow("Advanced modes", self.show_experimental_modes)
+        options_form.addRow("Copies per card", self.repeat_count)
+        self.repeat_count.show()
+        self.repeat_count_label = options_form.labelForField(self.repeat_count)
         options_form.addRow("Mobile control", self.web_enabled)
         options_form.addRow("Web port", self.web_port)
         layout.addWidget(options)
@@ -3243,6 +3354,9 @@ class MainWindow(QMainWindow):
             return
         capabilities = self.selected_adapter().capabilities
         selected_data2g = capabilities.kind is AdapterKind.FRAME_TRANSPORT
+        if hasattr(self, 'repeat_count_label'):
+            self.repeat_count.setVisible(not selected_data2g)
+            self.repeat_count_label.setVisible(not selected_data2g)
         if hasattr(self, "audio_test_mode"):
             self.audio_test_mode.setEnabled(not selected_data2g)
             self.audio_test_mode.setToolTip(
@@ -3809,13 +3923,14 @@ class MainWindow(QMainWindow):
                     self.repeat_count.setValue(getattr(self, "_normal_repeat_count", 3))
             else:
                 self.repeat_count.setMaximum(maximum)
-            self.repeat_count.setToolTip("One complete checked 32×32 eight-color burst; additional copies exceed five seconds."
-                                        if self.selected_mode() == "experimental_qpsk_5s" else
-                                        "Combine soft evidence from repeated 4.622-second bursts; 4 copies take 18.488 seconds."
-                                        if self.selected_mode() == "experimental_qpsk_combined" else
-                                        "Repeat the same one-way burst. The receiver combines independently checked image blocks.")
-            if maximum == 1 and self.selected_mode() in EXPERIMENTAL_MODE_DESCRIPTIONS:
-                self.repeat_count.setToolTip(EXPERIMENTAL_MODE_DESCRIPTIONS[self.selected_mode()])
+            framing = ("One protected header covers the group; airtime includes it."
+                       if getattr(backend, "requires_common_header", False) else
+                       "Each copy includes protected framing; airtime includes it.")
+            compression = (" Compression is automatic; airtime depends on the chosen card."
+                           if getattr(backend, "automatic_compression", False) else "")
+            self.repeat_count.setToolTip(
+                "Send copies of the same card. RX combines soft evidence and checks integrity. " +
+                framing + compression)
         if hasattr(self, "profile_combo"):
             legacy = self.selected_mode() == "standard"
             self.profile_combo.setEnabled(not self.auto_armed and legacy)
@@ -3849,7 +3964,8 @@ class MainWindow(QMainWindow):
                 total_seconds = backend.estimate_seconds(card, self.repeat_count.value())
             else:
                 symbols, profile = self._card_tx_symbols(card)
-                total_seconds = len(symbols) / profile.baud
+                from modem_envelope import HEADER_SECONDS
+                total_seconds = len(symbols) / profile.baud + 2*HEADER_SECONDS*self.repeat_count.value()
             timing = (f"~{total_seconds:.1f}s RF airtime" if data2g else
                       f"{total_seconds:.1f}s")
             set_summary(
@@ -4102,8 +4218,10 @@ class MainWindow(QMainWindow):
         self.auto_receive_timer.stop()
         self._stop_local_receive_capture()
         self.card_assembly.begin_receive_window()
+        self.copy_capture_cache = self.copy_capture_cache.__class__()
+        self.rx_capture_sample_offset = 0
         self._clear_exact_live_preview()
-        self.rx_bytes.clear()
+        self._clear_rx_bytes()
         self.test_rx_pending = {}; self.test_rx_expected = None
         self.test_rx_final_pending = False; self.live_decode_final = False
         if hasattr(self, "receive_stack"):
@@ -4622,7 +4740,7 @@ class MainWindow(QMainWindow):
         if self.rx_timer.isActive():
             self.rx_timer.stop()
             self._stop_local_receive_capture()
-            self.rx_bytes.clear()
+            self._clear_rx_bytes()
             self.test_rx_pending = {}; self.test_rx_expected = None
         if self.tx_timer.isActive():
             self._finish_tx(log_message)
@@ -4734,7 +4852,26 @@ class MainWindow(QMainWindow):
             self.beacon_pending = False
         QTimer.singleShot(350, self._start_tx_audio)
 
+    def _prepare_grid_audio(self):
+        backend = self.selected_backend()
+        if not getattr(backend, "utc_grid", False):
+            return
+        from grid_fsk_modem import plan_start
+        # Probe before the timestamp; a slow status command cannot shift the plan.
+        status = getattr(self, "grid_clock_status", "UTC clock quality unknown")
+        now = time.time()
+        latency = 0. if self.test_link_enabled and self.audio_test_mode.isChecked() else self.grid_tx_latency.value()/1000
+        target, samples = plan_start(now, modem.SAMPLE_RATE, latency)
+        self.tx_bytes = b"\0" * (samples*2) + self.tx_bytes
+        self.tx_deadline += samples/modem.SAMPLE_RATE
+        self.grid_tx_target_utc = target
+        self.grid_tx_padding_samples = samples
+        self.exchange_log.append(f"UTC grid target {target:.3f}; alignment silence {samples/modem.SAMPLE_RATE:.3f} s; {status}. Audio timing requires calibration.")
+
     def _start_tx_audio(self):
+        if getattr(self.selected_backend(), "utc_grid", False):
+            from grid_fsk_modem import clock_status
+            self.grid_clock_status = clock_status()
         if os.environ.get("PIXELQSO_AUDIO_ROLE") == "websdr-rx":
             self._finish_tx("Receive-only WebSDR window; transmission skipped.")
             return
@@ -4752,11 +4889,14 @@ class MainWindow(QMainWindow):
                     self._append_qso_card("sent_cards", self._local_card_snapshot(card, self.tx_message_type, self.tx_snr_db))
                 except Exception as exc:
                     self.exchange_log.append(f"Could not add transmitted card to QSO log: {exc}")
+            self._prepare_grid_audio()
             self.tx_started = time.monotonic()
             self.stop_tx_btn.setText("Stop audio")
             self.stop_tx_btn.setEnabled(True)
             self.stop_tx_btn.setVisible(True)
             self.tx_timer.start()
+            if getattr(self.selected_backend(), "utc_grid", False):
+                self._pump_tx()
             self._record_on_air_tx()
             self.exchange_log.append(f"TX started: {self.tx_label}, local software audio link, {len(self.tx_bytes)//2} samples. CAT/PTT bypassed.")
             return
@@ -4776,10 +4916,13 @@ class MainWindow(QMainWindow):
         if self.tx_device is None:
             self._release_ptt()
             QMessageBox.warning(self, "Audio failed", "Could not open the selected audio output."); return
+        self._prepare_grid_audio()
         self.tx_started = time.monotonic()
         self.stop_tx_btn.setEnabled(True)
         self.stop_tx_btn.setVisible(True)
         self.tx_timer.start()
+        if getattr(self.selected_backend(), "utc_grid", False):
+            self._pump_tx()
         self._record_on_air_tx()
         self.stop_tx_btn.setText("Stop audio" if self.audio_test_mode.isChecked() else "Stop TX")
         self.exchange_log.append(f"TX started: {self.tx_label}, {len(self.tx_bytes)//2} samples. " +
@@ -5130,6 +5273,15 @@ class MainWindow(QMainWindow):
         self.auto_wait_state = "listening"
         QTimer.singleShot(300, self.start_receive)
 
+    def _clear_rx_bytes(self):
+        origin = getattr(self, "rx_capture_start_utc", None)
+        if origin is not None:
+            self.rx_capture_start_utc = origin + (
+                getattr(self, "rx_capture_sample_offset", 0) + len(self.rx_bytes)//2
+            ) / getattr(self, "rx_rate", modem.SAMPLE_RATE)
+        self.rx_bytes.clear()
+        self.rx_capture_sample_offset = 0
+
     def start_receive(self, quiet=False):
         if self.selected_adapter().capabilities.kind is AdapterKind.FRAME_TRANSPORT:
             self._ensure_session_receive()
@@ -5169,6 +5321,9 @@ class MainWindow(QMainWindow):
         except ReceiveStartError as exc:
             receive_error(exc.title, exc.message)
             return
+        # This is a startup estimate, not a hardware ADC timestamp. UDP carries
+        # no capture timestamps, so its receiver deliberately has no UTC prior.
+        capture_start_utc = None if test_mode else time.time() - self.grid_rx_latency.value()/1000
         self.local_receive_handle = handle
         self.local_receive_adapter = adapter
         self.rx_audio = handle.audio_source
@@ -5178,8 +5333,11 @@ class MainWindow(QMainWindow):
             self.test_rx_expected = None
             self.test_rx_pending = {}
         self.card_assembly.begin_receive_window()
+        self.copy_capture_cache = self.copy_capture_cache.__class__()
+        self.rx_capture_sample_offset = 0
         self._clear_exact_live_preview()
-        self.rx_bytes.clear()
+        self._clear_rx_bytes()
+        self.rx_capture_start_utc = capture_start_utc
         self.rx_waterfall.reset(self.input_device.currentText()
                                 if self.rx_device else "UDP test audio", self.rx_rate)
         self.rx_live_profile = None if self.receive_mode() == "auto" else self.selected_profile() if (self.test_link_enabled or self.selected_backend() is not None) else None
@@ -5247,6 +5405,7 @@ class MainWindow(QMainWindow):
             trim_bytes = len(self.rx_bytes) - max_rx_bytes
             trim_bytes -= trim_bytes % 2
             del self.rx_bytes[:trim_bytes]
+            self.rx_capture_sample_offset += trim_bytes//2
             self.live_decode_samples = max(0, self.live_decode_samples - trim_bytes // 2)
         if not self.rx_timer.isActive() or self.live_decode_inflight:
             return
@@ -5275,7 +5434,11 @@ class MainWindow(QMainWindow):
             self.on_air_decode_end_sample = self.on_air_rx_samples + len(self.on_air_rx_buffer) // 2
         worker = LiveDecodeWorker(snapshot, self.rx_rate, self.rx_live_profile or "auto", self.auto_generation,
                                   self.receive_mode(), self.selected_audio_placement(), self.selected_mode(),
-                                  self.show_experimental_modes.isChecked())
+                                  self.show_experimental_modes.isChecked(),
+                                  copy_cache=self.copy_capture_cache,
+                                  capture_start_sample=self.rx_capture_sample_offset,
+                                  capture_start_utc=(None if getattr(self, "rx_capture_start_utc", None) is None else
+                                      self.rx_capture_start_utc + self.rx_capture_sample_offset/self.rx_rate))
         worker.signals.finished.connect(self._live_decode_finished)
         worker.signals.preview.connect(self._live_decode_preview)
         self.live_decode_inflight = True
@@ -5386,7 +5549,9 @@ class MainWindow(QMainWindow):
                         and card.get("card_id") is not None and key in self.seen_received_cards):
                     self.rx_status.setText(f"Already received {card.get('callsign')} card {card.get('card_id')}; staying on receive.")
                     self._add_session_wall_card(report)
-                    self.rx_bytes.clear()
+                    self._clear_rx_bytes()
+                    self.copy_capture_cache = self.copy_capture_cache.__class__()
+                    self.rx_capture_sample_offset = 0
                     self.live_decode_samples = 0
                     self.live_decode_final = False
                     self.card_assembly.clear_current_preview()
@@ -5434,7 +5599,7 @@ class MainWindow(QMainWindow):
         self.listen_indicator.setText("● PROCESSING")
         self.listen_indicator.setStyleSheet("color:#e5b36e;font-weight:700;letter-spacing:1px")
         if len(self.rx_bytes) < 4096:
-            self.rx_status.setText("Capture was too short; no audio saved."); self.rx_bytes.clear()
+            self.rx_status.setText("Capture was too short; no audio saved."); self._clear_rx_bytes()
             if self.auto_armed:
                 if self.auto_timeout_pending:
                     self._resolve_auto_receive_timeout()
@@ -5446,7 +5611,7 @@ class MainWindow(QMainWindow):
         path = DATA / f"received-{time.strftime('%Y%m%d-%H%M%S')}.wav"
         with wave.open(str(path), "wb") as output:
             output.setnchannels(1); output.setsampwidth(2); output.setframerate(self.rx_rate); output.writeframes(bytes(self.rx_bytes))
-        self.rx_bytes.clear()
+        self._clear_rx_bytes()
         if self.auto_armed: self.auto_decode_paths.add(path.resolve())
         self.start_decode(path, profile=self.rx_live_profile or "auto")
 
@@ -5502,10 +5667,12 @@ class MainWindow(QMainWindow):
         self.session_wall.show()
 
     def _reset_receive_window(self):
-        self.rx_bytes.clear()
+        self._clear_rx_bytes()
         self.live_decode_samples = 0
         self.live_decode_final = False
         self.card_assembly.begin_receive_window()
+        self.copy_capture_cache = self.copy_capture_cache.__class__()
+        self.rx_capture_sample_offset = 0
         self._clear_exact_live_preview()
         self.live_preview_timeout.stop()
         self.receive_stack.setCurrentWidget(self.session_wall_page)

@@ -65,7 +65,7 @@ class LivePreviewTests(unittest.TestCase):
         backend = SimpleNamespace(minimum_audio_seconds=lambda: 0)
         adapter = Mock()
         from backend_adapters import DecodeOutcome
-        def decode(*_args):
+        def decode(*_args,**_kwargs):
             if adapter.decode_capture.call_count == 2:
                 self.assertEqual(published, [report])
             return DecodeOutcome(report=report)

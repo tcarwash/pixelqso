@@ -5,6 +5,11 @@ identity, fragment transfer, image assembly, previews, and QSO stages. Modems
 with the Data2G label run through Data2G's supported host command and KISS
 interfaces.
 
+Local experimental modems share protected, versioned mode/copy headers and
+soft copy combining. Choose **Copies per card** in Station settings → Options.
+See [copy framing and receiver details](tools/COPY_COMBINING.md) and
+[HF benchmarks](tools/HF_BENCHMARKS.md).
+
 ## Screenshots
 
 | QSO session | Card editor |
@@ -70,20 +75,21 @@ in Station settings. The narrow 8-FSK modes have an audio placement control that
 sets the lowest tone; 300 Hz is the recommended starting offset. It does not
 configure Data2G's audio placement.
 
-Four additional single-burst experiments are available: **8-FSK · soft LDPC**
+Four additional experimental payload formats are available: **8-FSK · soft LDPC**
 (5.005 s), **QPSK · LDPC + adaptive equalizer** (4.622 s),
 **8-FSK · strong RS + outer parity** (5.480 s), and **16-FSK · soft LDPC**
-(5.640 s). They carry fixed 32×32, eight-color cards. The outer-parity mode
+(5.640 s). These are payload times; protected framing adds 3.2 s per copy.
+They carry fixed 32×32, eight-color cards and support the shared copy count. The outer-parity mode
 provides checked partial previews; the LDPC modes release pixels after whole-card
 verification. See [experimental burst formats and validation](docs/EXPERIMENTAL-BURSTS.md).
 
 The experimental names describe modulation and decoding: **8-FSK · RS + soft Chase**
 uses Reed–Solomon with bounded soft recovery; **8-FSK · raw pixels** leaves image
-pixels unchecked; **QPSK · soft LDPC** uses iterative soft decoding, with a
-separate copy-combining choice for repeated transmissions; **4-FSK · soft Viterbi**
+pixels unchecked; **QPSK · soft LDPC** uses iterative soft decoding and shared
+copy combining (the older combined-mode ID remains supported); **4-FSK · soft Viterbi**
 uses convolutional coding and progressive packets. Hover over a mode for its
 error correction and checksum details. Display names do not change saved mode
-IDs or on-air formats.
+IDs. The new common copy-header format is versioned; historical native payloads remain readable.
 
 Data2G reception is selected and decoded by the connected host; it does not
 follow Pixel QSO's transmit-mode selector. The host sends checked application
@@ -192,3 +198,13 @@ operating system; desktop CI builds one package for Linux, Windows, and macOS.
 The managed Data2G host is bundled in each platform build. On Linux the output
 is `dist/PixelQSO`; on Windows it is `dist/PixelQSO.exe`; on macOS it is
 `dist/PixelQSO.app`.
+
+Experimental [grouped FSK modes](docs/GROUPED-FSK.md) send one protected header for 1–20 LDPC payload copies, saving repeated framing airtime. The existing per-copy-framed modes remain available.
+
+The additional [compressed FSK family](docs/COMPRESSED-FSK.md) automatically selects lossless image compression and shorter LDPC payloads. The example card fits six copies into the older grouped modes’ three-copy airtime budget; random images use raw fallback with no airtime increase.
+
+The [FSK receiver improvements](docs/FSK-RECEIVER.md) add distributed header acquisition, alternate timing retries and pilot-based frequency drift tracking while retaining the existing transmission formats and airtime.
+
+Experimental UTC scheduling: [compressed 16-FSK on a 500 ms start grid](docs/GRID-FSK.md).
+
+Receive-all acquisition profiling and measured decoder latency: [profiling report](docs/RECEIVE-ALL-PROFILING.md).

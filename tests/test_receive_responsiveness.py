@@ -14,6 +14,26 @@ from data2g_transport import Data2GMode
 
 
 class ReceiveResponsivenessTests(unittest.TestCase):
+    def test_pcm_snapshot_conversion_matches_previous_values(self):
+        from app import pcm16_to_float32
+        samples=np.asarray([-32768,-32767,-1,0,1,32766,32767],dtype='<i2')
+        expected=samples.astype(np.float32)/32768.0
+        np.testing.assert_array_equal(pcm16_to_float32(samples.tobytes()),expected)
+
+    def test_receive_all_checks_selected_mode_then_earliest_useful_candidate(self):
+        from types import SimpleNamespace
+        from app import order_receive_candidates
+        slow=SimpleNamespace(minimum_audio_seconds=lambda: 5.)
+        quick=SimpleNamespace(minimum_audio_seconds=lambda: .3)
+        tied=SimpleNamespace(minimum_audio_seconds=lambda: .3)
+        malformed=SimpleNamespace(minimum_audio_seconds=lambda: float('nan'))
+        choices=[('slow-selected',slow),('malformed',malformed),
+                 ('quick',quick),('tied',tied)]
+        self.assertEqual([key for key,_ in order_receive_candidates(choices,'slow-selected')],
+                         ['slow-selected','quick','tied','malformed'])
+        self.assertEqual([key for key,_ in order_receive_candidates(choices,'missing')],
+                         ['quick','tied','slow-selected','malformed'])
+
     def test_clean_qpsk_copy_finishes_without_demodulating_later_copies(self):
         card = pixel.example_card()
         audio = np.tile(weak.encode(card), 3)

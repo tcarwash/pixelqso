@@ -11,11 +11,12 @@ import struct
 import zlib
 
 import numpy as np
-from scipy.signal import fftconvolve, hilbert, resample_poly
-from scipy.special import logsumexp
+from scipy.signal import fftconvolve, hilbert, resample_poly, find_peaks
+from scipy.special import logsumexp, i0e
 
 import cardmodem as pixel
 import weak_signal_modem as weak
+from copy_combining import SoftCopy, recovery_attempts, diagnostics_for, hypothesis_attempts, MAX_COPIES, ADMITTED_IDENTITY
 from experimental_fec import (OUTER_DATA, OUTER_PARITY, SHARD_BYTES,
                               outer_encode, outer_recover, rs_encode, rs_decode)
 
@@ -35,6 +36,7 @@ class FSKFormat:
     lowest: int
     seed: int
     outer: bool = False
+    code_bits: int = CODE_BITS
 
     @property
     def frequencies(self):
@@ -48,7 +50,7 @@ class FSKFormat:
     def block_lengths(self):
         if self.outer:
             return (124,) * (OUTER_DATA + OUTER_PARITY)
-        count = math.ceil(CODE_BITS / self.bits_per_symbol)
+        count = math.ceil(self.code_bits / self.bits_per_symbol)
         return tuple(min(128, count - start) for start in range(0, count, 128))
 
     @property
@@ -71,11 +73,15 @@ MODE_KEYS = (*FORMATS, QPSK_KEY)
 
 @lru_cache(None)
 def format_constants(key):
-    fmt = FORMATS[key]
+    return format_constants_for(FORMATS[key])
+
+
+@lru_cache(None)
+def format_constants_for(fmt):
     rng = np.random.default_rng(fmt.seed)
     training = rng.integers(0, fmt.tones, TRAINING)
     pilots = rng.integers(0, fmt.tones, (len(fmt.block_lengths), 4))
-    permutation = rng.permutation(CODE_BITS)
+    permutation = rng.permutation(fmt.code_bits)
     labels = np.arange(fmt.tones) ^ (np.arange(fmt.tones) >> 1)
     return training, pilots, permutation, labels, np.argsort(labels)
 
@@ -145,35 +151,92 @@ def activity(key, diagnostics):
             "diagnostics": diagnostics}
 
 
-def acquire(source, fmt):
-    """Mode-specific correlation; bounded CFO search, no noise-only promotion."""
-    training = format_constants(fmt.key)[0]
-    reference = _complex_wave(training, fmt)
-    if len(source) < len(reference):
+def acquire_candidates(source, fmt):
+    """Noncoherent training detection tolerates phase changes and fading.
+
+    Accumulate known-tone energies rather than requiring one constant channel
+    phase over all 64 training symbols. The null mean is 1 / tone_count; a
+    bounded candidate list is provisional until RS/LDPC and CRC validate it.
+    """
+    training = format_constants_for(fmt)[0]
+    step = FS // fmt.baud
+    length = len(training) * step
+    if len(source) < length:
         raise ValueError("experimental FSK training sequence is incomplete")
     analytic = hilbert(source)
-    energy = fftconvolve(abs(analytic) ** 2, np.ones(len(reference)), "valid")
-    if float(np.max(energy)) < 1e-12:
+    if np.max(abs(analytic)) < 1e-12:
         raise ValueError("no experimental FSK signal energy")
-    best = None
-    time = np.arange(len(reference)) / FS
-    for offset in range(-120, 121, 10):
-        template = reference * np.exp(2j * np.pi * offset * time)
-        correlation = fftconvolve(analytic, template[::-1].conj(), "valid")
-        score = abs(correlation) ** 2 / np.maximum(energy * len(reference), 1e-16)
-        at = int(np.argmax(score))
-        if best is None or score[at] > best[0]:
-            best = float(score[at]), at, offset
-    if best[0] < .32:
+    t = np.arange(step) / FS
+    candidates = []
+    # The score's noise distribution is independent of input gain.
+    threshold = 1 / fmt.tones + 3.5 * math.sqrt(
+        (fmt.tones - 1) / (fmt.tones**2 * (fmt.tones + 1) * TRAINING))
+    frame_samples = (fmt.symbol_count * step)
+    for offset in range(-120, 121, 20):
+        bank = np.asarray([abs(fftconvolve(analytic,
+            np.exp(-2j * np.pi * (tone + offset) * t)[::-1], 'valid'))**2
+            for tone in fmt.frequencies])
+        for phase in sorted(set(int(v) for v in np.linspace(0, step-1, 4))):
+            energies = bank[:, phase::step]
+            count = energies.shape[1] - TRAINING + 1
+            if count <= 0:
+                continue
+            selected = np.zeros(count)
+            # Normalize each training symbol independently: deep fades cannot
+            # let a single loud symbol dominate synchronization.
+            normalized = energies / np.maximum(energies.sum(axis=0), 1e-20)
+            for i, tone in enumerate(training):
+                selected += normalized[tone, i:i+count]
+            score = selected / TRAINING
+            peaks, _ = find_peaks(np.pad(score, (1, 1)), height=threshold,
+                                  distance=max(1, fmt.symbol_count // 2))
+            for index in peaks - 1:
+                candidates.append((float(score[index]), int(index * step + phase), offset))
+    if not candidates:
         raise ValueError("no matching experimental FSK synchronization")
-    score, start, coarse = best
-    segment = analytic[start:start + len(reference)]
-    metrics = [(abs(np.vdot(reference * np.exp(2j * np.pi * offset * time), segment)), offset)
-               for offset in np.arange(coarse - 6, coarse + 6.01, .5)]
-    offset = max(metrics)[1]
-    analytic *= np.exp(-2j * np.pi * offset * np.arange(len(analytic)) / FS)
-    return analytic, start, {"acquisition_score": score, "carrier_offset_hz": float(offset),
-                             "start_sample": start, "sample_rate": FS}
+    selected = []
+    for candidate in sorted(candidates, reverse=True):
+        if all(abs(candidate[1] - other[1]) >= frame_samples for other in selected):
+            selected.append(candidate)
+        if len(selected) >= MAX_COPIES:
+            break
+    return analytic, selected
+
+
+def _refine_candidate(analytic, start, offset, fmt, radius=.25, frequency_radius=20):
+    training = format_constants_for(fmt)[0]
+    first = max(0, math.floor(start - (radius+1)*FS/fmt.baud))
+    segment = analytic[first:min(len(analytic), math.ceil(start+(TRAINING+radius+1)*FS/fmt.baud))]
+    best = None
+    for fraction in np.arange(-radius, radius+.01, .125):
+        trial = max(0, start + fraction*FS/fmt.baud - first)
+        for shift in np.arange(offset-frequency_radius, offset+frequency_radius+.01,
+                               10 if frequency_radius > 20 else 2):
+            corrected = segment * np.exp(-2j*np.pi*shift*np.arange(len(segment))/FS)
+            rows = _tone_metrics(corrected, trial, fmt, FS/fmt.baud, np.arange(TRAINING))
+            if len(rows) != TRAINING:
+                continue
+            score = float(np.sum(rows[np.arange(TRAINING), training]))
+            if best is None or score > best[0]:
+                best = score, trial + first, float(shift)
+    if best is not None and frequency_radius > 20:
+        for shift in np.arange(best[2]-6,best[2]+6.01,2):
+            corrected = segment * np.exp(-2j*np.pi*shift*np.arange(len(segment))/FS)
+            rows = _tone_metrics(corrected,best[1]-first,fmt,FS/fmt.baud,np.arange(TRAINING))
+            score = float(np.sum(rows[np.arange(TRAINING),training]))
+            if score > best[0]:
+                best = score,best[1],float(shift)
+    return (start, offset) if best is None else (best[1], best[2])
+
+
+def acquire(source, fmt):
+    analytic, candidates = acquire_candidates(source, fmt)
+    score, start, offset = candidates[0]
+    start, offset = _refine_candidate(analytic, start, offset, fmt)
+    shifted = analytic * np.exp(-2j*np.pi*offset*np.arange(len(analytic))/FS)
+    return shifted, start, {"acquisition_score": score, "carrier_offset_hz": offset,
+                           "start_sample": start, "sample_rate": FS,
+                           "acquisition_method": "noncoherent known-tone training"}
 
 
 def _tone_metrics(analytic, start, fmt, step, symbol_indices=None):
@@ -186,14 +249,14 @@ def _tone_metrics(analytic, start, fmt, step, symbol_indices=None):
     return abs(symbols @ templates.conj().T / sps) ** 2
 
 
-def demodulate(analytic, start, fmt):
-    _training, pilots, _permutation, _labels, _inverse = format_constants(fmt.key)
+def demodulate_candidates(analytic, start, fmt, *, track_drift=True):
+    _training, pilots, _permutation, _labels, _inverse = format_constants_for(fmt)
     pilot_positions, pilot_tones, cursor = [], [], TRAINING
     for known, length in zip(pilots, fmt.block_lengths):
         pilot_positions.extend(range(cursor, cursor + 4))
         pilot_tones.extend(known)
         cursor += 4 + length
-    best = None
+    ranked = []
     for ppm in (-160, -80, 0, 80, 160):
         step = FS / fmt.baud * (1 + ppm / 1e6)
         # Correlation peaks shift under multipath. Independently choose the
@@ -208,19 +271,129 @@ def demodulate(analytic, start, fmt):
             rows = _tone_metrics(analytic, trial_start, fmt, step, indices)
             normalized = rows[np.arange(len(rows)), tones] / np.maximum(rows.sum(axis=1), 1e-15)
             score = float(np.mean(normalized))
-            if best is None or score > best[0]:
-                best = score, ppm, trial_start, step
-    if best is None:
+            ranked.append((score, ppm, trial_start, step))
+    if not ranked:
         raise ValueError("waiting for experimental FSK pilots")
-    score, ppm, trial_start, step = best
+    selected = []
+    for score,ppm,trial_start,step in sorted(ranked,key=lambda entry:entry[0],reverse=True):
+        end = trial_start + fmt.symbol_count*step
+        if any(max(abs(trial_start-other[2]),abs(end-(other[2]+fmt.symbol_count*other[3])))
+               < .1*FS/fmt.baud for other in selected):
+            continue
+        selected.append((score,ppm,trial_start,step))
+        if len(selected) == 3:
+            break
+    for rank,(score,ppm,trial_start,step) in enumerate(selected):
+        evidence,diagnostics = _fsk_likelihood(analytic,start,fmt,pilot_positions,pilot_tones,
+                                             score,ppm,trial_start,step)
+        yield evidence,{**diagnostics,'timing_candidate':rank,
+                        'retained_timing_candidates':len(selected),
+                        'frequency_tracking':'static','frequency_drift_hz_per_second':0.}
+    if track_drift:
+        tracked = _track_frequency(analytic,fmt,selected[0],pilot_positions,pilot_tones)
+        if tracked is not None:
+            corrected,tracking = tracked
+            for rank,(score,ppm,trial_start,step) in enumerate(selected):
+                evidence,diagnostics = _fsk_likelihood(corrected,start,fmt,pilot_positions,pilot_tones,
+                                                     score,ppm,trial_start,step)
+                yield evidence,{**diagnostics,**tracking,'timing_candidate':rank,
+                                'retained_timing_candidates':len(selected)}
+
+
+def demodulate(analytic, start, fmt):
+    return next(demodulate_candidates(analytic,start,fmt))
+
+
+def announced_fsk_candidates(analytic,fmt,*,radius=2):
+    """Preserve narrow acquisition, then retry a wider residual CFO search.
+
+    Opening-header CFO is already removed. Later copies can accumulate extra
+    offset under drift; wider search must not replace a valid narrow hypothesis.
+    """
+    primary = None
+    for frequency_radius in (20,120):
+        start,offset = _refine_candidate(analytic,(GUARD_SECONDS+.05)*FS,0,fmt,
+                                        radius=radius,frequency_radius=frequency_radius)
+        if primary is not None and abs(offset-primary[1])<10 and abs(start-primary[0])<.125*FS/fmt.baud:
+            continue
+        if primary is None:
+            primary = start,offset
+        shifted = analytic*np.exp(-2j*np.pi*offset*np.arange(len(analytic))/FS)
+        for evidence,timing in demodulate_candidates(shifted,start,fmt):
+            yield evidence,{**timing,'start_sample':start,'carrier_offset_hz':offset,
+                            'frequency_search_radius_hz':frequency_radius,
+                            'acquisition_method':'protected boundary + known-tone training'}
+
+
+def _track_frequency(analytic,fmt,timing,pilot_positions,pilot_tones):
+    """Bounded linear residual-CFO fit to known symbols, never data decisions.
+
+    Unknown phase is discarded per symbol so this remains a noncoherent FSK
+    receiver. Static hypotheses are always tried first; a noisy drift fit cannot
+    remove their evidence. The estimate is local to one physical copy.
+    """
+    _,_,start,step = timing
+    positions = np.asarray(pilot_positions)
+    present = start+(positions+1)*step <= len(analytic)
+    if present.sum() < 8 or np.ptp(positions[present])*step/FS < .25:
+        return None
+    training = format_constants_for(fmt)[0]
+    indices = np.concatenate((np.arange(TRAINING),positions[present]))
+    tones = np.concatenate((training,np.asarray(pilot_tones)[present]))
+    t = (np.arange(len(analytic))-start)/FS
+    def evaluate(offset,slope):
+        corrected = analytic*np.exp(-2j*np.pi*(offset*t+.5*slope*t*t))
+        rows = _tone_metrics(corrected,start,fmt,step,indices)
+        score = float(np.mean(rows[np.arange(len(rows)),tones]/np.maximum(rows.sum(axis=1),1e-20)))
+        return score
+    baseline = evaluate(0,0)
+    best = baseline,0.,0.
+    for offset in (-20.,0.,20.):
+        for slope in (-40.,-20.,-10.,0.,10.,20.,40.):
+            if abs(offset)+abs(slope)*fmt.seconds > 240:
+                continue
+            score = evaluate(offset,slope)
+            if score > best[0]:
+                best = score,offset,slope
+    coarse = best
+    for offset in (coarse[1]-10,coarse[1],coarse[1]+10):
+        for slope in (coarse[2]-5,coarse[2],coarse[2]+5):
+            if abs(offset)>30 or abs(slope)>40 or abs(offset)+abs(slope)*fmt.seconds>240:
+                continue
+            score = evaluate(offset,slope)
+            if score > best[0]:
+                best = score,offset,slope
+    score,offset,slope = best
+    if score < baseline+.0005 or (offset == 0 and slope == 0):
+        return None
+    corrected = analytic*np.exp(-2j*np.pi*(offset*t+.5*slope*t*t))
+    return corrected,{'frequency_tracking':'training + pilot linear drift',
+                      'frequency_drift_hz_per_second':slope,
+                      'residual_frequency_offset_hz':offset,
+                      'frequency_fit_score':score,'static_frequency_fit_score':baseline}
+
+
+def _fsk_likelihood(analytic,start,fmt,pilot_positions,pilot_tones,score,ppm,trial_start,step):
     metrics = _tone_metrics(analytic, trial_start, fmt, step)
-    # Soft evidence remains unquantized. Overlapping-tone leakage is excluded
-    # from the noise scale by estimating the weaker half of each pilot bank.
-    pilot_rows = metrics[np.asarray(pilot_positions)[np.asarray(pilot_positions) < len(metrics)]]
-    noise = max(float(np.median(np.sort(pilot_rows, axis=1)[:, :fmt.tones // 2])), 1e-5)
-    scale = max(noise, float(np.median(np.max(pilot_rows, axis=1))) * .055)
-    return metrics / scale, {"clock_ppm": ppm, "pilot_score": score,
-                             "fractional_timing_samples": trial_start - start}
+    # Noise is estimated from tones at least one symbol-rate away from the
+    # known pilot, avoiding leakage from the overlapping nearest tones. For
+    # complex Gaussian noise, correlation energy is exponential: median/ln(2)
+    # estimates its mean. A weakest-half median systematically understates it.
+    present = np.asarray(pilot_positions) < len(metrics)
+    pilot_rows = metrics[np.asarray(pilot_positions)[present]]
+    known = np.asarray(pilot_tones)[present]
+    distant = abs(np.arange(fmt.tones)[None,:]-known[:,None]) >= 2
+    noise = max(float(np.median(pilot_rows[distant])) / np.log(2), 1e-8)
+    signal = max(float(np.mean(pilot_rows[np.arange(len(known)),known]))-noise, 0.)
+    # Noncoherent Gaussian-channel tone likelihood, with unknown phase:
+    # log I0(2 sqrt(signal_energy * received_energy) / noise_energy).
+    # Unlike raw energy/noise this does not give noise spikes excessive weight.
+    argument = 2*np.sqrt(signal*np.maximum(metrics,0))/noise
+    evidence = np.log(np.maximum(i0e(argument),1e-300))+argument
+    return evidence, {"clock_ppm": ppm, "pilot_score": score,
+                      "fractional_timing_samples": trial_start-start,
+                      "noise_energy": noise, "pilot_signal_energy": signal,
+                      "tone_likelihood": "noncoherent log-I0"}
 
 
 def _whole_report(key, packet, diagnostics):
@@ -232,13 +405,13 @@ def _whole_report(key, packet, diagnostics):
     metadata.update(avatar_mode=key, received_blocks=None,
                     palette=[list(color) for color in pixel.MINIMAL_AVATAR_PALETTE],
                     application_protocol_version=1, image_crc32=zlib.crc32(packed),
-                    whole_raster_crc32_valid=True, received_copies=1,
+                    whole_raster_crc32_valid=True, received_copies=diagnostics.get("combined_copies", 1),
                     color_stage="single-burst card · whole-card CRC32 verified")
     return {"card": metadata, "pixels": pixels, "receive_profile": key,
             "sample_rate": FS, "valid_packet_count": 1, "errors": []}
 
 
-def _decode_ldpc(key, evidence, diagnostics):
+def _ldpc_evidence(key, evidence):
     fmt = FORMATS[key]
     _training, _pilots, permutation, labels, _inverse = format_constants(key)
     cursor, data = TRAINING, []
@@ -248,13 +421,25 @@ def _decode_ldpc(key, evidence, diagnostics):
         cursor += length
     metrics = np.concatenate(data)
     if len(metrics) < math.ceil(CODE_BITS / fmt.bits_per_symbol):
-        return activity(key, diagnostics)
+        raise ValueError("experimental FSK burst is incomplete")
     llrs = np.column_stack([
         logsumexp(metrics[:, (labels & (1 << bit)) == 0], axis=1) -
         logsumexp(metrics[:, (labels & (1 << bit)) != 0], axis=1)
         for bit in range(fmt.bits_per_symbol - 1, -1, -1)]).ravel()[:CODE_BITS]
     ordered = np.zeros(weak.N)
     ordered[permutation] = llrs
+    return ordered
+
+
+def _decode_ldpc(key, evidence, diagnostics):
+    try:
+        ordered = _ldpc_evidence(key, evidence)
+    except ValueError:
+        return activity(key, diagnostics)
+    return _decode_ldpc_llrs(key, ordered, diagnostics)
+
+
+def _decode_ldpc_llrs(key, ordered, diagnostics):
     bits, iterations = weak.decode_ldpc(ordered)
     packet = np.packbits(bits ^ weak.constants()[3]).tobytes()
     return _whole_report(key, packet, {**diagnostics, "ldpc_iterations": iterations,
@@ -354,14 +539,54 @@ def decode(key, audio, sample_rate=48000):
         return decode_equalized(audio, sample_rate)
     fmt = FORMATS[key]
     source = _resample(audio, sample_rate, FS)
-    analytic, start, diagnostics = acquire(source, fmt)
-    if len(analytic) - start < (TRAINING + 4) * FS / fmt.baud:
-        return activity(key, diagnostics)
-    evidence, timing = demodulate(analytic, start, fmt)
-    diagnostics.update(timing)
-    if fmt.outer:
-        return _decode_outer(key, evidence, diagnostics)
-    return _decode_ldpc(key, evidence, diagnostics)
+    analytic, candidates = acquire_candidates(source, fmt)
+    frames, partial = [], None
+    error = ValueError("no checked experimental FSK card")
+    for score, start, offset in candidates:
+        start, offset = _refine_candidate(analytic, start, offset, fmt)
+        diagnostic = dict(acquisition_score=score, carrier_offset_hz=offset,
+                          start_sample=start, sample_rate=FS,
+                          acquisition_method="noncoherent known-tone training")
+        if len(analytic) - start < (TRAINING + 4) * FS / fmt.baud:
+            partial = (partial or activity(key, diagnostic)) if score >= .35 or ADMITTED_IDENTITY.get() is not None else partial
+            continue
+        shifted = analytic * np.exp(-2j*np.pi*offset*np.arange(len(analytic))/FS)
+        evidence, timing = demodulate(shifted, start, fmt)
+        diagnostic.update(timing)
+        try:
+            report = (_decode_outer(key, evidence, diagnostic) if fmt.outer else
+                      _decode_ldpc(key, evidence, diagnostic))
+            if report.get('card', {}).get('exact'):
+                return report
+            if (report.get('card') or score >= .35 or ADMITTED_IDENTITY.get() is not None) and (partial is None or sum(report.get('card', {}).get('pixel_coverage') or []) > sum(partial.get('card', {}).get('pixel_coverage') or [])):
+                partial = report
+        except ValueError as exc:
+            error = exc
+        if len(evidence) < fmt.symbol_count:
+            continue
+        # Outer RS combines tone log evidence; LDPC combines bit LLRs.
+        frame = SoftCopy(evidence[:fmt.symbol_count] if fmt.outer else
+                         _ldpc_evidence(key, evidence), diagnostic)
+        variants = [frame]
+        for alternate,timing in list(demodulate_candidates(shifted,start,fmt))[1:]:
+            if len(alternate) >= fmt.symbol_count:
+                variants.append(SoftCopy(alternate[:fmt.symbol_count] if fmt.outer else
+                    _ldpc_evidence(key,alternate),{**diagnostic,**timing}))
+        frames.append(variants)
+    for evidence, used in hypothesis_attempts(frames):
+        diagnostic = diagnostics_for(used, len(candidates))
+        try:
+            report = (_decode_outer(key, evidence, diagnostic) if fmt.outer else
+                      _decode_ldpc_llrs(key, evidence, diagnostic))
+            if report.get('card', {}).get('exact'):
+                return report
+            if partial is None or sum(report.get('card', {}).get('pixel_coverage') or []) > sum(partial.get('card', {}).get('pixel_coverage') or []):
+                partial = report
+        except ValueError as exc:
+            error = exc
+    if partial is not None:
+        return partial
+    raise error
 
 
 def _adaptive_soft_frame(source, candidate):
@@ -430,6 +655,7 @@ def decode_equalized(audio, sample_rate=48000):
     error = ValueError("no complete equalized QPSK card")
     incomplete = None
     frame_samples = (weak.PREAMBLE + weak.BLOCKS * (weak.PILOTS + weak.DATA)) * weak.SPS
+    frames = {"adaptive_equalizer": [], "pilot_receiver_fallback": []}
     for candidate in candidates:
         if len(source) < candidate[1] + frame_samples:
             incomplete = activity(QPSK_KEY, {"acquisition_score": candidate[0]})
@@ -437,17 +663,94 @@ def decode_equalized(audio, sample_rate=48000):
         try:
             llrs, diagnostics, baseline = _adaptive_soft_frame(source, candidate)
             for receiver, evidence in (("adaptive_equalizer", llrs), ("pilot_receiver_fallback", baseline)):
+                frame = SoftCopy(evidence, diagnostics)
+                frames[receiver].append(frame)
                 try:
                     bits, iterations = weak.decode_ldpc(evidence)
                     packet = np.packbits(bits ^ weak.constants()[3]).tobytes()
                     return _whole_report(QPSK_KEY, packet, {
-                        **diagnostics, "ldpc_iterations": iterations, "successful_receiver": receiver})
+                        **diagnostics_for([frame], len(candidates)), "ldpc_iterations": iterations,
+                        "successful_receiver": receiver})
                 except ValueError as exc:
                     error = exc
         except ValueError as exc:
             error = exc
+    for receiver, copies in frames.items():
+        for evidence, used in recovery_attempts(copies):
+            if len(used) < 2:
+                continue
+            try:
+                bits, iterations = weak.decode_ldpc(evidence)
+                packet = np.packbits(bits ^ weak.constants()[3]).tobytes()
+                return _whole_report(QPSK_KEY, packet, {
+                    **diagnostics_for(used, len(candidates)), "ldpc_iterations": iterations,
+                    "successful_receiver": receiver})
+            except ValueError as exc:
+                error = exc
     if incomplete is not None:
         return incomplete
+    raise error
+
+
+def decode_copies(key, captures, sample_rate=48000, *, grouped=False):
+    """Use protected payload boundaries for independent copy acquisition."""
+    frames, partial = [], None
+    error=ValueError('no CRC-valid announced experimental card')
+    if key == QPSK_KEY:
+        receivers={'adaptive_equalizer':[], 'pilot_receiver_fallback':[]}
+        for audio in captures:
+            source=_resample(audio,sample_rate,weak.FS)
+            try:
+                candidate=weak.announced_candidate(source)
+                evidence, diagnostic, baseline=_adaptive_soft_frame(source,candidate)
+                receivers['adaptive_equalizer'].append(SoftCopy(evidence,diagnostic))
+                receivers['pilot_receiver_fallback'].append(SoftCopy(baseline,diagnostic))
+            except ValueError as exc:
+                error=exc
+        for receiver,copies in receivers.items():
+            for evidence,used in recovery_attempts(copies):
+                try:
+                    bits,iterations=weak.decode_ldpc(evidence)
+                    packet=np.packbits(bits^weak.constants()[3]).tobytes()
+                    return _whole_report(key,packet,{**diagnostics_for(used,len(copies)),
+                        'ldpc_iterations':iterations,'successful_receiver':receiver,
+                        'acquisition_method':'protected boundary + local QPSK training'})
+                except ValueError as exc:
+                    error=exc
+        if not any(receivers.values()):
+            return activity(key,{'announced_copies':len(captures)})
+        raise error
+    fmt=FORMATS[key]
+    for copy_index, audio in enumerate(captures):
+        source=_resample(audio,sample_rate,FS)
+        if len(source)<(GUARD_SECONDS+.05+(TRAINING+4)/fmt.baud)*FS:
+            partial=partial or activity(key,{'announced_copies':len(captures)})
+            continue
+        analytic=hilbert(source)
+        radius = max(2, (.002 + copy_index*fmt.seconds*.0002)*fmt.baud) if grouped else 2
+        variants = []
+        for evidence,timing in announced_fsk_candidates(analytic,fmt,radius=radius):
+            diagnostic = timing
+            try:
+                if len(evidence)<fmt.symbol_count:
+                    partial=partial or (_decode_outer(key,evidence,diagnostic) if fmt.outer else activity(key,diagnostic))
+                    continue
+                variants.append(SoftCopy(evidence[:fmt.symbol_count] if fmt.outer else _ldpc_evidence(key,evidence),diagnostic))
+            except ValueError as exc:
+                error=exc
+        if variants: frames.append(variants)
+    for evidence,used in hypothesis_attempts(frames):
+        try:
+            diagnostic=diagnostics_for(used,len(frames))
+            report=(_decode_outer(key,evidence,diagnostic) if fmt.outer else _decode_ldpc_llrs(key,evidence,diagnostic))
+            if report.get('card',{}).get('exact'):
+                return report
+            if partial is None or sum(report.get('card',{}).get('pixel_coverage') or [])>sum(partial.get('card',{}).get('pixel_coverage') or []):
+                partial=report
+        except ValueError as exc:
+            error=exc
+    if partial is not None:
+        return partial
     raise error
 
 

@@ -149,15 +149,18 @@ class BackendAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.report["card"], card)
 
     def test_legacy_audio_without_card_identity_is_a_retryable_miss(self):
-        with patch("backend_adapters.modem.select_capture_profile", return_value="profile"), \
+        with patch("backend_adapters.modem.select_capture_evidence",
+                   return_value=("profile",([], 0, 0, 1))) as select, \
                 patch("backend_adapters.modem.receive_capture_evidence", return_value=([], 0, 0, 1)), \
                 patch("backend_adapters.modem.decode_packet_evidence", return_value=([], [])), \
                 patch("backend_adapters.modem.reconstruct", return_value=({"card_id": None}, [])):
-            outcome = EXPERIMENTAL_ADAPTER.decode_legacy_audio([0.0] * 48000, 48000)
+            outcome = EXPERIMENTAL_ADAPTER.decode_legacy_audio([0.0] * 44100, 44100)
 
         self.assertIsNone(outcome.report)
         self.assertEqual(outcome.failure.kind, DecodeFailureKind.NO_MATCH)
         self.assertTrue(outcome.failure.retryable)
+        self.assertEqual(select.call_args.args[1],8000)
+        self.assertEqual(len(select.call_args.args[0]),8000)
 
     def test_local_adapter_decode_outcome_contains_one_result(self):
         with self.assertRaisesRegex(ValueError, "exactly one"):

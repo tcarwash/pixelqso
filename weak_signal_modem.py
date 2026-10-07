@@ -7,6 +7,7 @@ import zlib
 import numpy as np
 from scipy.signal import fftconvolve, resample_poly, find_peaks
 import cardmodem as pixel
+from copy_combining import SoftCopy, recovery_attempts, diagnostics_for
 
 FS = 8000
 SPS = 4
@@ -82,9 +83,9 @@ def seconds():
     return ((PREAMBLE + BLOCKS*(DATA+PILOTS))*SPS + 48 + 2*GUARD)/FS
 
 
-def decode_ldpc(llrs, iterations=100):
+def decode_ldpc(llrs, iterations=100, *, code_instance=None):
     """CPU sum-product decoder, including NR punctures and known filler bits."""
-    c = code()
+    c = code() if code_instance is None else code_instance
     rows, cols = c.edges
     channel = np.zeros(c.n_cols)
     channel[c.sent] = np.clip(llrs, -30, 30)
@@ -101,7 +102,7 @@ def decode_ldpc(llrs, iterations=100):
         posterior = channel + np.bincount(cols, weights=messages, minlength=c.n_cols)
         hard = (posterior < 0).astype(np.uint8)
         if c.syndrome_ok(hard[None, :])[0]:
-            return hard[:K], iteration+1
+            return hard[:c.k], iteration+1
     raise ValueError('Experimental LDPC parity checks did not converge')
 
 
@@ -224,45 +225,79 @@ def decode(audio, sample_rate=48000):
     frames = []
     error = ValueError('Incomplete experimental burst')
     candidates = sorted(acquire(source), key=lambda item: item[0], reverse=True)
-
-    def recover(llrs, used):
-        bits, iterations = decode_ldpc(llrs)
-        diagnostics = dict(used[0][1], ldpc_iterations=iterations,
-                           combined_copies=len(used), acquired_copies=len(candidates),
-                           copy_diagnostics=[frame[1] for frame in used])
-        pixels, metadata = unpack(bits, diagnostics)
-        metadata['received_copies'] = len(used)
-        metadata['color_stage'] = f'CRC checked card · {len(used)} combined copies'
-        snr = np.mean([frame[1]['estimated_snr_db_2500'] for frame in used])
-        metadata['measured_snr_db'] = max(-127, min(127, round(snr)))
-        return pixels, metadata
-
     for candidate in candidates:
         try:
-            frames.append(soft_frame(source, candidate))
+            evidence, diagnostic = soft_frame(source, candidate)
+            frame = SoftCopy(evidence, diagnostic)
+            # Preserve the low-latency single-copy fast path.
+            if not frames:
+                try:
+                    bits, iterations = decode_ldpc(evidence)
+                    diagnostics = dict(diagnostics_for([frame], len(candidates)), ldpc_iterations=iterations)
+                    pixels, metadata = unpack(bits, diagnostics)
+                    return pixels, metadata
+                except ValueError as exc:
+                    error = exc
+            frames.append(frame)
         except ValueError as exc:
             error = exc
-            continue
-        if len(frames) == 1:
-            # A clean strongest copy needs neither later-copy demodulation
-            # nor combining. CRC remains the gate for releasing any pixels.
-            try:
-                return recover(frames[0][0], frames[:1])
-            except ValueError as exc:
-                error = exc
-    if not frames:
-        raise error
-    # Try the strongest individual frame first, then accumulate evidence.
-    # Different payloads must still pass whole-card CRC; no pixel guess is saved.
-    frames.sort(key=lambda item: item[1]['acquisition_score'], reverse=True)
-    attempts = []
-    for count in range(2, len(frames)+1):
-        attempts.append((np.sum([frame[0] for frame in frames[:count]], axis=0), frames[:count]))
-    attempts.extend((frame[0], [frame]) for frame in frames[1:])
-    for llrs, used in attempts:
+    for llrs, used in recovery_attempts(frames):
         try:
-            return recover(llrs, used)
+            bits, iterations = decode_ldpc(llrs)
+            diagnostics = dict(diagnostics_for(used, len(candidates)), ldpc_iterations=iterations)
+            pixels, metadata = unpack(bits, diagnostics)
+            metadata['received_copies'] = len(used)
+            metadata['color_stage'] = f'CRC checked card · {len(used)} combined copies'
+            snr = np.mean([frame.diagnostics['estimated_snr_db_2500'] for frame in used])
+            metadata['measured_snr_db'] = max(-127, min(127, round(snr)))
+            return pixels, metadata
         except ValueError as exc:
             error = exc
+    raise error
+
+
+def announced_candidate(source):
+    """Refine a payload boundary supplied by a CRC-valid common copy header."""
+    training, _, _, _, h = constants()
+    time = np.arange(len(source))/FS
+    base = np.sqrt(2)*source*np.exp(-2j*np.pi*CARRIER*time)
+    matched = fftconvolve(base,h)
+    expected = round((.05 + GUARD/FS)*FS) + len(h)-1
+    best = None
+    for start in range(max(0,expected-32), expected+33):
+        positions = start + np.arange(PREAMBLE)*SPS
+        if positions[-1] >= len(matched):
             continue
+        values = matched[positions]
+        energy = max(float(np.sum(abs(values)**2))*PREAMBLE,1e-20)
+        for offset in range(-16,17,4):
+            corr = np.sum(values*np.exp(-2j*np.pi*offset*positions/FS)*training.conj())
+            score = float(abs(corr)**2/energy)
+            if best is None or score > best[0]:
+                best = score,start,offset
+    if best is None:
+        raise ValueError('announced QPSK payload is incomplete')
+    return best
+
+
+def decode_copies(captures, sample_rate=48000):
+    divisor = math.gcd(sample_rate,FS)
+    frames=[]
+    error=ValueError('no CRC-valid announced QPSK card')
+    for audio in captures:
+        source=resample_poly(np.asarray(audio,float),FS//divisor,sample_rate//divisor)
+        try:
+            frames.append(SoftCopy(*soft_frame(source, announced_candidate(source))))
+        except ValueError as exc:
+            error=exc
+    for evidence, used in recovery_attempts(frames):
+        try:
+            bits, iterations=decode_ldpc(evidence)
+            diagnostic={**diagnostics_for(used,len(frames)), 'ldpc_iterations':iterations,
+                        'acquisition_method':'protected boundary + local QPSK training'}
+            pixels,metadata=unpack(bits,diagnostic)
+            metadata['received_copies']=len(used)
+            return pixels,metadata
+        except ValueError as exc:
+            error=exc
     raise error

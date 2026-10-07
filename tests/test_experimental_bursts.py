@@ -14,6 +14,8 @@ import experimental_fec as fec
 import weak_signal_modem as weak
 from app import DecodeWorker, LiveDecodeWorker, MainWindow, decode_all_card_backends
 from backend_adapters import EXPERIMENTAL_ADAPTER, DecodeFailureKind
+from modem_envelope import HEADER_SECONDS
+from copy_combining import MAX_COPIES
 from card_backends import MODE_REGISTRY, available_modes, get_backend
 from card_transfer import CardAssemblyService
 
@@ -23,7 +25,7 @@ class ExperimentalBurstTests(unittest.TestCase):
     def setUpClass(cls):
         cls.card = pixel.example_card()
         cls.expected = pixel.unpack_indices(pixel.minimal_avatar_payload(cls.card), 1024)
-        cls.audio = {key: get_backend(key).encode(cls.card, 1, "cq", -9)
+        cls.audio = {key: burst.encode(key, cls.card, "cq", -9)
                      for key in burst.MODE_KEYS}
 
     def assert_verified(self, key, report):
@@ -36,21 +38,21 @@ class ExperimentalBurstTests(unittest.TestCase):
         self.assertTrue(merged["assembly_event"]["verified_complete"])
         self.assertEqual(merged["assembly_event"]["verification_scope"], "whole_raster_crc32")
 
-    def test_four_modes_are_gated_and_use_one_burst(self):
+    def test_four_modes_are_gated_and_share_copy_policy(self):
         self.assertFalse(set(burst.MODE_KEYS) & {key for key, _ in available_modes()})
         self.assertTrue(set(burst.MODE_KEYS) <= {key for key, _ in available_modes(include_experimental=True)})
         for key in burst.MODE_KEYS:
             with self.subTest(key=key):
                 backend = get_backend(key)
                 self.assertTrue(MODE_REGISTRY[key].experimental)
-                self.assertEqual(backend.max_repeats, 1)
+                self.assertEqual(backend.max_repeats, MAX_COPIES)
                 self.assertAlmostEqual(len(self.audio[key]) / 48000,
-                                       backend.estimate_seconds(self.card, 1), places=5)
-                self.assertLess(backend.estimate_seconds(self.card, 1), 6)
+                                       backend.estimate_seconds(self.card, 1) - 2*HEADER_SECONDS, places=5)
+                self.assertLess(backend.estimate_seconds(self.card, 1), 10)
                 with self.assertRaises(ValueError):
-                    backend.encode(self.card, 2, "cq", None)
+                    backend.encode(self.card, MAX_COPIES+1, "cq", None)
                 with self.assertRaises(ValueError):
-                    backend.estimate_seconds(self.card, 2)
+                    backend.estimate_seconds(self.card, MAX_COPIES+1)
         large = pixel.Card(**{**self.card.__dict__, "width": 64, "height": 64,
                               "pixels": [0] * 4096})
         for key in burst.MODE_KEYS:
@@ -197,10 +199,11 @@ class ExperimentalBurstTests(unittest.TestCase):
             for key in burst.MODE_KEYS:
                 with self.subTest(key=key):
                     window.mode_combo.setCurrentIndex(window.mode_combo.findData(key))
-                    self.assertEqual(window.repeat_count.value(), 1)
+                    self.assertEqual(window.repeat_count.value(), 3)
                     self.assertTrue(window.repeat_count.isHidden())
                     audio = window._card_tx_audio(self.card)
-                    self.assertAlmostEqual(len(audio) / 48000, burst.seconds(key), places=5)
+                    self.assertAlmostEqual(len(audio) / 48000,
+                                           window.repeat_count.value() * (burst.seconds(key)+2*HEADER_SECONDS), places=5)
                     window.card_assembly.clear_current_preview()
                     window.seen_received_cards.clear()
                     window._record_received_card.reset_mock()

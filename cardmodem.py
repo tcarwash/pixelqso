@@ -620,7 +620,7 @@ def _decode_avatar_metadata(tones: list[int]) -> dict:
         message_type, snr_db = "card", None
     if magic != b"PQ" or not width or not height or palette_id >= len(AVATAR_PALETTES):
         raise ValueError("unsupported avatar burst metadata")
-    if call_len > 12 or grid_len > 8:
+    if not 1 <= call_len <= 12 or not 1 <= grid_len <= 8 or any(call[call_len:]) or any(grid[grid_len:]):
         raise ValueError("invalid avatar identity length")
     result = {"callsign": call[:call_len].decode("ascii"), "grid": grid[:grid_len].decode("ascii"),
             "card_id": card_id, "width": width, "height": height, "palette_id": palette_id,
@@ -633,6 +633,47 @@ def _decode_avatar_metadata(tones: list[int]) -> dict:
         result.update(image_crc32=image_crc32, image_tag=image_tag.hex(),
                       image_id=f"{image_crc32:08x}{image_tag.hex()}")
     return result
+
+
+def _decode_avatar_metadata_soft(metrics: np.ndarray) -> dict:
+    """Bounded Chase recovery for protected identities; RS and CRC are mandatory."""
+    hard = np.argmax(metrics, axis=1).astype(int).tolist()
+    try:
+        return _decode_avatar_metadata(hard)
+    except (ValueError, UnicodeDecodeError, ZeroDivisionError):
+        pass
+    normalized = metrics / np.maximum(metrics.sum(axis=1, keepdims=True), 1e-12)
+    candidates = []
+    for i in range(len(hard)//2):
+        likelihood = normalized[2*i, np.arange(64) >> 3] + normalized[2*i+1, np.arange(64) & 7]
+        order = np.argsort(likelihood)[::-1]
+        original = hard[2*i]*8 + hard[2*i+1]
+        alternatives = [int(v) for v in order if int(v) != original][:2]
+        candidates.append((float(likelihood[order[0]]-likelihood[order[1]]), i, alternatives))
+    candidates.sort()
+    def check(changes):
+        tones = hard[:]
+        for i, value in changes:
+            tones[2*i:2*i+2] = [value >> 3, value & 7]
+        try:
+            return _decode_avatar_metadata(tones)
+        except (ValueError, UnicodeDecodeError, ZeroDivisionError):
+            return None
+    for _, i, values in candidates[:10]:
+        for value in values:
+            result = check([(i, value)])
+            if result is not None:
+                return result
+    for left in range(min(6, len(candidates))):
+        for right in range(left+1, min(6, len(candidates))):
+            _, i, a = candidates[left]
+            _, j, b = candidates[right]
+            for u in a:
+                for v in b:
+                    result = check([(i,u), (j,v)])
+                    if result is not None:
+                        return result
+    raise ValueError("no CRC-valid avatar identity after soft recovery")
 
 
 def _decode_avatar_metadata_after(tones: list[int] | tuple[int, ...], start: int) -> tuple[dict, int]:
@@ -1153,6 +1194,12 @@ def decode_minimal_avatar_audio_auto(audio: np.ndarray, sample_rate: int = SAMPL
     else:
         combined_copies = 1
         combined_metrics = metrics
+    return _avatar_metrics_report(symbols, metadata, combined_metrics, combined_copies,
+                                  acquisition, measured_snr_db)
+
+
+def _avatar_metrics_report(symbols, metadata, combined_metrics, combined_copies,
+                           acquisition, measured_snr_db):
     if metadata["avatar_mode"] == "fast_avatar_fec" or metadata["header_version"] == 1:
         try:
             pixels, blocks, corrected, fec_metadata = decode_minimal_avatar_resilient_symbols(
@@ -1183,8 +1230,109 @@ def decode_minimal_avatar_audio_auto(audio: np.ndarray, sample_rate: int = SAMPL
     return pixels, {**metadata, "measured_snr_db": measured_snr_db,
                     "acquisition": acquisition,
                     "raw_avatar": True, "exact": False,
-                    "pixel_coverage": present, "received_copies": copies,
+                    "pixel_coverage": present, "received_copies": max(copies, combined_copies),
                     "color_stage": f"{sum(present)}/{metadata['width'] * metadata['height']} pixels · {copies} copies · unverified"}
+
+
+
+def _announced_avatar_acquisition(audio, sample_rate, profile):
+    period=sample_rate/profile.baud
+    expected=np.asarray(FRAME_SYNC)
+    best=None
+    length=round(period)
+    t=np.arange(length)/sample_rate
+    for fraction in np.arange(-1,1.01,.125):
+        start=max(0,round(.05*sample_rate + fraction*period))
+        starts=start+np.rint(np.arange(len(expected))*period).astype(int)
+        if starts[-1]+length>len(audio):
+            continue
+        chunks=np.asarray(audio)[starts[:,None]+np.arange(length)]
+        power=max(float(np.sum(chunks**2)),1e-20)
+        for offset in range(-14,15,2):
+            kernels=np.exp(-2j*np.pi*(np.asarray(profile.tones_hz)[expected]+offset)[:,None]*t)
+            score=float(np.sum(abs(np.sum(chunks*kernels,axis=1))**2)/power)
+            if best is None or score>best[0]:
+                best=score,start,float(offset)
+    if best is None:
+        return 0,0.,period
+    return best[1],best[2],period
+
+
+def decode_avatar_copies(copies, sample_rate, profile, *, checked=True, wire_version=4):
+    """Independently acquire copies admitted by the common identity header.
+
+    Header and image likelihoods are combined before RS/CRC, including when
+    none of the native identity headers could be decoded on its own.
+    """
+    from copy_combining import SoftCopy, recovery_attempts, diagnostics_for
+    selected = resolve_profile(profile)
+    header_count = AVATAR_META_V4_TONE_COUNT if checked and wire_version == 4 else AVATAR_META_TONE_COUNT
+    frames, best = [], None
+    error = ValueError("no valid avatar identity header received yet")
+    for audio in copies:
+        start, offset, period = _announced_avatar_acquisition(audio, sample_rate, selected)
+        metrics = demodulate_metrics(audio, sample_rate, start_sample=start,
+                   frequency_offset_hz=offset, symbol_period_samples=period, profile=selected)
+        if len(metrics) < len(FRAME_SYNC) + header_count:
+            continue
+        # Normalize by receiver noise, not signal strength: a deep fade must
+        # not get the same weight as a strong copy.
+        noise = max(float(np.median(np.sort(metrics, axis=1)[:, :4])), 1e-12)
+        evidence = metrics / noise
+        diagnostic = dict(start_sample=start, sample_rate=sample_rate,
+                          frequency_offset_hz=offset, symbol_period_samples=period,
+                          clock_error_ppm=(period/(sample_rate/selected.baud)-1)*1e6)
+        frames.append(SoftCopy(evidence, diagnostic, identity=('announced',)))
+    if not frames:
+        raise error
+    # Different capture lengths can include trailing guards; pool only the
+    # common complete symbol extent, never pad missing evidence with guesses.
+    count = min(len(c.evidence) for c in frames)
+    for frame in frames:
+        frame.evidence = frame.evidence[:count]
+    for metrics, used in recovery_attempts(frames):
+        try:
+            header_start = len(FRAME_SYNC)
+            metadata = _decode_avatar_metadata_soft(metrics[header_start:header_start+header_count])
+            symbols = np.argmax(metrics, axis=1).astype(int).tolist()
+            symbols[:len(FRAME_SYNC)] = FRAME_SYNC
+            # Correct header symbols using the exact CRC-validated wire bytes.
+            # Chase substitutions need to be reflected in the native parser.
+            header_tones = _metadata_tones_from_decoded(metadata)
+            symbols[header_start:header_start+header_count] = header_tones
+            diagnostic = diagnostics_for(used, len(frames))
+            report = _avatar_metrics_report(symbols, metadata, metrics, len(used), diagnostic, None)
+            if report[1].get('exact'):
+                return report
+            quality=(sum(report[1].get('received_blocks') or []),
+                     sum(report[1].get('pixel_coverage') or []), len(used))
+            previous_quality=(-1,-1,-1) if best is None else (
+                sum(best[1].get('received_blocks') or []), sum(best[1].get('pixel_coverage') or []),
+                best[1].get('received_copies',1))
+            if quality>previous_quality:
+                best=report
+        except (ValueError, UnicodeDecodeError, ZeroDivisionError) as exc:
+            error = exc
+    if best is not None:
+        return best
+    raise error
+
+
+def _metadata_tones_from_decoded(meta):
+    version = meta['header_version']
+    common = (b'PQ', version, meta['width'], meta['height'], meta['palette_id'],
+              len(meta['callsign']), len(meta['grid']), meta['card_id'],
+              meta['callsign'].encode().ljust(12,b'\0'), meta['grid'].encode().ljust(8,b'\0'))
+    if version >= 3:
+        fields = (*common, AVATAR_BURST_CODES[meta['avatar_mode']],
+                  AVATAR_MESSAGE_CODES[meta['message_type']], -128 if meta['snr_db'] is None else meta['snr_db'])
+        body = (AVATAR_META_V4_STRUCT.pack(*fields, meta['image_crc32'], bytes.fromhex(meta['image_tag']))
+                if version == 4 else AVATAR_META_STRUCT.pack(*fields))
+    else:
+        body = AVATAR_META_LEGACY_STRUCT.pack(*common)
+    data = _bytes_to_gf64(body+crc16(body).to_bytes(2,'big'))
+    shortened = AVATAR_RS_K-len(data)
+    return _gf64_to_tones(_rs64_encode([0]*shortened+data)[shortened:])
 
 
 def pack_palette(palette: list[tuple[int, int, int]]) -> bytes:
@@ -1599,7 +1747,9 @@ def merge_evidence_states(existing: dict, incoming: dict[tuple[int, int, int, in
             raise ValueError("invalid soft-evidence dimensions")
         merged[key] = {**item, "log_likelihood":values}
     for key, item in incoming.items():
-        if key not in merged:
+        if key not in merged or merged[key].get('copy_identity') != item.get('copy_identity'):
+            # Common identity changes must never accumulate old packet evidence,
+            # even when a sender reuses its 16-bit card id.
             merged[key] = {**item, "log_likelihood":item["log_likelihood"].copy()}
             continue
         old = merged[key]
@@ -1615,6 +1765,41 @@ def merge_evidence_states(existing: dict, incoming: dict[tuple[int, int, int, in
 
 def new_evidence_state(incoming: dict[tuple[int, int, int, int], dict]) -> dict:
     return merge_evidence_states({"format":"pixel-qso-soft-evidence","version":5,"packets":[]}, incoming)
+
+
+def _sync_template_scores(audio, sample_rate, tones, starts, periods, shifts):
+    """Score the same phase-continuous sync grid without rebuilding each start.
+
+    The tone phase depends on period; CFO is a continuous phase ramp. Factor
+    them so all starts and offsets share each sync template. Explicit einsum
+    avoids launching a BLAS thread team for these small correlation banks.
+    """
+    starts, shifts = tuple(starts), np.asarray(shifts, dtype=float)
+    results = []
+    for period in periods:
+        bounds = np.rint(np.arange(len(FRAME_SYNC)+1)*period).astype(int)
+        length = int(bounds[-1])
+        phase, parts = 0., []
+        for index, tone in enumerate(FRAME_SYNC):
+            count = int(bounds[index+1]-bounds[index])
+            frequency = tones[tone]
+            parts.append(2*np.pi*frequency*np.arange(count)/sample_rate + phase)
+            phase = (phase + 2*np.pi*frequency*count/sample_rate) % (2*np.pi)
+        base = np.exp(1j*np.concatenate(parts))
+        carriers = np.exp(2j*np.pi*shifts[:,None]*np.arange(length)/sample_rate)
+        valid = [start for start in starts if start >= 0 and start+length <= len(audio)]
+        scores = {}
+        if valid:
+            segments = np.asarray([audio[start:start+length] for start in valid], dtype=float)
+            norms = np.maximum(np.sqrt(np.einsum('ij,ij->i',segments,segments)),1e-12)
+            projections = np.einsum('ij,kj->ik',segments*base,carriers,optimize=False)
+            values = abs(projections)/(norms[:,None]*np.sqrt(length))
+            scores = dict(zip(valid,values))
+        for start in starts:
+            values = scores.get(start, np.full(len(shifts), -np.inf))
+            results.extend((float(score),start,float(period),float(shift))
+                           for score,shift in zip(values,shifts))
+    return results
 
 
 def acquire(audio: np.ndarray, sample_rate: int, baud: int | None = None,
@@ -1694,30 +1879,10 @@ def acquire(audio: np.ndarray, sample_rate: int, baud: int | None = None,
     best_shift = max((item for item in scored if item[1] == best_start), key=lambda item: item[0])[2]
     # Jointly fit start and period to a phase-continuous template for the full
     # sync. Independent per-symbol tone scores have a broad, biased clock peak.
-    expected = FRAME_SYNC
-
-    def template_score(start: int, period: float, carrier_shift: float) -> float:
-        phase = 0.0
-        sine_parts, cosine_parts = [], []
-        bounds = start + np.rint(np.arange(len(expected) + 1) * period).astype(int)
-        for index, tone in enumerate(expected):
-            length = int(bounds[index + 1] - bounds[index])
-            freq = tones[tone] + carrier_shift
-            angle = 2 * np.pi * freq * np.arange(length, dtype=np.float64) / sample_rate + phase
-            sine_parts.append(np.sin(angle)); cosine_parts.append(np.cos(angle))
-            phase = (phase + 2 * np.pi * freq * length / sample_rate) % (2 * np.pi)
-        sine_ref, cosine_ref = np.concatenate(sine_parts), np.concatenate(cosine_parts)
-        if bounds[-1] > len(audio):
-            return -np.inf
-        segment = np.asarray(audio[bounds[0]:bounds[-1]], dtype=np.float64)
-        norm = max(float(np.linalg.norm(segment)), 1e-12)
-        return float(np.hypot(np.dot(segment, sine_ref), np.dot(segment, cosine_ref)) /
-                     (norm * np.sqrt(len(segment))))
-
     starts = range(max(0, best_start - 2), best_start + 3)
     coarse_periods = np.linspace(sps * 0.995, sps * 1.005, 101)
-    candidates = [(template_score(start, float(period), best_shift), start, float(period))
-                  for start in starts for period in coarse_periods]
+    candidates = [(score,start,period) for score,start,period,_ in
+                  _sync_template_scores(audio,sample_rate,tones,starts,coarse_periods,[best_shift])]
     coarse_score, coarse_start, coarse_period = max(candidates)
     fine_periods = np.unique(np.r_[np.linspace(max(sps * 0.995, coarse_period - sps * 0.0001),
                                                min(sps * 1.005, coarse_period + sps * 0.0001), 21),
@@ -1727,8 +1892,7 @@ def acquire(audio: np.ndarray, sample_rate: int, baud: int | None = None,
     # can be several hertz off. Broaden that search only for those profiles.
     fine_shifts = (np.arange(-20.0, 20.01, 1.0) if rate >= 300 else
                    np.arange(best_shift - 2.0, best_shift + 2.01, 0.25))
-    refined = [(template_score(start, float(period), float(carrier)), start, float(period), float(carrier))
-               for start in fine_starts for period in fine_periods for carrier in fine_shifts]
+    refined = _sync_template_scores(audio,sample_rate,tones,fine_starts,fine_periods,fine_shifts)
     best_clock_score, recovered_start, recovered_period, recovered_shift = max(refined)
     # The short sync has a flat clock peak. When the nominal sample clock
     # scores essentially as well, keep the exact generated rate; longer
@@ -1736,8 +1900,8 @@ def acquire(audio: np.ndarray, sample_rate: int, baud: int | None = None,
     # At low tone frequencies, the energy-only coarse CFO estimate can
     # miss the true carrier by more than the local refinement window.
     nominal_shifts = np.arange(-20.0, 20.01, 0.25) if narrow_avatar else fine_shifts
-    nominal = [(template_score(start, float(sps), float(carrier)), start, float(carrier))
-               for start in fine_starts for carrier in nominal_shifts]
+    nominal = [(score,start,shift) for score,start,_,shift in
+               _sync_template_scores(audio,sample_rate,tones,fine_starts,[float(sps)],nominal_shifts)]
     nominal_score, nominal_start, nominal_shift = max(nominal)
     # Short syncs become much less informative about sub-sample timing at
     # high symbol rates. Their best isolated fit can be biased just enough to
@@ -1763,15 +1927,22 @@ def acquire(audio: np.ndarray, sample_rate: int, baud: int | None = None,
 
 def select_capture_profile(audio: np.ndarray, sr: int) -> ModemProfile:
     """Choose a profile from CRC-validated frames in a short capture prefix."""
+    return select_capture_evidence(audio, sr)[0]
+
+
+def select_capture_evidence(audio: np.ndarray, sr: int):
+    """Return the winning profile and its already-acquired probe evidence."""
     probe = audio[:min(len(audio), 20 * sr)]
     ranked = []
     for index, candidate in enumerate(PROFILES):
-        evidence, start, shift, period = receive_capture_evidence(probe, sr, profile=candidate)
+        acquired = receive_capture_evidence(probe, sr, profile=candidate)
+        evidence, start, shift, period = acquired
         packets, errors = decode_packet_evidence(evidence)
         if packets:
-            return candidate
-        ranked.append(((len(packets), len(evidence), -len(errors), -index), candidate))
-    return max(ranked, key=lambda item: item[0])[1]
+            return candidate, acquired
+        ranked.append(((len(packets), len(evidence), -len(errors), -index), candidate, acquired))
+    _, selected, acquired = max(ranked, key=lambda item: item[0])
+    return selected, acquired
 
 
 def decode_wav_details(path: Path, profile: str | ModemProfile | None = "auto") -> tuple[list[Received], list[str], int, int, float, float]:
@@ -1847,14 +2018,48 @@ def decode_wav(path: Path, profile: str | ModemProfile | None = "auto") -> tuple
 def decode_wav_with_state(path: Path, state_path: Path,
                           profile: str | ModemProfile | None = "auto") -> tuple[list[Received], list[str], int, dict]:
     audio, sr = read_wav(path)
-    selected = select_capture_profile(audio, sr) if profile is None or profile == "auto" else resolve_profile(profile)
-    incoming, start, shift, symbol_period = receive_capture_evidence(audio, sr, phase_search=True, profile=selected)
-    fresh_packets, fresh_errors = decode_packet_evidence(incoming)
-    if state_path.exists():
-        state = json.loads(state_path.read_text())
-        state = merge_evidence_states(state, incoming)
+    from modem_envelope import find_copies, groups
+    announced = find_copies(audio, sr)
+    candidates = groups(announced, 'standard')
+    if announced and not candidates:
+        raise ValueError('common header announces a different modem')
+    if candidates:
+        # A recording may contain different cards. Keep independent packet
+        # evidence for the most recent announced identity, never pool them.
+        group = candidates[-1]
+        captures = [np.pad(audio[c.start:c.end], (round(.05*sr),)*2) for c in group]
+        selected = select_capture_profile(captures[0], sr) if profile is None or profile == 'auto' else resolve_profile(profile)
+        incoming = {}
+        start, shift, symbol_period = 0, 0., sr/selected.baud
+        for capture in captures:
+            current, start, shift, symbol_period = receive_capture_evidence(capture, sr, phase_search=True, profile=selected)
+            for key, item in current.items():
+                item['copy_identity'] = group[0].identity
+                if key not in incoming:
+                    incoming[key] = item
+                else:
+                    incoming[key]['log_likelihood'] += item['log_likelihood']
+                    incoming[key]['copies'] += item['copies']
+                    if item.get('valid_raw') and not incoming[key].get('valid_raw'):
+                        incoming[key]['valid_raw'] = item['valid_raw']
+                        incoming[key]['valid_corrected'] = item.get('valid_corrected',0)
     else:
-        state = new_evidence_state(incoming)
+        selected = select_capture_profile(audio, sr) if profile is None or profile == 'auto' else resolve_profile(profile)
+        incoming, start, shift, symbol_period = receive_capture_evidence(audio, sr, phase_search=True, profile=selected)
+    fresh_packets, fresh_errors = decode_packet_evidence(incoming)
+    existing = json.loads(state_path.read_text()) if state_path.exists() else {
+        'format':'pixel-qso-soft-evidence','version':5,'packets':[]}
+    if existing.get('format') != 'pixel-qso-soft-evidence' or existing.get('version') != 5:
+        raise ValueError('unsupported soft-evidence state file')
+    namespace = candidates[-1][0].identity if candidates else 'unannounced'
+    previous = existing.get('active_copy_identity','unannounced')
+    archives = dict(existing.get('copy_groups') or {})
+    archives[previous] = existing.get('packets',[])
+    active = dict(format='pixel-qso-soft-evidence',version=5,
+                  packets=archives.get(namespace,[]))
+    state = merge_evidence_states(active,incoming)
+    archives[namespace] = state['packets']
+    state.update(copy_groups=archives,active_copy_identity=namespace)
     state_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = state_path.with_name(state_path.name + ".tmp")
     temp_path.write_text(json.dumps(state, separators=(",", ":")) + "\n")
@@ -1864,6 +2069,11 @@ def decode_wav_with_state(path: Path, state_path: Path,
         key = (int(item["card_id"]), int(item["version_type"]), int(item["seq"]), int(item["nbytes"]))
         indexed[key] = {**item, "log_likelihood":np.asarray(item["log_likelihood"], dtype=np.float64)}
     packets, errors = decode_packet_evidence(indexed)
+    if candidates:
+        from modem_envelope import report_content_id
+        card, pixels = reconstruct(packets)
+        if card.get('exact') and report_content_id('standard',dict(card=card,pixels=pixels)).hex() != namespace:
+            raise ValueError('recorded card does not match its protected copy identity')
     details = {"start_seconds":start/sr,"carrier_offset_hz":shift,"estimated_baud":sr/symbol_period,
                "profile":selected.key,
                "state_path":str(state_path),"packet_keys":len(state["packets"]),

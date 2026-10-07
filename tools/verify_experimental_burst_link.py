@@ -31,7 +31,13 @@ def free_udp_port():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("work/four-experimental-bursts-20261005/live-link.json"))
+    parser.add_argument("--modes", nargs="+", default=list(burst.MODE_KEYS))
+    parser.add_argument("--receive-all", action="store_true")
+    parser.add_argument("--card-pattern", choices=("random","example"), default="random")
+    parser.add_argument("--copies", type=int, default=2)
     args = parser.parse_args()
+    if not 1 <= args.copies <= 20:
+        parser.error("copies must be 1..20")
     qt = QApplication.instance() or QApplication([])
     windows, results = [], []
     ports = [free_udp_port(), free_udp_port()]
@@ -49,7 +55,7 @@ def main():
                     window.backend_combo.setCurrentIndex(window.backend_combo.findData("experimental"))
                     window.audio_test_mode.setChecked(True)
                     window.auto_connect_cat.setChecked(False)
-                    window.receive_all_modes.setChecked(False)
+                    window.receive_all_modes.setChecked(args.receive_all)
                     window.resize(1320, 900)
                     window.show()
                     windows.append(window)
@@ -60,13 +66,16 @@ def main():
                 received.append(report)
                 record(report)
             rx._record_received_card = capture
-            for index, key in enumerate(burst.MODE_KEYS):
+            for index, key in enumerate(args.modes):
                 card = pixel.example_card()
                 card.card_id = 0x6B00 + index
-                card.pixels = np.random.default_rng(935 + index).integers(0, 8, 1024).tolist()
+                if args.card_pattern == "random":
+                    card.pixels = np.random.default_rng(935 + index).integers(0, 8, 1024).tolist()
                 with patch("app.QTimer.singleShot"):
                     tx.mode_combo.setCurrentIndex(tx.mode_combo.findData(key))
                     rx.mode_combo.setCurrentIndex(rx.mode_combo.findData(key))
+                tx.repeat_count.setValue(args.copies)
+                rx.repeat_count.setValue(args.copies)
                 if rx.rx_timer.isActive():
                     rx.rx_timer.stop()
                     rx._stop_local_receive_capture()
@@ -75,7 +84,7 @@ def main():
                 count = len(received)
                 started = time.monotonic()
                 tx.transmit_exchange()
-                deadline = started + 25
+                deadline = started + tx.selected_backend().estimate_seconds(card,args.copies) + 25
                 activity_seen, preview_seen = False, False
                 while time.monotonic() < deadline:
                     qt.processEvents()
@@ -91,14 +100,14 @@ def main():
                 expected = pixel.unpack_indices(pixel.minimal_avatar_payload(card), 1024)
                 assert report["pixels"] == expected, f"{key}: different pixels"
                 assert report["assembly_event"]["verified_complete"], f"{key}: unverified receive"
-                assert tx.repeat_count.value() == 1 and rx.repeat_count.value() == 1
+                assert tx.repeat_count.value() == args.copies and rx.repeat_count.value() == args.copies
                 assert not tx.ptt_active and not rx.ptt_active
                 assert not tx.rig.connected() and not rx.rig.connected()
                 assert tx.data2g_session is None and rx.data2g_session is None
                 row = {"mode": key, "verified": True, "pixels_match": True,
                        "activity_seen": activity_seen, "partial_preview_seen": preview_seen,
                        "elapsed_seconds": time.monotonic() - started,
-                       "airtime_seconds": burst.seconds(key), "session_wall_cards": rx.session_wall_count}
+                       "airtime_seconds": tx.selected_backend().estimate_seconds(card,args.copies), "copies": args.copies, "session_wall_cards": rx.session_wall_count}
                 results.append(row)
                 print(json.dumps(row), flush=True)
             args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -109,6 +118,8 @@ def main():
             for window in windows:
                 window.rx_timer.stop()
                 window._stop_local_receive_capture()
+                window.decode_pool.waitForDone(15000)
+                qt.processEvents()
                 window.close()
             qt.processEvents()
     return 0

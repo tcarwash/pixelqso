@@ -13,6 +13,7 @@ from urllib.parse import quote, unquote
 
 import numpy as np
 import cardmodem as pixel
+from copy_combining import MAX_COPIES, repeat_waveform
 from card_transfer import HEADER as TRANSFER_HEADER
 
 AUDIO_RATE = pixel.SAMPLE_RATE
@@ -21,34 +22,51 @@ DATA2G_LENGTH_PREFIX_BYTES = 2
 DATA2G_MAX_CONTROL_CODEWORDS = 4
 DATA2G_MODE_KEY_PREFIX = "data2g_mode_"
 
+GROUPED_MODES = {
+    'experimental_8fsk_grouped': 'experimental_8fsk_ldpc',
+    'experimental_16fsk_grouped': 'experimental_16fsk_ldpc',
+}
+
+COMPRESSED_MODE_KEYS = ('experimental_8fsk_compressed', 'experimental_16fsk_compressed', 'experimental_16fsk_grid')
+
 # Display names only; persistent IDs and on-air formats stay stable.
 EXPERIMENTAL_MODE_LABELS = {
-    "experimental_8fsk_ldpc": "8-FSK · soft LDPC · single burst",
+    **{key: f"{8 if '8fsk' in key else 16}-FSK · compressed LDPC copies" for key in COMPRESSED_MODE_KEYS},
+    **{key: f"{8 if '8fsk' in key else 16}-FSK · grouped LDPC copies" for key in GROUPED_MODES},
+    "experimental_8fsk_ldpc": "8-FSK · soft LDPC · copy combining",
     "experimental_qpsk_equalized": "QPSK · LDPC + adaptive equalizer",
     "experimental_8fsk_outer_rs": "8-FSK · strong RS + outer parity",
-    "experimental_16fsk_ldpc": "16-FSK · soft LDPC · single burst",
+    "experimental_16fsk_ldpc": "16-FSK · soft LDPC · copy combining",
     **{f"resilient_{baud}": f"8-FSK · RS + soft Chase · {baud} baud · ≈{9 * baud} Hz"
        for baud in (100, 50, 25)},
     "fast_avatar_fec": "8-FSK · RS + soft Chase · 400 baud · block CRC",
     "fast_avatar_fec_v4": "8-FSK · RS + soft Chase · 400 baud · v4 CRC32",
     "fast_avatar": "8-FSK · raw pixels · 400 baud · unchecked",
-    "experimental_qpsk_5s": "QPSK · soft LDPC · single burst",
+    "experimental_qpsk_5s": "QPSK · soft LDPC · copy combining",
     "experimental_qpsk_combined": "QPSK · soft LDPC + copy combining",
     "standard": "4-FSK · soft Viterbi · progressive packets",
 }
 
+EXPERIMENTAL_MODE_LABELS["experimental_16fsk_grid"] = "16-FSK · compressed · UTC start grid"
+
 EXPERIMENTAL_MODE_DESCRIPTIONS = {
-    "experimental_8fsk_ldpc": "One 5.005-second, 32×32 eight-color burst. "
+    **{key: "Lossless 32×32 eight-color cards with automatic compression and shorter LDPC payloads. "
+       "One protected v3 group header, 1–20 copies, raw fallback, and whole-card CRC32."
+       for key in COMPRESSED_MODE_KEYS},
+    **{key: "One protected v2 group header followed by 1–20 independently synchronized LDPC payload copies. "
+       "Soft combining and whole-card CRC32; no per-copy common headers or trailers. Requires grouped-mode RX."
+       for key in GROUPED_MODES},
+    "experimental_8fsk_ldpc": "A 5.005-second, 32×32 eight-color payload per copy. "
         "600-baud Gray-labelled 8-FSK, interleaved rate-matched LDPC, pilot timing, and whole-card CRC32. "
         "Fixed tones 450–2550 Hz; requires a receiver supporting this experimental format.",
-    "experimental_qpsk_equalized": "One 4.622-second, 32×32 eight-color QPSK burst. "
+    "experimental_qpsk_equalized": "A 4.622-second, 32×32 eight-color QPSK payload per copy. "
         "Soft LDPC with a 21-tap fractionally spaced adaptive equalizer, training, pilot and "
         "confidence-gated decision-directed NLMS. Uses the existing QPSK wire format.",
-    "experimental_8fsk_outer_rs": "One 5.480-second, 32×32 eight-color burst. "
+    "experimental_8fsk_outer_rs": "A 5.480-second, 32×32 eight-color payload per copy. "
         "400-baud 8-FSK with shortened RS(63,53), soft Chase recovery and per-shard CRC16. "
         "Outer systematic RS(16,12) reconstructs up to four missing shards; whole-card CRC32 gates completion. "
         "Checked pixels appear early. Fixed tones 800–2200 Hz; new experimental wire format.",
-    "experimental_16fsk_ldpc": "One 5.640-second, 32×32 eight-color burst. "
+    "experimental_16fsk_ldpc": "A 5.640-second, 32×32 eight-color payload per copy. "
         "400-baud Gray-labelled 16-FSK, interleaved rate-matched LDPC, pilot timing and whole-card CRC32. "
         "Fixed tones 375–2625 Hz; overlapping tones trade bandwidth for decoder difficulty. New experimental wire format.",
     **{key: "8-tone FSK with shortened Reed–Solomon RS(63,61), bounded soft-decision "
@@ -59,7 +77,7 @@ EXPERIMENTAL_MODE_DESCRIPTIONS = {
     "fast_avatar": "8-tone FSK with a protected identity header and hard-decision raw image pixels. "
         "Image pixels have no FEC or checksum verification.",
     "experimental_qpsk_5s": "Shaped QPSK with soft-decision LDPC decoding and whole-card CRC32. "
-        "Sends one 4.622-second burst; the receiver can combine copies when needed.",
+        "The 4.622-second payload can be repeated and soft-combined; protected copy headers add airtime.",
     "experimental_qpsk_combined": "Shaped QPSK with soft-decision LDPC decoding and whole-card CRC32. "
         "Sends repeated bursts; the receiver combines noise-weighted soft bit evidence when needed.",
     "standard": "4-tone FSK with rate-1/2 K=7 convolutional coding, soft-decision Viterbi decoding, "
@@ -91,6 +109,7 @@ class AvatarBackend:
     checked: bool
     profile: pixel.ModemProfile = pixel.MINIMAL_AVATAR_PROFILE
     wire_version: int = 3
+    max_repeats: int = MAX_COPIES
 
     def encode(self, card, repeats, message_type, snr_db):
         cycle = (pixel.minimal_avatar_resilient_cycle_symbols(
@@ -122,6 +141,22 @@ class AvatarBackend:
         if self.profile != pixel.MINIMAL_AVATAR_PROFILE:
             decoded["avatar_mode"] = self.key
             decoded["audio_tones_hz"] = list(self.profile.tones_hz)
+        return _report(pixels, decoded, sample_rate, self.profile.key)
+
+    def decode_payload_copies(self, captures, sample_rate):
+        # Filter before downsampling each independently synchronized capture.
+        if sample_rate == AUDIO_RATE:
+            taps = np.arange(-48, 49)
+            kernel = np.sinc(taps/8) * np.hamming(len(taps))
+            kernel /= kernel.sum()
+            captures = [np.convolve(x, kernel, mode='same')[::6] for x in captures]
+            rate = 8000
+        else:
+            rate = sample_rate
+        pixels, decoded = pixel.decode_avatar_copies(captures, rate, self.profile,
+                              checked=self.checked, wire_version=self.wire_version)
+        if self.profile != pixel.MINIMAL_AVATAR_PROFILE:
+            decoded.update(avatar_mode=self.key, audio_tones_hz=list(self.profile.tones_hz))
         return _report(pixels, decoded, sample_rate, self.profile.key)
 
     def minimum_audio_seconds(self):
@@ -331,18 +366,22 @@ class WeakSignalBackend:
     key: str = "experimental_qpsk_5s"
     label: str = EXPERIMENTAL_MODE_LABELS["experimental_qpsk_5s"]
     checked: bool = True
-    max_repeats: int = 1
+    max_repeats: int = MAX_COPIES
 
     def encode(self, card, repeats, message_type, snr_db):
         import weak_signal_modem as weak
-        return weak.encode(card, repeats, message_type, snr_db)
+        return repeat_waveform(weak.encode(card, 1, message_type, snr_db), repeats)
 
     def estimate_seconds(self, card, repeats):
         import weak_signal_modem as weak
         weak.packet(card)
-        if repeats != 1:
-            raise ValueError("Experimental five-second mode supports one burst")
-        return weak.seconds()
+        repeat_waveform(np.empty(0), repeats)
+        return repeats * weak.seconds()
+
+    def decode_payload_copies(self, captures, sample_rate):
+        import weak_signal_modem as weak
+        pixels, metadata=weak.decode_copies(captures,sample_rate)
+        return _report(pixels,metadata,sample_rate,self.key)
 
     def minimum_audio_seconds(self):
         import weak_signal_modem as weak
@@ -358,46 +397,48 @@ class WeakSignalBackend:
 class WeakSignalCombinedBackend(WeakSignalBackend):
     key: str = "experimental_qpsk_combined"
     label: str = EXPERIMENTAL_MODE_LABELS["experimental_qpsk_combined"]
-    max_repeats: int = 8
+    max_repeats: int = MAX_COPIES
 
     def encode(self, card, repeats, message_type, snr_db):
         import weak_signal_modem as weak
         if not 1 <= repeats <= self.max_repeats:
-            raise ValueError("Combined weak-signal mode supports 1..8 copies")
-        return np.tile(weak.encode(card, 1, message_type, snr_db), repeats)
+            raise ValueError("Combined weak-signal mode supports 1..20 copies")
+        return repeat_waveform(weak.encode(card, 1, message_type, snr_db), repeats)
 
     def estimate_seconds(self, card, repeats):
         import weak_signal_modem as weak
         weak.packet(card)
         if not 1 <= repeats <= self.max_repeats:
-            raise ValueError("Combined weak-signal mode supports 1..8 copies")
+            raise ValueError("Combined weak-signal mode supports 1..20 copies")
         return repeats * weak.seconds()
 
 
 @dataclass(frozen=True)
 class ExperimentalBurstBackend:
-    """New single-burst experiments; codecs stay lazy and CPU-only."""
+    """Experimental burst payloads with shared protected copy framing."""
     key: str
     checked: bool = True
-    max_repeats: int = 1
+    max_repeats: int = MAX_COPIES
 
     @property
     def label(self):
         return EXPERIMENTAL_MODE_LABELS[self.key]
 
     def encode(self, card, repeats, message_type, snr_db):
-        if repeats != 1:
-            raise ValueError("This experimental modem sends one burst")
+        repeat_waveform(np.empty(0), repeats)
         import experimental_burst_modem as burst
-        return burst.encode(self.key, card, message_type, snr_db)
+        return repeat_waveform(burst.encode(self.key, card, message_type, snr_db), repeats)
 
     def estimate_seconds(self, card, repeats):
-        if repeats != 1:
-            raise ValueError("This experimental modem sends one burst")
+        repeat_waveform(np.empty(0), repeats)
         import weak_signal_modem as weak
         import experimental_burst_modem as burst
         weak.packet(card)
-        return burst.seconds(self.key)
+        return repeats * burst.seconds(self.key)
+
+    def decode_payload_copies(self, captures, sample_rate):
+        import experimental_burst_modem as burst
+        return burst.decode_copies(self.key,captures,sample_rate)
 
     def minimum_audio_seconds(self):
         import experimental_burst_modem as burst
@@ -408,9 +449,135 @@ class ExperimentalBurstBackend:
         return burst.decode(self.key, audio, sample_rate)
 
 
+def _with_copy_header(cls):
+    encode_payload, decode_payload, estimate_payload = cls.encode, cls.decode, cls.estimate_seconds
+    def encode(self, card, repeats, message_type, snr_db):
+        from modem_envelope import transmit
+        payload = encode_payload(self, card, 1, message_type, snr_db)
+        return transmit(self.key, card, payload, repeats, message_type, snr_db)
+    def decode(self, audio, sample_rate):
+        from modem_envelope import decode_capture
+        return decode_capture(self.key, audio, sample_rate,
+                              lambda x, rate: decode_payload(self, x, rate),
+                              copy_decoder=(lambda xs, rate: self.decode_payload_copies(xs, rate))
+                              if hasattr(self, 'decode_payload_copies') else None)
+    def estimate(self, card, repeats):
+        from modem_envelope import HEADER_SECONDS
+        repeat_waveform(np.empty(0), repeats)
+        return repeats * (estimate_payload(self, card, 1) + 2*HEADER_SECONDS)
+    cls.encode, cls.decode, cls.estimate_seconds = encode, decode, estimate
+    cls.decode_payload = decode_payload
+    return cls
+
+
+# Capture subclass methods before decorating the base class (no nested headers).
+for _cls in (WeakSignalCombinedBackend, WeakSignalBackend, AvatarBackend, ExperimentalBurstBackend):
+    _with_copy_header(_cls)
+
+
+
+@dataclass(frozen=True)
+class GroupedFSKBackend:
+    requires_common_header = True
+    key: str
+    checked: bool = True
+    max_repeats: int = MAX_COPIES
+
+    @property
+    def label(self):
+        return EXPERIMENTAL_MODE_LABELS[self.key]
+
+    def encode(self, card, repeats, message_type, snr_db):
+        import experimental_burst_modem as burst
+        from modem_envelope import transmit_group
+        payload = burst.encode(GROUPED_MODES[self.key], card, message_type, snr_db)
+        return transmit_group(self.key, card, payload, repeats, message_type, snr_db)
+
+    def estimate_seconds(self, card, repeats):
+        import experimental_burst_modem as burst
+        import weak_signal_modem as weak
+        from modem_envelope import HEADER_SECONDS
+        repeat_waveform(np.empty(0), repeats)
+        weak.packet(card)
+        return HEADER_SECONDS + repeats * burst.seconds(GROUPED_MODES[self.key])
+
+    def minimum_audio_seconds(self):
+        from modem_envelope import HEADER_SECONDS
+        return HEADER_SECONDS
+
+    def decode_payload_copies(self, captures, sample_rate):
+        import experimental_burst_modem as burst
+        report = burst.decode_copies(GROUPED_MODES[self.key], captures, sample_rate, grouped=True)
+        report['receive_profile'] = self.key
+        if report.get('card'):
+            report['card']['avatar_mode'] = self.key
+        return report
+
+    def decode_payload(self, audio, sample_rate):
+        raise ValueError('grouped FSK requires a protected opening header')
+
+    def decode(self, audio, sample_rate):
+        from modem_envelope import decode_capture
+        return decode_capture(self.key, audio, sample_rate, self.decode_payload,
+                              copy_decoder=self.decode_payload_copies)
+
+
+@dataclass(frozen=True)
+class CompressedFSKBackend:
+    requires_common_header = True
+    automatic_compression = True
+
+    @property
+    def utc_grid(self):
+        return self.key == "experimental_16fsk_grid"
+    key: str
+    checked: bool = True
+    max_repeats: int = MAX_COPIES
+
+    @property
+    def label(self):
+        return EXPERIMENTAL_MODE_LABELS[self.key]
+
+    def encode(self, card, repeats, message_type, snr_db):
+        import compressed_fsk_modem as compressed
+        from modem_envelope import transmit_group
+        repeat_waveform(np.empty(0),repeats)
+        return transmit_group(self.key,card,
+            compressed.encode_payload(self.key,card,message_type,snr_db),repeats,message_type,snr_db)
+
+    def estimate_seconds(self, card, repeats):
+        import compressed_fsk_modem as compressed
+        from modem_envelope import HEADER_SECONDS
+        repeat_waveform(np.empty(0),repeats)
+        _,capacity,_ = compressed.pack(card)
+        return HEADER_SECONDS + repeats*compressed.payload_samples(self.key,capacity)/48000
+
+    def minimum_audio_seconds(self):
+        from modem_envelope import HEADER_SECONDS
+        return HEADER_SECONDS
+
+    def decode_payload(self, audio, sample_rate):
+        raise ValueError('compressed FSK requires a protected opening header')
+
+    def decode_announced_copies(self, captures, sample_rate, announcements):
+        import compressed_fsk_modem as compressed
+        report = compressed.decode_copies(self.key,captures,sample_rate,announcements)
+        report['receive_profile'] = self.key
+        if report.get('card'):
+            report['card']['avatar_mode'] = self.key
+        return report
+
+    def decode(self, audio, sample_rate):
+        from modem_envelope import decode_capture
+        return decode_capture(self.key,audio,sample_rate,self.decode_payload,
+                              announced_decoder=self.decode_announced_copies)
+
+
 # The two legacy keys are retained only to migrate saved preferences and to
 # represent the not-yet-discovered Data2G selection before a host connects.
 BACKENDS: dict[str, CardBackend] = {
+    **{key: CompressedFSKBackend(key) for key in COMPRESSED_MODE_KEYS},
+    **{key: GroupedFSKBackend(key) for key in GROUPED_MODES},
     **{key: ExperimentalBurstBackend(key) for key in (
         "experimental_8fsk_ldpc", "experimental_qpsk_equalized",
         "experimental_8fsk_outer_rs", "experimental_16fsk_ldpc")},
@@ -423,7 +590,7 @@ BACKENDS: dict[str, CardBackend] = {
     **{f"resilient_{baud}": AvatarBackend(
         f"resilient_{baud}", EXPERIMENTAL_MODE_LABELS[f"resilient_{baud}"], True,
         pixel.ModemProfile(f"avatar-{baud}", f"Narrow avatar · {baud} baud", baud,
-                           tuple((i + 1) * baud for i in range(8)), 9 * baud))
+                           tuple((i + 1) * baud for i in range(8)), 9 * baud), wire_version=4)
        for baud in (100, 50, 25)},
     "data2g_1200_robust": Data2GHostBackend("data2g_1200_robust", "Data2G · 1.2 kHz · robust"),
     "data2g_1200_fast": Data2GHostBackend("data2g_1200_fast", "Data2G · 1.2 kHz · fast"),
@@ -458,6 +625,10 @@ class ModeSpec:
 # BACKENDS; this policy remains the source of ordering, visibility, execution
 # path, and dependency/connection requirements.
 MODE_REGISTRY: dict[str, ModeSpec] = {
+    **{key: ModeSpec(key, EXPERIMENTAL_MODE_LABELS[key], True, "pixelqso_audio", "scipy")
+       for key in COMPRESSED_MODE_KEYS},
+    **{key: ModeSpec(key, EXPERIMENTAL_MODE_LABELS[key], True, "pixelqso_audio", "scipy")
+       for key in GROUPED_MODES},
     **{key: ModeSpec(key, EXPERIMENTAL_MODE_LABELS[key], True, "pixelqso_audio", "scipy")
        for key in ("experimental_8fsk_ldpc", "experimental_qpsk_equalized",
                    "experimental_8fsk_outer_rs", "experimental_16fsk_ldpc")},

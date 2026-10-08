@@ -1,12 +1,13 @@
 # Receive-all acquisition and latency
 
 For captures without a decoded common header, receive-all tries the selected
-local modem first. If it does not return a verified card, remaining modes are tried in stable order by the shortest audio
-window at which each can acquire useful signal. A mode is skipped until its
-minimum window is present. The legacy packet modem uses a one-second preamble
-window and joins the same queue. When a protected common header is found, its
-announced decoder runs directly; the scan is reused rather than repeated by
-each native modem. Card identity and checksum checks still control promotion.
+local modem first. If it does not return a verified card, remaining modes are
+tried in stable order by the shortest audio window at which each can acquire
+useful signal. A mode is skipped until its minimum window is present. The
+legacy packet modem remains available when selected directly but is excluded
+from blind receive-all. When a protected common header is found, its announced
+decoder runs directly; the scan is reused rather than repeated by each native
+modem. Card identity and checksum checks still control promotion.
 
 For legacy packet audio above 8 kHz, the decoder resamples once to 8 kHz before
 sync acquisition. Its modem tones remain within the new passband. Automatic
@@ -44,6 +45,15 @@ The bytearray conversion benchmark asserts bit-for-bit sample equality. For a
 90-second capture, snapshot plus conversion took 13.84 ms before and 12.96 ms
 after on this host. Storage-container replacement was not justified by that
 small saving.
+
+A seeded `resilient_25` pass through the AWGN channel at −6 dB verified the
+exact card. On the same 60.92-second capture, warm receive-all decode fell
+from 4.67 seconds to 3.36 seconds median across three measured runs. The common
+header correlator now transforms the capture once and reuses its spectrum for
+the tone bank; selected-mode live decode also avoids a duplicate header scan
+when no copy has been cached yet. A cProfile run reduced `find_copies` from
+5.10 to 3.22 seconds, though those instrumented timings include different
+lazy-import costs and are less comparable than the warm end-to-end runs.
 
 These are controlled software measurements; they do not establish HF receive
 performance. Full traces, JSON, and test logs are stored under

@@ -12,7 +12,8 @@ import math
 import struct
 import zlib
 import numpy as np
-from scipy.signal import fftconvolve, hilbert, resample_poly, find_peaks
+from scipy.fft import fft, ifft, next_fast_len
+from scipy.signal import hilbert, resample_poly, find_peaks
 import cardmodem as pixel
 from experimental_fec import rs_encode, rs_decode
 from copy_combining import MAX_COPIES, ADMITTED_IDENTITY
@@ -329,10 +330,20 @@ def find_copies(audio, sample_rate, *, capture_start_utc=None, grid_window=.1):
         from grid_fsk_modem import near_grid
         near_grid(capture_start_utc, grid_window)  # Validate the hint.
     t = np.arange(step) / RATE
+    fft_length=next_fast_len(len(analytic)+step-1)
+    signal_spectrum=fft(analytic,n=fft_length)
+    correlation_length=len(analytic)-step+1
+    tone_batch=max(1,min(len(TONES),8_000_000//fft_length))
     threshold = 1/8 + 2.75*math.sqrt(7/(64*9*TRAINING))
     for offset in range(-120, 121, 20):
-        bank = np.asarray([abs(fftconvolve(analytic,
-            np.exp(-2j*np.pi*(tone+offset)*t)[::-1], 'valid'))**2 for tone in TONES])
+        bank=np.empty((len(TONES),correlation_length),dtype=float)
+        for first in range(0,len(TONES),tone_batch):
+            tones=TONES[first:first+tone_batch]
+            templates=np.asarray([np.exp(-2j*np.pi*(tone+offset)*t)[::-1] for tone in tones])
+            template_spectrum=fft(templates,n=fft_length,axis=1,workers=4)
+            template_spectrum*=signal_spectrum[None,:]
+            correlations=ifft(template_spectrum,axis=1,workers=4)
+            bank[first:first+len(tones)]=abs(correlations[:,step-1:len(analytic)])**2
         for phase in range(0, step, step//4):
             energies = bank[:, phase::step]
             count = energies.shape[1] - TRAINING + 1

@@ -336,12 +336,6 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
             preview, failure = None, None
             for key in dict.fromkeys(copy.mode for copy in copies):
                 if key == LEGACY_MODE_KEY:
-                    outcome = local_adapter_for_mode(key).decode_legacy_audio(
-                        audio, sample_rate, 'auto', copies=copies)
-                    if outcome.report and outcome.report.get('card',{}).get('exact'):
-                        return outcome
-                    preview = outcome.report or preview
-                    failure = outcome.failure or failure
                     continue
                 if key not in BACKENDS:
                     continue
@@ -377,29 +371,8 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
     preferred_key = {"fast_avatar": "fast_avatar_fec",
                      "experimental_qpsk_combined": "experimental_qpsk_5s"}.get(
                          preferred_mode, preferred_mode)
-    # Keep the legacy packet decoder in the same latency-ordered candidate list.
-    if not any(key == LEGACY_MODE_KEY for key, _ in backends):
-        backends.append((LEGACY_MODE_KEY, None))
     backends = order_receive_candidates(backends, preferred_key)
     for key, backend in backends:
-        if key == LEGACY_MODE_KEY:
-            if len(audio) < sample_rate:
-                continue
-            legacy = local_adapter_for_mode(LEGACY_MODE_KEY).decode_legacy_audio(
-                audio, sample_rate, "auto", copies=copies or [])
-            if legacy.failure:
-                if legacy.failure.kind is DecodeFailureKind.NO_MATCH:
-                    last_failure = legacy.failure
-                    continue
-                return legacy
-            report = legacy.report
-            if report["card"].get("exact"):
-                return legacy
-            if preview is None or (preview.get("receive_activity") and not report.get("receive_activity")):
-                preview = report
-                if on_preview is not None:
-                    on_preview(report)
-            continue
         if getattr(backend, "requires_common_header", False):
             continue  # Header-routed group decoders have no blind native format.
         if key in {"fast_avatar", "experimental_qpsk_combined"}:
@@ -467,8 +440,8 @@ class DecodeWorker(QRunnable):
                                                    self.preferred_mode, self.include_experimental)
                 if (outcome.failure and
                         outcome.failure.kind is DecodeFailureKind.NO_MATCH):
-                    outcome = local_adapter_for_mode(LEGACY_MODE_KEY).decode_legacy_wav(
-                        self.path, self.state_path, self.profile)
+                    self.signals.finished.emit((str(self.path), None, outcome.failure))
+                    return
                 if outcome.failure:
                     self.signals.finished.emit((str(self.path), None, outcome.failure))
                     return
@@ -518,7 +491,8 @@ class LiveDecodeWorker(QRunnable):
         try:
             audio = pcm16_to_float32(self.samples)
             announced = None
-            if self.copy_cache is not None:
+            if (self.copy_cache is not None and
+                    (self.mode == "auto" or self.copy_cache.entries)):
                 from modem_envelope import find_copies
                 announced = find_copies(audio,self.sample_rate, capture_start_utc=self.capture_start_utc)
             if self.mode == "auto" or announced or (self.copy_cache is not None and self.copy_cache.entries):
@@ -556,15 +530,9 @@ class LiveDecodeWorker(QRunnable):
                 result.setdefault("fresh_packets", [])
                 self._finish(result, bool(card.get("exact")), None, started)
                 return
-            # Compatibility fallback for an unregistered legacy selection.
-            # Keep packet parsing and its integrity rules inside the adapter.
-            outcome = local_adapter_for_mode(LEGACY_MODE_KEY).decode_legacy_audio(
-                audio, self.sample_rate, self.profile)
-            if outcome.failure:
-                self._finish(None, False, outcome.failure, started)
-                return
-            result = outcome.report
-            self._finish(result, bool(result.get("complete")), None, started)
+            self._finish(None, False, DecodeFailure(
+                EXPERIMENTAL_ADAPTER.key, DecodeFailureKind.NO_MATCH,
+                f"No decoder is registered for mode {self.mode!r}", False), started)
         except Exception as exc:
             self._finish(None, False, str(exc), started)
 

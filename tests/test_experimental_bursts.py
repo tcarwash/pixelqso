@@ -216,7 +216,7 @@ class ExperimentalBurstTests(unittest.TestCase):
             for key in burst.MODE_KEYS:
                 with self.subTest(key=key):
                     window.mode_combo.setCurrentIndex(window.mode_combo.findData(key))
-                    self.assertEqual(window.repeat_count.value(), 3)
+                    self.assertEqual(window.repeat_count.value(), 1)
                     self.assertTrue(window.repeat_count.isHidden())
                     audio = window._card_tx_audio(self.card)
                     self.assertAlmostEqual(len(audio) / 48000,

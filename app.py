@@ -222,6 +222,7 @@ class RigctlClient(QObject):
 class DecodeSignals(QObject):
     finished = Signal(object)
     preview = Signal(object)
+    progress = Signal(object)
 
 
 class Data2GSignals(QObject):
@@ -376,10 +377,48 @@ def order_receive_candidates(backends, preferred_key=None):
     return [(key,backend) for key,backend,_ in sorted(ranked,key=lambda item:item[2])]
 
 
+def newest_protected_acquisition(copies):
+    """Keep copies for the newest announced content identity only.
+
+    Older payloads remain useful while they are the newest candidate, but must
+    not keep winning after a later card header has announced a new identity.
+    """
+    groups = {}
+    for copy in copies or ():
+        groups.setdefault((copy.mode, copy.identity), []).append(copy)
+    if not groups:
+        return [], None
+    def acquisition_time(copy):
+        return int(copy.diagnostics.get("acquisition_start_sample", copy.start))
+    newest_key, newest_group = max(groups.items(),
+                                   key=lambda item: max(acquisition_time(c) for c in item[1]))
+    return newest_group, newest_key[0]
+
+
+def _receive_report_rank(report):
+    """Rank reports monotonically: whole-card proof, checked pixels, candidates."""
+    card = report.get("card") or {}
+    coverage = card.get("pixel_coverage") or []
+    verified = card.get("verified_pixel_coverage") or []
+    diagnostics = card.get("diagnostics") or {}
+    revisions = diagnostics.get("copy_revisions") or ()
+    evidence_samples = sum(int(item[-1]) for item in revisions if item)
+    copy_count = max(int(card.get("received_copies", 0) or 0), len(revisions))
+    if card.get("exact"):
+        return (3, sum(bool(value) for value in coverage), sum(bool(v) for v in verified),
+                evidence_samples, copy_count)
+    blocks = card.get("received_blocks") or []
+    verified_count = max(sum(bool(value) for value in verified),
+                         sum(bool(value) for value in blocks))
+    return (2 if verified_count else 1,
+            verified_count if verified_count else sum(bool(value) for value in coverage),
+            evidence_samples, copy_count)
+
+
 def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
                              preferred_mode=None, include_experimental=False,
                              on_preview=None, copy_cache=None, capture_start_sample=0, announced_copies=None,
-                             live_snapshot=False):
+                             live_snapshot=False, on_mode_attempt=None, capture_session_id=0):
     """Try the selected format first, then fall back to all installed formats."""
     # A verified common header routes RX before costly native decoder trials.
     # An unannounced historical capture retains the blind receive-all path.
@@ -393,8 +432,31 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
             if cached_copies:
                 audio,sample_rate,copies=cached_audio,8000,cached_copies
         if copies:
+            for copy in copies:
+                copy.diagnostics["receive_session_id"] = capture_session_id
+                copy.diagnostics["acquisition_start_sample"] = int(
+                    copy.diagnostics.get("acquisition_start_sample",
+                        round((capture_start_sample + copy.start) * 8000 / sample_rate)))
+                copy.diagnostics["acquisition_id"] = (
+                    capture_session_id, copy.diagnostics["acquisition_start_sample"],
+                    copy.mode, copy.identity)
+            copies, newest_mode = newest_protected_acquisition(copies)
             preview, failure = None, None
+
+            def consider_preview(report, fallback_start=None):
+                nonlocal preview
+                is_activity = bool(report.get('receive_activity'))
+                previous_activity = bool(preview and preview.get('receive_activity'))
+                if (preview is None or (previous_activity and not is_activity) or
+                        (not is_activity and preview is not None and not previous_activity and
+                         _receive_report_rank(report) > _receive_report_rank(preview))):
+                    preview = report
+                    if on_preview is not None:
+                        on_preview(report)
+
             for key in dict.fromkeys(copy.mode for copy in copies):
+                if on_mode_attempt is not None:
+                    on_mode_attempt(key)
                 if key == LEGACY_MODE_KEY:
                     legacy_copies=[copy for copy in copies if copy.mode==key]
                     outcome=local_adapter_for_mode(key).decode_legacy_audio(
@@ -403,13 +465,13 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
                         failure=outcome.failure
                         continue
                     report=outcome.report
-                    if report.get('card',{}).get('exact'):
-                        return DecodeOutcome(report=report)
-                    if preview is None or (preview.get('receive_activity') and
-                                           not report.get('receive_activity')):
-                        preview=report
-                        if on_preview is not None:
-                            on_preview(report)
+                    latest_start = max(int(copy.diagnostics.get(
+                        "acquisition_start_sample", round(copy.start * 8000 / sample_rate)))
+                        for copy in legacy_copies)
+                    report.setdefault('copy_header', {}).update(
+                        acquisition_start_sample=latest_start,
+                        receive_session_id=capture_session_id)
+                    consider_preview(report, latest_start)
                     continue
                 if key not in BACKENDS:
                     continue
@@ -425,25 +487,27 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
                             copy_decoder=(lambda xs, rate: backend.decode_payload_copies(xs, rate))
                             if hasattr(backend, 'decode_payload_copies') else None,
                             announced_decoder=getattr(backend,'decode_announced_copies',None))
-                        if report.get('card',{}).get('exact'):
-                            return DecodeOutcome(report=report)
-                        if preview is None or (preview.get('receive_activity') and not report.get('receive_activity')):
-                            preview = report
-                            if on_preview is not None:
-                                on_preview(report)
+                        consider_preview(report)
                     except ValueError as exc:
                         failure = DecodeFailure(EXPERIMENTAL_ADAPTER.key, DecodeFailureKind.NO_MATCH, str(exc), True)
-            return DecodeOutcome(report=preview) if preview is not None else DecodeOutcome(
-                failure=failure or DecodeFailure(EXPERIMENTAL_ADAPTER.key, DecodeFailureKind.NO_MATCH,
-                                                 'Announced payload is incomplete', True))
-        if live_snapshot:
-            return DecodeOutcome(failure=DecodeFailure(
+            if preview is not None:
+                return DecodeOutcome(report=preview)
+            if live_snapshot:
+                return DecodeOutcome(report={
+                    "receive_activity": "New protected transmission detected · waiting for card data",
+                    "receive_profile": newest_mode,
+                    "pivot_receive": True,
+                    "receive_identity": (capture_session_id, copies[0].mode, copies[0].identity),
+                    "receive_session_id": capture_session_id,
+                    "acquisition_start_sample": max(int(copy.diagnostics.get(
+                        "acquisition_start_sample", round(copy.start * 8000 / sample_rate)))
+                        for copy in copies),
+                })
+            return DecodeOutcome(failure=failure or DecodeFailure(
                 EXPERIMENTAL_ADAPTER.key, DecodeFailureKind.NO_MATCH,
-                'No protected modem header found in newly scanned receive audio', True))
-    if live_snapshot:
-        return DecodeOutcome(failure=DecodeFailure(
-            EXPERIMENTAL_ADAPTER.key, DecodeFailureKind.NO_MATCH,
-            'No protected modem header found in newly scanned receive audio', True))
+                'Announced payload is incomplete', True))
+        # No announced header can still be a valid legacy/native waveform.
+        # Continue to bounded blind decoders instead of ending live RX here.
     preview = None
     last_failure = None
     backends = available_modes(include_experimental=include_experimental)
@@ -464,6 +528,8 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
         placements = (list(dict.fromkeys((audio_placement, "near_carrier", "centered")))
                       if mode_supports_audio_placement(key) else [audio_placement])
         for placement in placements:
+            if on_mode_attempt is not None:
+                on_mode_attempt(key)
             outcome = local_adapter_for_mode(key).decode_capture(
                 get_backend(key, placement), audio, sample_rate, copies=copies or [])
             if outcome.failure:
@@ -547,11 +613,13 @@ class LiveDecodeWorker(QRunnable):
     """Decode a snapshot of the in-memory receive buffer while it is recording."""
     def __init__(self, samples: bytes, sample_rate: int, profile: str, generation: int,
                  mode="standard", audio_placement="near_carrier", preferred_mode=None,
-                 include_experimental=False, copy_cache=None, capture_start_sample=0, capture_start_utc=None):
+                 include_experimental=False, copy_cache=None, capture_start_sample=0,
+                 capture_start_utc=None, receive_session_id=0):
         super().__init__()
         self.copy_cache=copy_cache
         self.capture_start_sample=capture_start_sample
         self.capture_start_utc=capture_start_utc
+        self.receive_session_id=receive_session_id
         self.samples = samples
         self.sample_rate = sample_rate
         self.profile = profile
@@ -587,21 +655,38 @@ class LiveDecodeWorker(QRunnable):
                     for copy in found:
                         copy.start+=scan_start
                         copy.end+=scan_start
+                        copy.diagnostics["acquisition_start_sample"] = round(
+                            (self.capture_start_sample + copy.start) * 8000 / self.sample_rate)
+                        copy.diagnostics["receive_session_id"] = self.receive_session_id
+                        copy.diagnostics["acquisition_id"] = (
+                            self.receive_session_id,
+                            copy.diagnostics["acquisition_start_sample"], copy.mode, copy.identity)
                     announced.extend(found)
             if (self.mode == "auto" or announced or
                     (self.copy_cache is not None and (self.include_experimental or self.copy_cache.entries))):
                 outcome = decode_all_card_backends(audio, self.sample_rate, self.audio_placement,
-                                                   self.preferred_mode, self.include_experimental or self.mode != "auto",
+                                                   self.preferred_mode, self.include_experimental or self.mode == "auto",
                                                    on_preview=lambda report: self.signals.preview.emit(
                                                        (self.generation, report)),
+                                                   on_mode_attempt=lambda mode: self.signals.progress.emit(
+                                                       (self.generation, mode)),
                                                    copy_cache=self.copy_cache,
                                                    capture_start_sample=self.capture_start_sample, announced_copies=announced,
-                                                   live_snapshot=True)
+                                                   live_snapshot=True,
+                                                   capture_session_id=self.receive_session_id)
                 if outcome.failure:
                     self._finish(None, False, outcome.failure, started)
                     return
                 result = outcome.report
                 result.setdefault("valid_packet_count", 0)
+                if result.get("receive_activity"):
+                    self._finish(result, False, None, started)
+                    return
+                if not isinstance(result.get("card"), dict):
+                    self._finish(None, False, DecodeFailure(
+                        EXPERIMENTAL_ADAPTER.key, DecodeFailureKind.BACKEND_ERROR,
+                        "Decoder returned neither card data nor receive activity", False), started)
+                    return
                 self._finish(result, bool(result["card"].get("exact")), None, started)
                 return
             if self.mode == LEGACY_MODE_KEY:
@@ -1519,6 +1604,9 @@ class MainWindow(QMainWindow):
         self.seen_received_cards = set()
         self.session_wall_keys = set()
         self.session_wall_count = 0
+        self.duplicate_displayed_in_qso = False
+        self.duplicate_preview_key = None
+        self.current_preview_is_duplicate = False
         self.contact_stage = "idle"
         self.call_cq_active = False
         self.reply_report = None
@@ -1566,6 +1654,14 @@ class MainWindow(QMainWindow):
         self.copy_capture_cache = CopyCaptureCache()
         self.rx_capture_sample_offset = 0
         self.live_decode_inflight = False
+        self.rx_session_id = 0
+        self.live_decode_token = 0
+        self.active_live_decode_token = None
+        self.live_decode_workers = {}
+        self.active_receive_identity = None
+        self.rx_conflict_signatures = set()
+        self.rx_conflict_signature_order = []
+        self.completed_receive_events = {}
         self.live_decode_samples = 0
         self.rx_timer = QTimer(self); self.rx_timer.setInterval(200); self.rx_timer.timeout.connect(self._drain_rx)
         self.live_preview_timeout = QTimer(self); self.live_preview_timeout.setSingleShot(True)
@@ -1580,6 +1676,7 @@ class MainWindow(QMainWindow):
         self.cq_timer.timeout.connect(self._repeat_cq)
         self.decode_pool = QThreadPool.globalInstance()
         self.active_qso_log = None
+        self._active_qso_path = None
         self.qso_log_dir = DATA / "qso-log"
         root = QWidget(); layout = QVBoxLayout(root)
         self.tabs = QTabWidget()
@@ -3464,6 +3561,7 @@ class MainWindow(QMainWindow):
         self.grid_tx_latency.valueChanged.connect(lambda value: self.settings.setValue("grid/tx_latency_ms", value))
         mode_form.addRow("Grid TX audio delay", self.grid_tx_latency)
         self.grid_tx_label = mode_form.labelForField(self.grid_tx_latency)
+        self._update_grid_tx_control_visibility()
         self.grid_rx_latency = QSpinBox()
         self.grid_rx_latency.setRange(0, 2000)
         self.grid_rx_latency.setSuffix(" ms")
@@ -3477,8 +3575,32 @@ class MainWindow(QMainWindow):
         self.receive_all_modes.setToolTip(
             "This applies to Pixel QSO's local audio decoders. Data2G receives decoded card frames from its host.")
         self.receive_all_modes.toggled.connect(lambda value: self.settings.setValue("transfer/receive_all", value))
+        self.receive_all_modes.toggled.connect(self._update_rx_mode_controls)
         mode_form.addRow("Receive", self.receive_all_modes)
         self.receive_all_modes_label = mode_form.labelForField(self.receive_all_modes)
+        saved_rx_mode = str(self.settings.value("transfer/rx_preferred_mode", "") or "")
+        if saved_rx_mode not in MODE_REGISTRY:
+            saved_rx_mode = self.selected_mode()
+        self.rx_preferred_mode = saved_rx_mode
+        self.rx_mode_lock = QCheckBox("Lock mode")
+        self.rx_mode_lock.setChecked(self.settings.value("transfer/rx_mode_locked", False, type=bool))
+        self.rx_mode_lock.setToolTip(
+            "When unlocked, a detected modem becomes the preferred RX decoder. "
+            "This does not change the TX transfer mode.")
+        self.rx_mode_lock.toggled.connect(
+            lambda value: self.settings.setValue("transfer/rx_mode_locked", value))
+        self.rx_mode_preference_label = QLabel()
+        self.rx_mode_preference_label.setObjectName("rxModePreference")
+        rx_mode_row = QWidget()
+        rx_mode_layout = QHBoxLayout(rx_mode_row)
+        rx_mode_layout.setContentsMargins(0, 0, 0, 0)
+        rx_mode_layout.addWidget(self.rx_mode_lock)
+        rx_mode_layout.addWidget(self.rx_mode_preference_label, 1)
+        mode_form.addRow("RX preference", rx_mode_row)
+        self.rx_mode_preference_form_row = rx_mode_row
+        self.rx_mode_preference_form_label = mode_form.labelForField(rx_mode_row)
+        self._update_rx_mode_preference_label()
+        self._update_rx_mode_controls()
         # Retain saved repetition and mode limits without exposing another
         # main-panel choice. Single-burst modes still clamp this to one.
         self.repeat_count = QSpinBox(self); self.repeat_count.hide()
@@ -3496,7 +3618,13 @@ class MainWindow(QMainWindow):
         mode_form.addRow("Card", self.manual_card_widget)
         self.manual_card_label = mode_form.labelForField(self.manual_card_widget)
         self.auto_stage_group = QGroupBox("Contact cards")
-        auto_stage_form = QFormLayout(self.auto_stage_group)
+        # Use explicit horizontal rows for the send actions. QFormLayout treats
+        # its first column as label content and can collapse widget labels
+        # (notably QPushButtons) after the settings dialog rebuilds the app
+        # stylesheet, leaving only the card selectors visible.
+        auto_stage_layout = QVBoxLayout(self.auto_stage_group)
+        auto_stage_layout.setContentsMargins(8, 8, 8, 8)
+        auto_stage_layout.setSpacing(6)
         self.stage_card_combos = {}
         self.stage_send_buttons = {}
         self.manual_stage_group = QButtonGroup(self); self.manual_stage_group.setExclusive(True)
@@ -3518,7 +3646,13 @@ class MainWindow(QMainWindow):
             self.manual_stage_group.addButton(button, len(self.manual_stage_buttons))
             self.manual_stage_buttons[stage] = button
             self.stage_send_buttons[stage] = button
-            auto_stage_form.addRow(button, combo)
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(8)
+            button.setMinimumWidth(132)
+            row.addWidget(button)
+            row.addWidget(combo, 1)
+            auto_stage_layout.addLayout(row)
         self.manual_stage_buttons["exchange"].setChecked(True)
         self.manual_stage_group.buttonToggled.connect(self._refresh_transfer_summary)
         self.role_widget = QWidget(); role_form = QFormLayout(self.role_widget); role_form.setContentsMargins(0, 0, 0, 0)
@@ -3704,6 +3838,13 @@ class MainWindow(QMainWindow):
         self.receive_view.setFixedSize(194, 194)
         self.receive_view.setAccessibleName("Received card preview")
         self.receive_view.setObjectName("receiveView")
+        self.receive_duplicate_label = QLabel("DUPLICATE")
+        self.receive_duplicate_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.receive_duplicate_label.setStyleSheet("color: #ef5350; font-weight: 900; letter-spacing: 1px;")
+        self.receive_duplicate_label.setAccessibleName("Duplicate received card")
+        self.receive_duplicate_label.setObjectName("receiveDuplicateLabel")
+        self.receive_duplicate_label.hide()
+        preview_layout.addWidget(self.receive_duplicate_label, 0, Qt.AlignmentFlag.AlignCenter)
         preview_layout.addWidget(self.receive_view, 0, Qt.AlignmentFlag.AlignCenter)
         self.receive_progress = QProgressBar()
         self.receive_progress.setRange(0, 100)
@@ -3780,8 +3921,7 @@ class MainWindow(QMainWindow):
         self.advanced_backend_label.setVisible(enabled)
         self.advanced_exchange_label.setVisible(enabled)
         self.profile_form_widget.setVisible(enabled)
-        self.grid_tx_latency.setVisible(enabled)
-        self.grid_tx_label.setVisible(enabled)
+        self._update_grid_tx_control_visibility()
         self.grid_rx_latency.setVisible(enabled)
         self.grid_rx_label.setVisible(enabled)
         receive_all_supported = self.selected_adapter().capabilities.receive_all_modes
@@ -4905,6 +5045,7 @@ class MainWindow(QMainWindow):
                 self.on_air.emit("host_status", {"message": message})
 
     def _on_mode_selection_changed(self, *_):
+        self._set_rx_preferred_mode(self.selected_mode(), detected=False)
         backend = self.selected_backend()
         if self.selected_adapter().capabilities.kind is AdapterKind.FRAME_TRANSPORT:
             if backend is None or not getattr(backend, "usable", False):
@@ -4925,7 +5066,8 @@ class MainWindow(QMainWindow):
                 self._discard_receive_for_tx()
             self.listen_indicator.setText("● DATA2G HOST RX")
             self.listen_indicator.setStyleSheet(status_label_style("positive"))
-            self.rx_status.setText("Receiving KISS card frames through the Data2G host")
+            self.rx_status.setText(
+                f"Receiving · RX mode: {self._receive_mode_label()} · Data2G card frames")
         elif (self.data2g_connecting or
               DATA2G_ADAPTER.is_connected(self.data2g_session)):
             session = self.data2g_session
@@ -5082,6 +5224,7 @@ class MainWindow(QMainWindow):
         if self.receive_all_modes_label is not None:
             self.receive_all_modes_label.setVisible(
                 advanced and capabilities.receive_all_modes)
+        self._update_rx_mode_controls()
         if hasattr(self, "auto_connect_cat"):
             self.auto_connect_cat.setEnabled(not data2g_path)
             self.auto_connect_cat.setToolTip(
@@ -5120,6 +5263,7 @@ class MainWindow(QMainWindow):
                       "card": card, "pixels": pixels}
             report, improved = self._merge_live_preview(report)
             card = report["card"]
+            self.active_receive_identity = self._report_receive_identity(report)
             verified_complete = self._assembly_verified(report)
             if self.on_air:
                 self.on_air.emit("host_rx_card", {
@@ -5134,9 +5278,9 @@ class MainWindow(QMainWindow):
                                            coverage=card.get("pixel_coverage"),
                                            verified_coverage=card.get("verified_pixel_coverage"))
             if verified_complete:
-                self._add_session_wall_card(report)
                 key = received_card_key(report)
                 if key not in self.seen_received_cards:
+                    self._add_session_wall_card(report)
                     self.seen_received_cards.add(key)
                     self.reply_report = report
                     self._record_received_card(report)
@@ -5144,6 +5288,8 @@ class MainWindow(QMainWindow):
                     self.rx_status.setText(f"Verified Data2G card from {card.get('callsign')} · whole-card CRC passed")
                     self.exchange_log.append(f"Verified Data2G card from {card.get('callsign')} ({card.get('grid')}); whole-card CRC passed.")
                     self.save_received_report(report, "data2g")
+                else:
+                    self._show_duplicate_card(report)
             else:
                 self.rx_status.setText(f"Data2G preview from {card.get('callsign')} · {card.get('color_stage')}")
         except (ValueError, IndexError, KeyError) as exc:
@@ -5463,7 +5609,7 @@ class MainWindow(QMainWindow):
         return self.profile_combo.currentData() or modem.DEFAULT_PROFILE
 
     def selected_mode(self):
-        return self.mode_combo.currentData() or "standard"
+        return self.mode_combo.currentData() or "resilient_100"
 
     def selected_backend(self):
         key = self.selected_mode()
@@ -5525,7 +5671,7 @@ class MainWindow(QMainWindow):
         self._update_data2g_host_controls()
 
     def _show_receive_preview(self, image, *, card=None, exact=False, coverage=None,
-                              verified_coverage=None):
+                              verified_coverage=None, duplicate=False):
         if image is None:
             return
         self.receive_activity_timeout.stop()
@@ -5537,7 +5683,11 @@ class MainWindow(QMainWindow):
             str(card.get("callsign") or "station not identified"),
             str(card.get("grid") or "")) if value)
         verification = "whole card verified" if exact else "provisional, not yet verified"
-        self.receive_view.setAccessibleName(f"Card preview from {identity} · {verification}")
+        self.current_preview_is_duplicate = bool(duplicate)
+        self.receive_duplicate_label.setVisible(bool(duplicate))
+        self.receive_view.setAccessibleName(
+            f"Duplicate card preview from {identity} · {verification}" if duplicate else
+            f"Card preview from {identity} · {verification}")
         self.receive_view.setPixmap(QPixmap.fromImage(image).scaled(
             184, 184, Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.FastTransformation))
@@ -5561,7 +5711,7 @@ class MainWindow(QMainWindow):
                 f"{verified_percent} percent of image regions verified. "
                 "The preview is provisional until whole-card integrity verification completes.")
         self.receive_preview_box.show()
-        if exact:
+        if exact and not duplicate:
             self.live_preview_timeout.start(5000)
         else:
             self.live_preview_timeout.stop()
@@ -5570,19 +5720,25 @@ class MainWindow(QMainWindow):
         self.receive_activity_timeout.stop()
         self.receive_activity_pending = False
         self.live_preview_timeout.stop()
+        self.receive_duplicate_label.hide()
+        self.current_preview_is_duplicate = False
         self.receive_preview_box.hide()
 
-    def _show_receive_activity(self, message):
+    def _show_receive_activity(self, message, *, pivot=False):
+        if pivot:
+            self.card_assembly.clear_current_preview()
+            self._hide_receive_preview()
         self.receive_activity_pending = True
         self.listen_indicator.setText("● RECEIVING SIGNAL")
-        self.rx_status.setText(message)
-        self.receive_view.setAccessibleName(message)
+        self.rx_status.setText(f"{message} · RX mode: {self._receive_mode_label()}")
+        if not self.current_preview_is_duplicate:
+            self.receive_view.setAccessibleName(message)
         self.live_preview_timeout.stop()
-        snapshot = self.card_assembly.preview_snapshot()
-        if not snapshot or snapshot.card.get("exact"):
+        snapshot = None if pivot else self.card_assembly.preview_snapshot()
+        if (not snapshot or snapshot.card.get("exact")) and not self.current_preview_is_duplicate:
             self.receive_view.clear()
             self.receive_view.setText("Receiving signal…\nWaiting for card data")
-            self.receive_progress.setRange(0, 100)
+            self.receive_progress.setRange(0, 0)
             self.receive_progress.setValue(0)
             self.receive_progress.setFormat("Waiting for card data")
             self.receive_progress.setAccessibleDescription(
@@ -5598,9 +5754,13 @@ class MainWindow(QMainWindow):
                 {"card": dict(snapshot.card), "pixels": list(snapshot.pixels)}),
                 card=snapshot.card,
                 coverage=snapshot.coverage, verified_coverage=snapshot.verified_pixels)
+        elif snapshot and snapshot.card.get("exact") and self.current_preview_is_duplicate:
+            self.receive_view.setAccessibleName(
+                f"Duplicate card preview from {snapshot.card.get('callsign') or 'station not identified'}")
         else:
             self._hide_receive_preview()
-        self.rx_status.setText("Listening · waiting for card data or another copy")
+        self.rx_status.setText(
+            f"Listening · RX mode: {self._receive_mode_label()} · waiting for card data or another copy")
         self.listen_indicator.setText("● LISTENING")
 
     @staticmethod
@@ -5619,6 +5779,77 @@ class MainWindow(QMainWindow):
 
     def receive_mode(self):
         return "auto" if self.receive_all_modes.isChecked() else self.selected_mode()
+
+    def _update_rx_mode_preference_label(self):
+        if not hasattr(self, "rx_mode_preference_label"):
+            return
+        mode = self.rx_preferred_mode
+        spec = MODE_REGISTRY.get(mode)
+        label = spec.label if spec is not None else str(mode)
+        self.rx_mode_preference_label.setText(label)
+
+    def _update_rx_mode_controls(self, *_):
+        if not hasattr(self, "rx_mode_lock") or not hasattr(self, "receive_all_modes"):
+            return
+        advanced = self.settings.value("ui/advanced_controls", False, type=bool)
+        supported = self.selected_adapter().capabilities.receive_all_modes
+        visible = bool(advanced and supported and self.receive_all_modes.isChecked())
+        self.rx_mode_lock.setVisible(visible)
+        self.rx_mode_preference_label.setVisible(visible)
+        self.rx_mode_preference_form_row.setVisible(visible)
+        if self.rx_mode_preference_form_label is not None:
+            self.rx_mode_preference_form_label.setVisible(visible)
+
+    def _set_rx_preferred_mode(self, mode, *, detected):
+        mode = str(mode or "")
+        if not mode or mode not in MODE_REGISTRY:
+            return
+        if detected and self.rx_mode_lock.isChecked():
+            return
+        self.rx_preferred_mode = mode
+        self.settings.setValue("transfer/rx_preferred_mode", mode)
+        self._update_rx_mode_preference_label()
+
+    def _follow_detected_rx_mode(self, profile):
+        if not profile or str(profile) == "auto":
+            return
+        self.rx_live_profile = profile
+        self._set_rx_preferred_mode(profile, detected=True)
+
+    def _receive_mode_label(self, profile=None):
+        """Return the active RX mode, resolving receive-all to the winning decoder."""
+        if profile == "auto":
+            return "all enabled modes"
+        profile = profile or self.rx_live_profile
+        if profile:
+            if is_card_backend(profile):
+                return get_backend(profile).label
+            if profile in MODE_REGISTRY:
+                return MODE_REGISTRY[profile].label
+            if str(profile).startswith("data2g:"):
+                key = str(profile).split(":", 1)[1]
+                backend = self.data2g_modes.get(key)
+                return backend.label if backend else "Data2G " + key
+            if str(profile).lower().startswith("data2g"):
+                backend = self.selected_backend()
+                return backend.label if backend else "Data2G host/KISS"
+            try:
+                return modem.resolve_profile(profile).label.split(" · ")[0]
+            except (KeyError, TypeError, ValueError):
+                return str(profile)
+        if self.receive_mode() == "auto":
+            return "all enabled modes"
+        backend = self.selected_backend()
+        if backend is not None:
+            return backend.label
+        try:
+            return modem.resolve_profile(self.selected_profile()).label.split(" · ")[0]
+        except (KeyError, TypeError, ValueError):
+            return str(self.selected_mode())
+
+    def _listening_status(self):
+        return (f"Listening · RX mode: {self._receive_mode_label(self.receive_mode())} · "
+                f"{self.session_wall_count} cards heard this session")
 
     def _save_auto_stage_cards(self, *_):
         for stage, combo in getattr(self, "stage_card_combos", {}).items():
@@ -5727,7 +5958,6 @@ class MainWindow(QMainWindow):
                        available_modes(include_experimental=True)
                        if MODE_REGISTRY[key].adapter != DATA2G_ADAPTER.key and
                        MODE_REGISTRY[key].experimental]
-            entries.append((LEGACY_MODE_KEY, BACKENDS.get(LEGACY_MODE_KEY)))
             fallback = "resilient_100"
         else:
             entries = []
@@ -5740,6 +5970,7 @@ class MainWindow(QMainWindow):
         if fallback not in visible_keys and data2g and entries:
             fallback = entries[0][0]
         selected = (preferred if preferred in selectable_keys else
+                    fallback if fallback in selectable_keys else
                     next((key for key, _backend in entries if key in selectable_keys), fallback))
         with QSignalBlocker(self.mode_combo):
             self.mode_combo.clear()
@@ -5780,6 +6011,7 @@ class MainWindow(QMainWindow):
         self.transfer_mode_label.setVisible(not unavailable)
 
     def _update_transfer_controls(self, *_):
+        self._update_grid_tx_control_visibility()
         if hasattr(self, "repeat_count"):
             backend = self.selected_backend()
             maximum = getattr(backend, "max_repeats", 20)
@@ -5810,6 +6042,16 @@ class MainWindow(QMainWindow):
                 show_legacy_card = legacy and self.exchange_mode.currentIndex() != 2
                 self.manual_card_widget.setVisible(show_legacy_card and self.exchange_mode.currentIndex() != 1)
                 self.manual_card_label.setVisible(show_legacy_card and self.exchange_mode.currentIndex() != 1)
+
+    def _update_grid_tx_control_visibility(self):
+        """Show grid timing calibration only for the UTC-grid TX modem."""
+        if not hasattr(self, "grid_tx_latency"):
+            return
+        advanced = self.settings.value("ui/advanced_controls", False, type=bool)
+        is_grid_tx = bool(getattr(self.selected_backend(), "utc_grid", False))
+        visible = bool(advanced and is_grid_tx)
+        self.grid_tx_latency.setVisible(visible)
+        self.grid_tx_label.setVisible(visible)
 
     def _refresh_transfer_summary(self, *_):
         if not hasattr(self, "transfer_summary"):
@@ -5868,6 +6110,9 @@ class MainWindow(QMainWindow):
                         self.selected_adapter().capabilities.kind is AdapterKind.FRAME_TRANSPORT)
 
     def _card_tx_audio(self, card, *, beacon=False):
+        if self.selected_mode() == LEGACY_MODE_KEY:
+            raise ValueError(
+                "The Soft Viterbi modem is receive-only. Select another transfer mode to transmit.")
         stage = "card" if beacon else self._outgoing_message_type()
         wire_type = {"report73": "73", "final73": "73"}.get(stage, stage)
         snr_db = self.tx_snr_db if stage in {"exchange", "report73"} else None
@@ -6351,6 +6596,8 @@ class MainWindow(QMainWindow):
             self.refresh_qso_log()
             self.active_qso_log = None
             self._active_qso_path = None
+            self.duplicate_displayed_in_qso = False
+            self.duplicate_preview_key = None
         QTimer.singleShot(400, self._ensure_session_receive)
         self.auto_peer = ""
         self.last_cq_snapshot = None
@@ -6719,6 +6966,8 @@ class MainWindow(QMainWindow):
             widget.setEnabled(True)
         self._update_transfer_controls()
         if self.rx_timer.isActive():
+            self.rx_session_id += 1
+            self.active_live_decode_token = None
             self.rx_timer.stop()
             self._stop_local_receive_capture()
             self._clear_rx_bytes()
@@ -6738,6 +6987,8 @@ class MainWindow(QMainWindow):
             self.refresh_qso_log()
             self.active_qso_log = None
             self._active_qso_path = None
+            self.duplicate_displayed_in_qso = False
+            self.duplicate_preview_key = None
         QTimer.singleShot(400, self._ensure_session_receive)
 
     def _preflight_and_confirm_tx(self, read_ok, generation=None, card_override=None):
@@ -6939,13 +7190,14 @@ class MainWindow(QMainWindow):
         if not self.tx_audio or not self.tx_device: return
         if time.monotonic() - self.tx_started > self.tx_deadline:
             self._finish_tx("Transmit timed out; releasing PTT."); return
+        expected_playback_us = (len(self.tx_bytes) // 2) * 1_000_000 / modem.SAMPLE_RATE
         if self.tx_offset < len(self.tx_bytes):
             count = min(max(0, self.tx_audio.bytesFree()), 8192, len(self.tx_bytes) - self.tx_offset)
             if count:
                 count -= count % 2
                 written = self.tx_device.write(self.tx_bytes[self.tx_offset:self.tx_offset+count])
                 if written > 0: self.tx_offset += written
-        elif self.tx_audio.processedUSecs() >= (len(self.tx_bytes) // 2) * 1_000_000 / modem.SAMPLE_RATE:
+        elif self.tx_audio.processedUSecs() >= expected_playback_us:
             self._finish_tx("Transmit complete; releasing PTT.")
 
     def _finish_tx(self, message):
@@ -7225,8 +7477,6 @@ class MainWindow(QMainWindow):
         card = report.get("card") or {}
         is_avatar = bool(card.get("raw_avatar") or card.get("avatar_burst"))
         verified_complete = self._assembly_verified(report)
-        if verified_complete:
-            self._add_session_wall_card(report)
         if card.get("raw_avatar"):
             if card.get("received_blocks") is not None:
                 checked = sum(bool(value) for value in card["received_blocks"])
@@ -7237,6 +7487,8 @@ class MainWindow(QMainWindow):
                 self.rx_status.setText(f"8-FSK raw burst · identity decoded, pixels unverified · saved {result_path.name}")
         card_key = received_card_key(report)
         handled_live = auto_capture and card_key in self.auto_live_handled_cards
+        already_saved = False
+        duplicate_saved = False
         if handled_live:
             self.auto_live_handled_cards.discard(card_key)
         else:
@@ -7244,7 +7496,10 @@ class MainWindow(QMainWindow):
             if verified_complete and card.get("callsign") and card.get("card_id") is not None:
                 self.seen_received_cards.add(card_key)
             if verified_complete and not already_saved:
+                self._add_session_wall_card(report)
                 self._record_received_card(report)
+            elif verified_complete and already_saved:
+                duplicate_saved = True
         received_profile = report.get("receive_profile")
         profile_label = (get_backend(received_profile).label if is_card_backend(received_profile) else
                          "Data2G" if str(received_profile).startswith("data2g:") else
@@ -7256,6 +7511,8 @@ class MainWindow(QMainWindow):
                 self.rx_status.setText(f"{card.get('callsign') or 'Unknown station'} · {card.get('color_stage')} · saved {result_path.name}")
             else:
                 self.rx_status.setText(f"{len(report.get('valid_packets', []))} packets · {card.get('callsign') or 'unknown station'} · {profile_label} · saved {result_path.name}")
+        if duplicate_saved:
+            self._show_duplicate_card(report)
         if auto_capture and not handled_live and not already_saved:
             if is_avatar and verified_complete:
                 self._handle_contact_message(report)
@@ -7328,6 +7585,11 @@ class MainWindow(QMainWindow):
             return
         if self.rx_timer.isActive():
             return
+        self.rx_session_id += 1
+        self.active_live_decode_token = None
+        self.live_decode_inflight = False
+        self.active_receive_identity = None
+        self.completed_receive_events.clear()
         if self.ptt_active or self.tx_audio is not None or self.tx_timer.isActive():
             if not quiet:
                 QMessageBox.warning(self, "Transmission is active", "Wait for PTT to be released before starting receive.")
@@ -7401,8 +7663,9 @@ class MainWindow(QMainWindow):
         elif not snapshot:
             self._hide_receive_preview()
         self.receive_stack.setCurrentWidget(self.session_wall_page)
-        self.rx_status.setText("Local two-window audio link ready · listening" if self.test_rx_socket else
-                               f"Listening · {self.session_wall_count} cards heard this session")
+        self.rx_status.setText(
+            f"Local two-window audio link ready · RX mode: {self._receive_mode_label()}" if self.test_rx_socket else
+            self._listening_status())
 
     def _drain_rx(self):
         previous_samples = len(self.rx_bytes)
@@ -7475,41 +7738,109 @@ class MainWindow(QMainWindow):
             self.on_air_decode_pcm = snapshot
             self.on_air_decode_stream = self.on_air_rx_stream
             self.on_air_decode_end_sample = self.on_air_rx_samples + len(self.on_air_rx_buffer) // 2
-        worker = LiveDecodeWorker(snapshot, self.rx_rate, self.rx_live_profile or "auto", self.auto_generation,
-                                  self.receive_mode(), self.selected_audio_placement(), self.selected_mode(),
+        self.live_decode_token += 1
+        token = self.live_decode_token
+        generation = (self.auto_generation, self.rx_session_id, token)
+        self.active_live_decode_token = token
+        worker = LiveDecodeWorker(snapshot, self.rx_rate, self.rx_live_profile or "auto", generation,
+                                  self.receive_mode(), self.selected_audio_placement(), self.rx_preferred_mode,
                                   self.show_experimental_modes.isChecked(),
                                   copy_cache=self.copy_capture_cache,
                                   capture_start_sample=self.rx_capture_sample_offset,
                                   capture_start_utc=(None if getattr(self, "rx_capture_start_utc", None) is None else
-                                      self.rx_capture_start_utc + self.rx_capture_sample_offset/self.rx_rate))
+                                      self.rx_capture_start_utc + self.rx_capture_sample_offset/self.rx_rate),
+                                  receive_session_id=self.rx_session_id)
+        # QThreadPool owns the C++ QRunnable while queued, but the Python
+        # wrapper owns its QObject signals. Keep that wrapper alive until the
+        # finished callback has been delivered, including across session pivots.
+        self.live_decode_workers[token] = worker
         worker.signals.finished.connect(self._live_decode_finished)
         worker.signals.preview.connect(self._live_decode_preview)
+        worker.signals.progress.connect(self._live_decode_progress)
         self.live_decode_inflight = True
         self.decode_pool.start(worker)
+
+    def _live_decode_progress(self, result):
+        generation, mode = result
+        if not self._live_decode_generation_current(generation):
+            return
+        self.rx_status.setText(
+            f"Trying RX modem: {self._receive_mode_label(mode)} · receive-all scan")
 
     def _merge_live_preview(self, report):
         return self.card_assembly.merge_preview(report)
 
+    def _report_receive_conflict(self, report, error):
+        """Surface rejected evidence while keeping repeated scan callbacks bounded."""
+        card = (report or {}).get("card") or {}
+        identity = self._report_receive_identity(report or {})
+        signature = (self.rx_session_id, repr(identity), str(error))
+        if signature not in self.rx_conflict_signatures:
+            self.rx_conflict_signatures.add(signature)
+            self.rx_conflict_signature_order.append(signature)
+            if len(self.rx_conflict_signature_order) > 64:
+                expired = self.rx_conflict_signature_order.pop(0)
+                self.rx_conflict_signatures.discard(expired)
+            mode = self._receive_mode_label((report or {}).get("receive_profile"))
+            station = card.get("callsign") or "unknown station"
+            image_id = card.get("image_id", card.get("card_id"))
+            image = f", image {image_id}" if image_id is not None else ""
+            self.exchange_log.append(
+                f"Rejected conflicting RX evidence from {station}{image} ({mode}): {error}")
+        self.rx_status.setText(
+            "Conflicting verified image data rejected; listening for another copy")
+
     def _live_decode_preview(self, result):
         generation, report = result
-        if generation != self.auto_generation or not self.rx_timer.isActive():
+        if not self._live_decode_generation_current(generation):
             return
-        if report.get("receive_activity"):
-            self._show_receive_activity(report["receive_activity"])
-            self.receive_activity_timeout.start(12000)
+        if isinstance(report, dict):
+            self._follow_detected_rx_mode(report.get("receive_profile"))
+        if report and report.get("receive_activity"):
+            identity = report.get("receive_identity")
+            pivot = bool(identity is not None and identity != self.active_receive_identity)
+            if identity is not None:
+                self.active_receive_identity = identity
+            self._show_receive_activity(report["receive_activity"],
+                                        pivot=pivot)
+            if pivot or not self.receive_activity_timeout.isActive():
+                self.receive_activity_timeout.start(12000)
             return
         try:
             report, improved = self._merge_live_preview(report)
-        except ValueError:
+        except ValueError as exc:
+            self._report_receive_conflict(report, exc)
             return
         if improved:
             card = report["card"]
+            self.active_receive_identity = self._report_receive_identity(report)
             self._show_receive_preview(self.card_image(report), card=card,
                 coverage=card.get("pixel_coverage"),
                 verified_coverage=card.get("verified_pixel_coverage"))
             self.rx_status.setText(
                 f"Receiving card from {card.get('callsign') or 'a station'} · "
-                f"{card.get('color_stage') or 'identity received'} · checking other modes")
+                f"{card.get('color_stage') or 'identity received'} · "
+                f"RX mode: {self._receive_mode_label(report.get('receive_profile'))} · checking other modes")
+
+    def _live_decode_generation_current(self, generation):
+        if isinstance(generation, tuple) and len(generation) == 3:
+            auto_generation, session_id, token = generation
+            return (auto_generation == self.auto_generation and
+                    session_id == self.rx_session_id and
+                    token == self.active_live_decode_token and
+                    self.rx_timer.isActive())
+        return generation == self.auto_generation and self.rx_timer.isActive()
+
+    @staticmethod
+    def _report_receive_identity(report):
+        header = report.get("copy_header") or {}
+        if header.get("content_id"):
+            return (int(header.get("receive_session_id", 0)),
+                    header.get("announced_mode"), header["content_id"])
+        card = report.get("card") or {}
+        return (str(card.get("callsign", "")).upper(),
+                str(card.get("grid", "")).upper(),
+                card.get("image_id", card.get("card_id")))
 
     @staticmethod
     def _assembly_verified(report):
@@ -7518,9 +7849,14 @@ class MainWindow(QMainWindow):
 
     def _live_decode_finished(self, result):
         generation, report, complete, error, stats = result
-        self.live_decode_inflight = False
-        if generation != self.auto_generation or not self.rx_timer.isActive():
+        if isinstance(generation, tuple) and len(generation) == 3:
+            self.live_decode_workers.pop(generation[2], None)
+        if not self._live_decode_generation_current(generation):
             return
+        self.live_decode_inflight = False
+        self.active_live_decode_token = None
+        if report and report.get("receive_profile"):
+            self._follow_detected_rx_mode(report["receive_profile"])
         error_text = (error.message if isinstance(error, DecodeFailure) else
                       str(error) if error else None)
         on_air_details = None
@@ -7544,28 +7880,38 @@ class MainWindow(QMainWindow):
                 self.rx_status.setText("Receive decoder error: " + error_text)
                 self.exchange_log.append("Receive decoder error: " + error_text)
             else:
-                self.rx_status.setText("Listening · no complete card decoded yet")
+                self.rx_status.setText(
+                    f"Listening · RX mode: {self._receive_mode_label()} · no complete card decoded yet")
             QTimer.singleShot(0, self._drain_rx)
             return
-        if report.get("receive_activity"):
-            self._show_receive_activity(report["receive_activity"])
-            self.receive_activity_timeout.start(12000)
+        if report and report.get("receive_activity"):
+            identity = report.get("receive_identity")
+            pivot = bool(identity is not None and identity != self.active_receive_identity)
+            if identity is not None:
+                self.active_receive_identity = identity
+            self._show_receive_activity(report["receive_activity"],
+                                        pivot=pivot)
+            if pivot or not self.receive_activity_timeout.isActive():
+                self.receive_activity_timeout.start(12000)
             if self.on_air and on_air_details is not None:
                 self.on_air.emit("rx_decode", on_air_details)
                 self.on_air_decode_pcm = None
             QTimer.singleShot(0, self._drain_rx)
             return
-        card = report.get("card") or {}
-        if card.get("card_id") is not None and self.receive_mode() != "auto":
-            self.rx_live_profile = report.get("receive_profile")
-        try:
-            report, improved = self._merge_live_preview(report)
-        except ValueError as exc:
-            self.exchange_log.append("Rejected conflicting receive evidence: " + str(exc))
-            self.rx_status.setText("Conflicting verified image data rejected; listening for another copy")
+        if not isinstance(report, dict) or not isinstance(report.get("card"), dict):
+            self.rx_status.setText("Decoder returned no card data; continuing to listen")
             QTimer.singleShot(0, self._drain_rx)
             return
         card = report.get("card") or {}
+        try:
+            report, improved = self._merge_live_preview(report)
+        except ValueError as exc:
+            self._report_receive_conflict(report, exc)
+            QTimer.singleShot(0, self._drain_rx)
+            return
+        card = report.get("card") or {}
+        report_identity = self._report_receive_identity(report)
+        self.active_receive_identity = report_identity
         event = report.get("assembly_event") or {}
         complete = bool(event.get("verified_complete"))
         if self.on_air and on_air_details is not None:
@@ -7584,21 +7930,31 @@ class MainWindow(QMainWindow):
                 self._show_receive_preview(image, card=card, exact=bool(card.get("exact")),
                                            coverage=card.get("pixel_coverage"),
                                            verified_coverage=card.get("verified_pixel_coverage"))
-            self.rx_status.setText(f"Receiving card · {card.get('callsign') or 'station not identified'} · {live_status}")
+            self.rx_status.setText(
+                f"Receiving card · {card.get('callsign') or 'station not identified'} · {live_status} · "
+                f"RX mode: {self._receive_mode_label(report.get('receive_profile'))}")
         if complete:
+            header = report.get("copy_header") or (card.get("diagnostics") or {})
+            acquisition_start = header.get("acquisition_start_sample")
+            encounter = (report_identity, acquisition_start,
+                         None if acquisition_start is not None else
+                         report.get("receive_profile") or stats.get("mode"),
+                         int(card.get("received_copies", 0) or 0))
+            if encounter in self.completed_receive_events:
+                QTimer.singleShot(0, self._drain_rx)
+                return
+            self.completed_receive_events[encounter] = None
+            if len(self.completed_receive_events) > 256:
+                self.completed_receive_events.pop(next(iter(self.completed_receive_events)))
             if self.auto_armed:
                 key = received_card_key(report)
                 if (card.get("message_type") != "cq" and self._assembly_verified(report) and card.get("callsign")
                         and card.get("card_id") is not None and key in self.seen_received_cards):
                     self.rx_status.setText(f"Already received {card.get('callsign')} card {card.get('card_id')}; staying on receive.")
-                    self._add_session_wall_card(report)
-                    self._clear_rx_bytes()
-                    self.copy_capture_cache = self.copy_capture_cache.__class__()
-                    self.rx_capture_sample_offset = 0
-                    self.live_decode_samples = 0
-                    self.live_decode_final = False
-                    self.card_assembly.clear_current_preview()
-                    self.receive_stack.setCurrentWidget(self.session_wall_page)
+                    preserve_duplicate = self._show_duplicate_card(report)
+                    # A duplicate is a completed card encounter, not a reason
+                    # to discard buffered audio that may already contain the
+                    # next station's header.
                     QTimer.singleShot(0, self._drain_rx)
                     return
                 complete_text = ("All image blocks verified; saving the full capture and finalizing its QSL."
@@ -7614,25 +7970,33 @@ class MainWindow(QMainWindow):
             else:
                 self.rx_status.setText("All image blocks verified; saving and finalizing the card." if card.get("avatar_burst")
                                        else "Complete-card marker received; saving and finalizing the QSL.")
+                preserve_duplicate = False
                 if self._assembly_verified(report):
-                    self._add_session_wall_card(report)
                     key = received_card_key(report)
                     if key in self.seen_received_cards:
                         self.rx_status.setText(f"Already heard {card.get('callsign') or 'this station'} card; staying on receive.")
+                        preserve_duplicate = self._show_duplicate_card(report)
                     else:
+                        self._add_session_wall_card(report)
                         self.seen_received_cards.add(key)
                         self._record_received_card(report)
                         self._handle_contact_message(report)
             if self.auto_armed:
                 self.stop_receive()
             else:
-                self._reset_receive_window()
+                # Keep the rolling capture and protected-copy cache alive. A
+                # following card may already be in the audio accumulated while
+                # this decode worker was running.
+                QTimer.singleShot(0, self._drain_rx)
         elif self.live_decode_final and self.auto_armed:
             self.stop_receive()
         else:
             QTimer.singleShot(0, self._drain_rx)
 
     def stop_receive(self):
+        self.rx_session_id += 1
+        self.active_live_decode_token = None
+        self.live_decode_inflight = False
         self._flush_on_air_rx()
         self.rx_timer.stop(); self._drain_rx()
         self.auto_receive_timer.stop()
@@ -7684,11 +8048,35 @@ class MainWindow(QMainWindow):
                         image.setPixelColor(x, y, QColor(*(int(v)*17 for v in rgb)))
         return image
 
-    def _add_session_wall_card(self, report):
+    def _show_duplicate_card(self, report):
+        """Keep the first duplicate of a QSO visible and add one deck entry."""
+        card = report.get("card") or {}
+        key = received_card_key(report)
+        if self.duplicate_displayed_in_qso:
+            if key != self.duplicate_preview_key:
+                return False
+        else:
+            self.duplicate_displayed_in_qso = True
+            self.duplicate_preview_key = key
+            self._add_session_wall_card(report, duplicate=True)
+            self.exchange_log.append(
+                f"Duplicate card from {card.get('callsign') or 'this station'} received; "
+                "keeping one duplicate visible for this QSO.")
+        image = self.card_image(report)
+        self._show_receive_preview(image, card=card, exact=True, duplicate=True)
+        self.rx_status.setText(
+            f"DUPLICATE · {card.get('callsign') or 'this station'} card "
+            f"{card.get('card_id', '')} · whole-card integrity verified")
+        return True
+
+    def _add_session_wall_card(self, report, *, duplicate=False):
         card = report.get("card") or {}
         if not self._assembly_verified(report):
             return
         key = received_card_key(report)
+        if duplicate:
+            qso_key = str(self._active_qso_path) if self._active_qso_path else "session"
+            key = ("duplicate", qso_key, key)
         if key in self.session_wall_keys:
             return
         image = self.card_image(report)
@@ -7704,29 +8092,78 @@ class MainWindow(QMainWindow):
         tile = image.scaled(QSize(144, 144), Qt.AspectRatioMode.KeepAspectRatio,
                             Qt.TransformationMode.FastTransformation)
         icon = QIcon(QPixmap.fromImage(tile))
-        item = QListWidgetItem(icon, "")
         accessible_label = " · ".join(value for value in (
+            "DUPLICATE" if duplicate else "",
             callsign, grid, kind, f"received {received_at}") if value)
+        frequency_hz = report.get("frequency_hz")
+        if frequency_hz is None:
+            frequency_hz = self.frequency.value()
+        try:
+            frequency_text = f"{float(frequency_hz) / 1_000_000:.6f} MHz"
+        except (TypeError, ValueError):
+            frequency_text = "Not recorded"
+        measured_snr = card.get("measured_snr_db", report.get("measured_snr_db"))
+        reported_snr = card.get("snr_db", report.get("snr_db"))
+        snr_text = (f"Measured SNR: {measured_snr} dB" if measured_snr is not None else
+                    f"Reported SNR: {reported_snr} dB" if reported_snr is not None else
+                    "SNR: Not available")
+        profile = report.get("receive_profile") or self.receive_mode()
+        if is_card_backend(profile):
+            mode_text = get_backend(profile).label
+        elif str(profile).startswith("data2g:"):
+            mode_text = "Data2G · " + str(profile).split(":", 1)[1]
+        else:
+            mode_text = str(profile or "Unknown mode")
+        back_text = "\n".join((
+            "DUPLICATE" if duplicate else "RECEIVED CARD", callsign,
+            grid or "Grid unavailable", kind, snr_text,
+            f"Frequency: {frequency_text}", f"Mode: {mode_text}",
+            f"Received: {received_at}",
+            f"Image: {card.get('width', image.width())} × {card.get('height', image.height())}",
+            "Integrity: whole card verified",
+        ))
+        item = QListWidgetItem()
+        item.setSizeHint(QSize(148, 148))
         item.setToolTip(accessible_label)
         item.setData(Qt.ItemDataRole.AccessibleTextRole, accessible_label)
         self.session_wall.insertItem(0, item)
+        card_face = QPushButton()
+        card_face.setCheckable(True)
+        card_face.setFixedSize(144, 144)
+        card_face.setIcon(icon)
+        card_face.setIconSize(QSize(132, 132))
+        card_face.setToolTip(accessible_label + " · click to flip for transmission details")
+        card_face.setAccessibleName(accessible_label + " · card front; activate to read transmission details")
+        card_face.setStyleSheet("QPushButton { background:#101a17; border:1px solid #43564d; border-radius:7px; padding:4px; } QPushButton:checked { background:#18251f; color:#e2eee6; border-color:#70927d; font-size:10px; font-weight:600; text-align:left; }")
+        def flip_card(show_back, button=card_face, text=back_text, label=accessible_label, front=icon):
+            if show_back:
+                button.setIcon(QIcon())
+                button.setText(text)
+                button.setAccessibleName(label + " · card back; transmission details")
+            else:
+                button.setText("")
+                button.setIcon(front)
+                button.setAccessibleName(label + " · card front; activate to read transmission details")
+        card_face.toggled.connect(flip_card)
+        self.session_wall.setItemWidget(item, card_face)
         self.session_wall_empty.hide()
         self.session_wall.show()
 
-    def _reset_receive_window(self):
+    def _reset_receive_window(self, *, preserve_preview=False):
         self._clear_rx_bytes()
         self.live_decode_samples = 0
         self.live_decode_final = False
         self.card_assembly.begin_receive_window()
         self.copy_capture_cache = self.copy_capture_cache.__class__()
         self.rx_capture_sample_offset = 0
-        self._clear_exact_live_preview()
+        if not preserve_preview:
+            self._clear_exact_live_preview()
         self.live_preview_timeout.stop()
         self.receive_stack.setCurrentWidget(self.session_wall_page)
         snapshot = self.card_assembly.preview_snapshot()
-        if not snapshot or snapshot.card.get("exact"):
+        if not preserve_preview and (not snapshot or snapshot.card.get("exact")):
             self._hide_receive_preview()
-        self.rx_status.setText(f"Listening · {self.session_wall_count} cards heard this session")
+        self.rx_status.setText(self._listening_status())
         self.listen_indicator.setText("● LISTENING")
         self.listen_indicator.setStyleSheet(status_label_style("positive"))
         QTimer.singleShot(0, self._drain_rx)
@@ -7734,7 +8171,7 @@ class MainWindow(QMainWindow):
     def _return_to_session_wall(self):
         self.receive_preview_box.hide()
         if self.rx_timer.isActive():
-            self.rx_status.setText(f"Listening · {self.session_wall_count} cards heard this session")
+            self.rx_status.setText(self._listening_status())
 
     def _record_received_card(self, report):
         card = report.get("card") or {}
@@ -7749,6 +8186,8 @@ class MainWindow(QMainWindow):
         self.active_qso_log = {"peer_callsign": callsign or "Unknown", "peer_grid": grid or "",
             "started_at": time.strftime("%Y-%m-%d %H:%M:%S"), "sent_cards": [], "received_cards": [], "status": "In progress"}
         self._active_qso_path = self.qso_log_dir / f"qso-{time.strftime('%Y%m%d-%H%M%S')}-{id(self.active_qso_log) & 0xffff:04x}.json"
+        self.duplicate_displayed_in_qso = False
+        self.duplicate_preview_key = None
 
     def _append_qso_card(self, bucket, card_data):
         if self.active_qso_log is None: self._begin_qso_log()

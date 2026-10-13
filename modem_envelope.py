@@ -480,8 +480,14 @@ def decode_capture(key, audio, sample_rate, decoder, copies=None, copy_decoder=N
         return decoder(audio, sample_rate)  # historical native waveform
     if not matched:
         raise ValueError('common header announces a different modem')
-    best, error = None, ValueError('announced payload is incomplete')
+    best, best_start, error = None, None, ValueError('announced payload is incomplete')
     for group in matched:
+        # When a receive window contains more than one card, prefer the newest
+        # protected acquisition. Earlier incomplete (or even complete) cards
+        # must not mask a later card that is still being received.
+        group_start = max(int(copy.diagnostics.get(
+            'acquisition_start_sample', round(copy.start * RATE / sample_rate)))
+            for copy in group)
         payloads = []
         for copy in group:
             signal = np.asarray(audio)[copy.start:copy.end]
@@ -505,14 +511,22 @@ def decode_capture(key, audio, sample_rate, decoder, copies=None, copy_decoder=N
         card = report.get('card') or {}
         diagnostic = dict(card.get('diagnostics') or {})
         diagnostic.update(copy_header_version=group[0].diagnostics.get('version', VERSION), announced_mode=key,
-                          content_id=group[0].identity, announced_copies=len(group))
+                          content_id=group[0].identity, announced_copies=len(group),
+                          copy_revisions=tuple(sorted((
+                              int(copy.diagnostics.get('receive_session_id', 0)),
+                              int(copy.diagnostics.get('acquisition_start_sample',
+                                  round(copy.start * RATE / sample_rate))),
+                              int(copy.diagnostics.get('copy_revision', copy.end-copy.start)))
+                              for copy in group)))
+        diagnostic['receive_session_id'] = int(group[0].diagnostics.get('receive_session_id', 0))
         card['diagnostics'] = diagnostic
         report['card'] = card
         report['copy_header'] = diagnostic
-        if card.get('exact'):
-            return report
-        if best is None or sum(card.get('pixel_coverage') or []) > sum(best.get('card',{}).get('pixel_coverage') or []):
+        diagnostic['acquisition_start_sample'] = group_start
+        report['copy_header'] = diagnostic
+        if best is None or best_start is None or group_start >= best_start:
             best = report
+            best_start = group_start
     if best is not None:
         return best
     raise error
@@ -621,16 +635,20 @@ class CopyCaptureCache:
                     new_score=float(copy.diagnostics.get('acquisition_score',0))
                     if new_score>previous_score:
                         old['start']=absolute
-                        old['diagnostics']=dict(copy.diagnostics)
+                        old['diagnostics']={**copy.diagnostics,
+                                            'acquisition_start_sample': round(absolute*RATE)}
                         old['audio']=np.empty(0,dtype=np.float32)
                         old['source_samples_seen']=0
                 if old is None:
                     frame=dict(start=absolute,audio=np.empty(0,dtype=np.float32),
-                               diagnostics=dict(copy.diagnostics),source_samples_seen=0)
+                               diagnostics={**copy.diagnostics,
+                                            'acquisition_start_sample': round(absolute*RATE)},
+                               source_samples_seen=0)
                     group['frames'].append(frame)
                 else:
                     frame=old
                     diagnostic=dict(copy.diagnostics)
+                    diagnostic['acquisition_start_sample']=round(absolute*RATE)
                     if len(frame['audio']):
                         diagnostic['carrier_offset_hz']=frame['diagnostics'].get(
                             'carrier_offset_hz',diagnostic.get('carrier_offset_hz',0))
@@ -658,7 +676,11 @@ class CopyCaptureCache:
             for (mode,identity), group in self.entries.items():
                 for frame in group['frames']:
                     payload=frame['audio']; parts.append(payload)
-                    diagnostic={**frame['diagnostics'],'carrier_offset_hz':0}
+                    diagnostic={**frame['diagnostics'],'carrier_offset_hz':0,
+                                'acquisition_start_sample': round(frame['start']*RATE),
+                                'copy_revision': len(payload),
+                                'acquisition_id': (int(frame['diagnostics'].get('receive_session_id', 0)),
+                                                   round(frame['start']*RATE), mode, identity)}
                     copies.append(AnnouncedCopy(mode,identity,start,start+len(payload),diagnostic))
                     start+=len(payload)
             return (np.concatenate(parts) if parts else np.empty(0,np.float32)), copies

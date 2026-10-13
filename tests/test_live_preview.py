@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QDialog, QPushButton
 
 import cardmodem as pixel
 from app import (STARTER_CARDS_PATH, LiveDecodeWorker, MainWindow, decode_all_card_backends,
-                 local_adapter_for_mode)
+                 local_adapter_for_mode, newest_protected_acquisition)
 from backend_adapters import (ADAPTERS, AdapterCapabilities, AdapterKind,
                               DecodeFailure, DecodeFailureKind, EXPERIMENTAL_ADAPTER,
                               ExperimentalLocalAdapter, IntegrityScope,
@@ -29,6 +29,214 @@ class LivePreviewTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def test_live_worker_routes_header_only_activity_without_card_key_error(self):
+        from backend_adapters import DecodeOutcome
+        activity = {"receive_activity": "New protected transmission detected",
+                    "receive_profile": "test-mode", "pivot_receive": True,
+                    "receive_identity": ("test-mode", "identity-a"),
+                    "acquisition_start_sample": 1234}
+        results = []
+        worker = LiveDecodeWorker(bytes(96000), 48000, "auto", 17,
+                                  mode="auto", include_experimental=True)
+        worker.signals.finished.connect(results.append)
+        with patch("app.decode_all_card_backends",
+                   return_value=DecodeOutcome(report=dict(activity))):
+            worker.run()
+        self.assertEqual(len(results), 1)
+        _generation, report, complete, error, _stats = results[0]
+        self.assertEqual(report["receive_identity"], ("test-mode", "identity-a"))
+        self.assertFalse(complete)
+        self.assertIsNone(error)
+
+    def test_header_activity_keeps_same_provisional_card_and_pivots_on_new_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), \
+                patch("app.QTimer.singleShot"):
+            window = MainWindow()
+            window.rx_timer.start()
+            card = {"callsign": "W1ABC", "grid": "FN42", "card_id": 4,
+                    "image_id": "image-a", "width": 1, "height": 1,
+                    "palette": [[0, 0, 0], [15, 15, 15]], "avatar_burst": True,
+                    "exact": False, "pixel_coverage": [True],
+                    "diagnostics": {"receive_session_id": 7}}
+            partial, _ = window.card_assembly.merge_preview({
+                "card": card, "pixels": [1],
+                "copy_header": {"receive_session_id": 7,
+                                "announced_mode": "test-mode",
+                                "content_id": "identity-a"}})
+            window._show_receive_preview(window.card_image(partial), card=partial["card"],
+                                         coverage=partial["card"]["pixel_coverage"])
+            window.active_receive_identity = window._report_receive_identity(partial)
+            self.assertEqual(window.active_receive_identity,
+                             (7, "test-mode", "identity-a"))
+            window._live_decode_finished((window.auto_generation,
+                {"receive_activity": "Waiting for card data",
+                 "receive_identity": (7, "test-mode", "identity-a")},
+                False, None, {}))
+            self.assertFalse(window.receive_preview_box.isHidden())
+            self.assertIsNotNone(window.receive_view.pixmap())
+            self.assertIsNotNone(window.card_assembly.preview_snapshot())
+
+            window._live_decode_finished((window.auto_generation,
+                {"receive_activity": "New protected card",
+                 "receive_identity": (7, "test-mode", "identity-b")},
+                False, None, {}))
+            self.assertIsNone(window.card_assembly.preview_snapshot())
+            self.assertEqual(window.receive_progress.maximum(), 0)
+            self.assertIn("Waiting for card data", window.receive_view.text())
+            window.rx_timer.stop()
+            window.close()
+
+    def test_conflicting_provisional_evidence_is_reported_once_per_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), \
+                patch("app.QTimer.singleShot"):
+            window = MainWindow()
+            window.rx_timer.start()
+            window.rx_session_id = 4
+            window.active_live_decode_token = 9
+            window._merge_live_preview = Mock(side_effect=ValueError(
+                "conflicting verified pixels for the same image identity"))
+            report = {"receive_profile": "test-mode",
+                      "card": {"callsign": "W1ABC", "card_id": 22,
+                               "image_id": "image-a"}}
+            generation = (window.auto_generation, 4, 9)
+
+            window._live_decode_preview((generation, report))
+            window._live_decode_preview((generation, report))
+
+            log_text = window.exchange_log.toPlainText()
+            self.assertEqual(log_text.count("Rejected conflicting RX evidence"), 1)
+            self.assertIn("W1ABC", log_text)
+            self.assertIn("image-a", log_text)
+            self.assertIn("Conflicting verified image data rejected", window.rx_status.text())
+            self.assertIsNone(window.card_assembly.preview_snapshot())
+            window.rx_timer.stop()
+            window.close()
+
+    def test_receive_all_keeps_verified_attempt_over_later_weaker_placement(self):
+        import modem_envelope
+        from backend_adapters import DecodeOutcome
+        from modem_envelope import AnnouncedCopy
+        backend = SimpleNamespace(minimum_audio_seconds=lambda: 0)
+        copy = AnnouncedCopy("test-mode", "identity-a", 0, 16,
+                             {"acquisition_start_sample": 6400, "carrier_offset_hz": 0})
+        exact = {"card": {"exact": True, "pixel_coverage": [True] * 4}, "pixels": [0] * 4,
+                 "copy_header": {"acquisition_start_sample": 6400}}
+        partial = {"card": {"exact": False, "pixel_coverage": [True] * 2}, "pixels": [1] * 4,
+                   "copy_header": {"acquisition_start_sample": 6400}}
+        published = []
+        with patch("app.BACKENDS", {"test-mode": backend}), \
+                patch("app.mode_supports_audio_placement", return_value=True), \
+                patch("app.get_backend", return_value=backend), \
+                patch.object(modem_envelope, "decode_capture",
+                             side_effect=[exact, partial]):
+            outcome = decode_all_card_backends([0.0] * 32, 8000,
+                include_experimental=True, announced_copies=[copy],
+                on_preview=published.append)
+        self.assertIs(outcome.report, exact)
+        self.assertEqual(published, [exact])
+
+    def test_candidate_revisions_replace_estimates_without_duplicate_votes(self):
+        assembler = CardPreviewAssembler()
+        base = {"raw_avatar": True, "card_id": 8, "width": 2, "height": 2,
+                "palette": [[0, 0, 0], [15, 15, 15]], "exact": False,
+                "pixel_coverage": [True] * 4, "received_copies": 1,
+                "diagnostics": {"copy_revisions": ((100, 10),)}}
+        first, changed = assembler.merge({"card": dict(base), "pixels": [0, 0, 0, 0]})
+        self.assertTrue(changed)
+        for _ in range(20):
+            repeated, changed = assembler.merge({"card": dict(base), "pixels": [0, 0, 0, 0]})
+            self.assertFalse(changed)
+        revised_card = dict(base, diagnostics={"copy_revisions": ((100, 20),)})
+        revised, changed = assembler.merge({"card": revised_card, "pixels": [1, 0, 0, 0]})
+        self.assertTrue(changed)
+        self.assertEqual(revised["pixels"][0], 1)
+        exact_card = dict(revised_card, exact=True)
+        exact, _ = assembler.merge({"card": exact_card, "pixels": [1, 0, 0, 0]})
+        weaker, _ = assembler.merge({"card": dict(revised_card, exact=False),
+                                     "pixels": [0, 0, 0, 0]})
+        self.assertTrue(weaker["card"]["exact"])
+        self.assertEqual(weaker["pixels"][0], exact["pixels"][0])
+
+    def test_protected_acquisition_order_uses_absolute_samples_not_cache_offsets(self):
+        from modem_envelope import AnnouncedCopy
+        earlier = AnnouncedCopy("m", "a", 8000, 9000,
+                                {"acquisition_start_sample": 48000})
+        later = AnnouncedCopy("m", "b", 0, 1000,
+                              {"acquisition_start_sample": 96000})
+        selected, mode = newest_protected_acquisition([earlier, later])
+        self.assertEqual(mode, "m")
+        self.assertEqual([copy.identity for copy in selected], ["b"])
+
+    def test_complete_card_keeps_rolling_capture_and_copy_cache(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), \
+                patch("app.QTimer.singleShot"):
+            window = MainWindow()
+            window.rx_timer.start()
+            window.rx_session_id = 4
+            window.active_live_decode_token = 9
+            window.live_decode_inflight = True
+            window.rx_bytes.extend(bytes(8192))
+            cache = window.copy_capture_cache
+            window._add_session_wall_card = Mock()
+            window._record_received_card = Mock()
+            window._handle_contact_message = Mock()
+            window._reset_receive_window = Mock()
+            card = {"callsign": "W1ABC", "grid": "FN42", "card_id": 22,
+                    "width": 1, "height": 1, "exact": True}
+            report = {"card": card, "pixels": [0], "receive_profile": "test-mode"}
+            generation = (window.auto_generation, 4, 9)
+            window._live_decode_finished((generation, report, True, None, {}))
+            self.assertEqual(len(window.rx_bytes), 8192)
+            self.assertIs(window.copy_capture_cache, cache)
+            window._reset_receive_window.assert_not_called()
+            window._record_received_card.assert_called_once()
+            window.close()
+
+    def test_stale_worker_cannot_clear_current_decode_slot(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), \
+                patch("app.QTimer.singleShot"):
+            window = MainWindow()
+            window.rx_timer.start()
+            window.rx_session_id = 5
+            window.active_live_decode_token = 12
+            window.live_decode_inflight = True
+            stale = (window.auto_generation, 4, 11)
+            window._live_decode_finished((stale, None, False, None, {}))
+            self.assertTrue(window.live_decode_inflight)
+            self.assertEqual(window.active_live_decode_token, 12)
+            window.close()
+
+    def test_live_worker_wrapper_is_retained_until_stale_completion(self):
+        import gc
+        import weakref
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), \
+                patch("app.QTimer.singleShot"):
+            window = MainWindow()
+            window.rx_timer.start()
+            window.rx_session_id = 5
+            window.active_live_decode_token = 12
+            window.live_decode_inflight = True
+            stale = (window.auto_generation, 4, 11)
+            worker = LiveDecodeWorker(bytes(960), 8000, "auto", stale)
+            reference = weakref.ref(worker)
+            window.live_decode_workers[11] = worker
+            del worker
+            gc.collect()
+            self.assertIsNotNone(reference(), "window must retain the worker's signal source")
+
+            window._live_decode_finished((stale, None, False, None, {}))
+            gc.collect()
+            self.assertIsNone(reference(), "stale completion releases its own worker wrapper")
+            self.assertTrue(window.live_decode_inflight)
+            self.assertEqual(window.active_live_decode_token, 12)
+            window.rx_timer.stop()
+            window.close()
 
     def test_data2g_activity_precedes_frames_and_does_not_erase_completion(self):
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), \
@@ -60,6 +268,89 @@ class LivePreviewTests(unittest.TestCase):
             self.assertEqual(window.rx_status.text(), status)
             window.close()
 
+    def test_duplicate_preview_is_safe_without_active_qso_and_only_adds_one_duplicate(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}):
+            window = MainWindow()
+            try:
+                self.assertIsNone(window._active_qso_path)
+                report = {
+                    "receive_profile": "resilient_100",
+                    "card": {"callsign": "W1ABC", "grid": "FN42", "card_id": 5,
+                             "width": 1, "height": 1, "palette": [[0, 0, 0], [15, 15, 15]],
+                             "exact": True, "pixel_coverage": [True]},
+                    "pixels": [1],
+                }
+                report, _ = window.card_assembly.merge_preview(report)
+                self.assertTrue(window._show_duplicate_card(report))
+                self.assertEqual(window.session_wall_count, 1)
+                self.assertTrue(window.current_preview_is_duplicate)
+                self.assertTrue(window._show_duplicate_card(report))
+                second_duplicate = {**report, "card": {**report["card"], "card_id": 6}}
+                second_duplicate["assembly_event"] = dict(report["assembly_event"])
+                self.assertFalse(window._show_duplicate_card(second_duplicate))
+                self.assertEqual(window.session_wall_count, 1)
+            finally:
+                window.close()
+
+    def test_interleaved_data2g_cards_pivot_and_recover_after_duplicate(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}):
+            window = MainWindow()
+            session = SimpleNamespace(port=2, close=Mock(), connected=False)
+            window.data2g_session = session
+            first = pixel.example_card()
+            second = pixel.Card(first.callsign, first.grid, first.palette[:], first.pixels[:],
+                                first.card_id, first.width, first.height)
+            second.pixels[0] = (second.pixels[0] + 1) % len(second.palette)
+            third = pixel.Card(first.callsign, first.grid, first.palette[:], first.pixels[:],
+                               first.card_id, first.width, first.height)
+            third.pixels[1] = (third.pixels[1] + 1) % len(third.palette)
+            packed_first = pixel.minimal_avatar_payload(first)
+            packed_second = pixel.minimal_avatar_payload(second)
+            packed_third = pixel.minimal_avatar_payload(third)
+            first_split = len(packed_first) // 4
+            second_split = len(packed_second) // 2
+            third_split = len(packed_third) // 3
+            try:
+                with patch.object(window, "_record_received_card"), \
+                        patch.object(window, "_handle_contact_message"), \
+                        patch.object(window, "save_received_report"):
+                    window._data2g_rx_frame(session, 2, fragment(
+                        first, packed_first, 0, packed_first[:first_split]))
+                    first_partial = window.card_assembly.preview_snapshot()
+                    first_coverage = sum(first_partial.coverage)
+                    window._data2g_rx_frame(session, 2, fragment(
+                        first, packed_first, first_split, packed_first[first_split:first_split * 2]))
+                    refined_first = window.card_assembly.preview_snapshot()
+                    self.assertGreater(sum(refined_first.coverage), first_coverage)
+
+                    window._data2g_rx_frame(session, 2, fragment(
+                        second, packed_second, 0, packed_second[:second_split]))
+                    second_partial = window.card_assembly.preview_snapshot()
+                    second_image_id = second_partial.card["image_id"]
+                    self.assertNotEqual(second_image_id, refined_first.card["image_id"])
+                    window._data2g_rx_frame(session, 2, fragment(
+                        second, packed_second, second_split, packed_second[second_split:]))
+                    self.assertEqual(window.session_wall_count, 1)
+
+                    window._data2g_rx_frame(session, 2, fragment(
+                        second, packed_second, 0, packed_second[:second_split]))
+                    self.assertTrue(window.current_preview_is_duplicate)
+                    self.assertEqual(window.session_wall_count, 2)
+                    window._data2g_rx_frame(session, 2, fragment(
+                        second, packed_second, 0, packed_second[:second_split]))
+                    self.assertEqual(window.session_wall_count, 2)
+
+                    window._data2g_rx_frame(session, 2, fragment(
+                        third, packed_third, 0, packed_third[:third_split]))
+                    third_partial = window.card_assembly.preview_snapshot()
+                    self.assertNotEqual(third_partial.card["image_id"], second_image_id)
+                    self.assertFalse(window.current_preview_is_duplicate)
+                    self.assertEqual(window.session_wall_count, 2)
+            finally:
+                window.close()
+
     def test_receive_all_publishes_preview_before_next_decoder(self):
         report = {"card": {"exact": False}, "pixels": []}
         published = []
@@ -76,7 +367,8 @@ class LivePreviewTests(unittest.TestCase):
                 patch("app.get_backend", return_value=backend), \
                 patch("app.local_adapter_for_mode", return_value=adapter):
             outcome = decode_all_card_backends([0.0] * 32, 48000,
-                on_preview=published.append)
+                include_experimental=True, on_preview=published.append,
+                live_snapshot=True)
         self.assertIs(outcome.report, report)
         self.assertEqual(published, [report])
 
@@ -90,7 +382,7 @@ class LivePreviewTests(unittest.TestCase):
             self.assertEqual(
                 [window.station_settings_tabs.tabText(i)
                  for i in range(window.station_settings_tabs.count())],
-                ["Station", "Audio & Radio", "Advanced"])
+                ["Station", "Audio & Radio", "Appearance", "Advanced"])
             self.assertIn("assigned station call sign", window.station_identity_hint.text())
             window.station_call.setText("W7XYZ")
             window.station_grid.setText("ZZ99")
@@ -186,7 +478,7 @@ class LivePreviewTests(unittest.TestCase):
             window._live_decode_finished((window.auto_generation, None, False,
                                           "No checked Data2G card fragment received yet", {}))
             self.assertEqual(window.rx_status.text(),
-                             "Listening · no complete card decoded yet")
+                             "Listening · RX mode: all enabled modes · no complete card decoded yet")
             failure = DecodeFailure(EXPERIMENTAL_ADAPTER.key,
                                     DecodeFailureKind.BACKEND_ERROR,
                                     "decoder worker failed", False)
@@ -349,6 +641,26 @@ class LivePreviewTests(unittest.TestCase):
         merged, _ = service.merge_preview({"card": candidate, "pixels": pixels})
         self.assertEqual(merged["pixels"][verified_index], checked_pixel)
         self.assertGreater(merged["assembly_event"]["verified_pixels"], 0)
+
+    def test_verified_v4_raster_proof_survives_later_partial_snapshot(self):
+        service = CardAssemblyService()
+        base = {"callsign": "W1ABC", "grid": "FN42", "card_id": 7,
+                "image_id": "immutable-image", "header_version": 4,
+                "width": 1, "height": 1, "palette": [[0, 0, 0], [15, 15, 15]],
+                "avatar_burst": True, "exact": True, "whole_raster_valid": True,
+                "received_blocks": [True], "block_checksums": [123],
+                "bits_per_pixel": 1, "pixel_coverage": [True],
+                "verified_pixel_coverage": [True]}
+        complete, _ = service.merge_preview({"card": dict(base), "pixels": [1]})
+        self.assertTrue(complete["assembly_event"]["verified_complete"])
+        partial_card = dict(base, exact=False, whole_raster_valid=False,
+                            whole_raster_crc32_valid=False, content_tag_valid=False,
+                            received_blocks=[False], verified_pixel_coverage=[False])
+        partial, _ = service.merge_preview({"card": partial_card, "pixels": [0]})
+        self.assertTrue(partial["assembly_event"]["verified_complete"])
+        self.assertTrue(partial["card"]["whole_raster_valid"])
+        self.assertTrue(partial["card"]["exact"])
+        self.assertEqual(partial["pixels"], [1])
 
     def test_local_receive_uses_adapter_owned_audio_handle_across_tx_handoff(self):
         class Device:

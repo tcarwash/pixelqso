@@ -28,7 +28,7 @@ class ModePolicyTests(unittest.TestCase):
         self.assertTrue(is_experimental_mode("resilient_100"))
         self.assertTrue(MODE_REGISTRY["experimental_qpsk_5s"].experimental)
         self.assertEqual(MODE_REGISTRY["experimental_qpsk_5s"].availability, "scipy")
-        self.assertEqual(MODE_REGISTRY[LEGACY_MODE_KEY].label, "4-FSK · soft Viterbi · progressive packets")
+        self.assertEqual(MODE_REGISTRY[LEGACY_MODE_KEY].label, "4-FSK · soft Viterbi · receive compatibility")
         self.assertTrue(mode_supports_audio_placement("resilient_100"))
         self.assertFalse(mode_supports_audio_placement("fast_avatar_fec_v4"))
         self.assertEqual(get_backend("resilient_100", 300).profile.tones_hz[0], 300)

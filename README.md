@@ -90,8 +90,9 @@ verification. See [experimental burst formats and validation](docs/EXPERIMENTAL-
 The experimental names describe modulation and decoding: **8-FSK · RS + soft Chase**
 uses Reed–Solomon with bounded soft recovery; **8-FSK · raw pixels** leaves image
 pixels unchecked; **QPSK · soft LDPC** uses iterative soft decoding and shared
-copy combining (the older combined-mode ID remains supported); **4-FSK · soft Viterbi**
-uses convolutional coding and progressive packets. Hover over a mode for its
+copy combining (the older combined-mode ID remains supported). The legacy
+**4-FSK · soft Viterbi** format remains receive-compatible, but is no longer
+selectable for transmission. Hover over a mode for its
 error correction and checksum details. Display names do not change saved mode
 IDs. The new common copy-header format is versioned; historical native payloads remain readable.
 

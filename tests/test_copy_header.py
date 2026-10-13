@@ -119,6 +119,9 @@ class IdentityRecoveryTests(unittest.TestCase):
                 self.assertFalse(window.repeat_count.isHidden())
                 for key in MODE_REGISTRY:
                     at=window.mode_combo.findData(key)
+                    if key == 'standard':
+                        self.assertEqual(at, -1, 'legacy Soft Viterbi must not be selectable for TX')
+                        continue
                     window.mode_combo.setCurrentIndex(at)
                     self.assertEqual(window.repeat_count.maximum(),20)
                 window.station_dialog.adjustSize()

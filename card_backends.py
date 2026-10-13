@@ -44,7 +44,7 @@ EXPERIMENTAL_MODE_LABELS = {
     "fast_avatar": "8-FSK · raw pixels · 400 baud · unchecked",
     "experimental_qpsk_5s": "QPSK · soft LDPC · copy combining",
     "experimental_qpsk_combined": "QPSK · soft LDPC + copy combining",
-    "standard": "4-FSK · soft Viterbi · progressive packets",
+    "standard": "4-FSK · soft Viterbi · receive compatibility",
 }
 
 EXPERIMENTAL_MODE_LABELS["experimental_16fsk_grid"] = "16-FSK · compressed · UTC start grid"
@@ -80,8 +80,8 @@ EXPERIMENTAL_MODE_DESCRIPTIONS = {
         "The 4.622-second payload can be repeated and soft-combined; protected copy headers add airtime.",
     "experimental_qpsk_combined": "Shaped QPSK with soft-decision LDPC decoding and whole-card CRC32. "
         "Sends repeated bursts; the receiver combines noise-weighted soft bit evidence when needed.",
-    "standard": "4-tone FSK with rate-1/2 K=7 convolutional coding, soft-decision Viterbi decoding, "
-        "packet CRC16, and soft combining across repeated packets. Image detail arrives progressively.",
+    "standard": "Receive compatibility for older 4-tone FSK packets with rate-1/2 K=7 convolutional coding, "
+        "soft-decision Viterbi decoding, packet CRC16, and progressive image detail. Transmission is disabled.",
 }
 
 

@@ -1,0 +1,107 @@
+{
+  "mode": "resilient_50",
+  "placement_hz": 300,
+  "elapsed_s": 0.9939215909980703,
+  "card": {
+    "callsign": "AG7SU",
+    "grid": "CN85",
+    "card_id": 49374,
+    "width": 32,
+    "height": 32,
+    "palette_id": 0,
+    "bits_per_pixel": 3,
+    "metadata_corrected": false,
+    "avatar_mode": "resilient_50",
+    "transmission_type": "fast_avatar_fec",
+    "message_type": "exchange",
+    "snr_db": null,
+    "header_version": 4,
+    "image_crc32": 1491296454,
+    "image_tag": "c9109ede",
+    "image_id": "58e360c6c9109ede",
+    "whole_raster_crc32_valid": false,
+    "content_tag_valid": false,
+    "whole_raster_valid": false,
+    "received_copies": 3,
+    "block_checksums": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "measured_snr_db": null,
+    "acquisition": {
+      "start_sample": 560,
+      "sample_rate": 8000,
+      "frequency_offset_hz": 4.0,
+      "symbol_period_samples": 160.0,
+      "clock_error_ppm": 0.0,
+      "combined_copies": 3,
+      "acquired_copies": 4,
+      "copy_diagnostics": [
+        {
+          "start_sample": 560,
+          "sample_rate": 8000,
+          "frequency_offset_hz": 4.0,
+          "symbol_period_samples": 160.0,
+          "clock_error_ppm": 0.0
+        },
+        {
+          "start_sample": 420,
+          "sample_rate": 8000,
+          "frequency_offset_hz": 4.0,
+          "symbol_period_samples": 160.0,
+          "clock_error_ppm": 0.0
+        },
+        {
+          "start_sample": 400,
+          "sample_rate": 8000,
+          "frequency_offset_hz": 4.0,
+          "symbol_period_samples": 160.0,
+          "clock_error_ppm": 0.0
+        }
+      ]
+    },
+    "avatar_burst": true,
+    "exact": false,
+    "received_blocks": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "corrected_blocks": 0,
+    "color_stage": "0/10 CRC-verified blocks \u00b7 1024/1024 provisional pixels",
+    "audio_tones_hz": [
+      300.0,
+      350.0,
+      400.0,
+      450.0,
+      500.0,
+      550.0,
+      600.0,
+      650.0
+    ],
+    "preview_received": true,
+    "diagnostics": {
+      "copy_header_version": 1,
+      "announced_mode": "resilient_50",
+      "content_id": "be5dafd34406bad77bc0b56e6478cad3",
+      "announced_copies": 4
+    }
+  },
+  "pixels": 1024,
+  "errors": []
+}

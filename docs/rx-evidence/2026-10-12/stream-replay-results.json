@@ -1,0 +1,103 @@
+[
+  {
+    "max_receive_seconds": 16.0,
+    "window_start_s": 480,
+    "window_end_s": 539,
+    "headers": [
+      {
+        "mode": "n4-ack-2f",
+        "n_cw": 53,
+        "score": 0.3011881980342206,
+        "preamble_s": 484.007125
+      },
+      {
+        "mode": "n10-16qam-r1/2",
+        "n_cw": 8,
+        "score": 0.3132487380180226,
+        "preamble_s": 502.423875
+      },
+      {
+        "mode": "n10-qpsk-r3/4",
+        "n_cw": 4,
+        "score": 0.3031554361914834,
+        "preamble_s": 525.844125
+      }
+    ],
+    "bursts": [
+      {
+        "mode": "n4-ack-2f",
+        "n_cw": 53,
+        "score": 0.3011881980342206,
+        "preamble_s": 484.007125,
+        "received": true
+      },
+      {
+        "mode": "n10-16qam-r1/2",
+        "n_cw": 8,
+        "score": 0.3132487380180226,
+        "preamble_s": 502.423875,
+        "received": false
+      },
+      {
+        "mode": "n10-qpsk-r3/4",
+        "n_cw": 4,
+        "score": 0.3031554361914834,
+        "preamble_s": 525.844125,
+        "received": true
+      }
+    ],
+    "frames": [],
+    "elapsed_s": 29.4964661480044,
+    "transport_status": []
+  },
+  {
+    "max_receive_seconds": null,
+    "window_start_s": 480,
+    "window_end_s": 539,
+    "headers": [
+      {
+        "mode": "n10-qpsk-r1/3",
+        "n_cw": 37,
+        "score": 0.3064328913760136,
+        "preamble_s": 482.571375
+      },
+      {
+        "mode": "n4-qpsk-r1/5",
+        "n_cw": 12,
+        "score": 0.6693962228175941,
+        "preamble_s": 492.651625
+      }
+    ],
+    "bursts": [
+      {
+        "mode": "n10-qpsk-r1/3",
+        "n_cw": 37,
+        "score": 0.3064328913760136,
+        "preamble_s": 482.571375,
+        "received": false
+      },
+      {
+        "mode": "n4-qpsk-r1/5",
+        "n_cw": 12,
+        "score": 0.6693962228175941,
+        "preamble_s": 492.651625,
+        "received": true
+      }
+    ],
+    "frames": [
+      {
+        "file": "recovered-cap-None-frame-0.bin",
+        "bytes": 234,
+        "callsign": "AG7SU",
+        "exact": false,
+        "received_pixels": 482,
+        "total_pixels": 1024,
+        "color_stage": "47% received"
+      }
+    ],
+    "elapsed_s": 9.276526757981628,
+    "transport_status": [
+      "BCAST 1 HEARD AG7SU"
+    ]
+  }
+]

@@ -1,0 +1,58 @@
+[
+  {
+    "signal": "clean",
+    "decoder": "native_pilot",
+    "exact": true,
+    "callsign": "AG7SU",
+    "pixels": 1024
+  },
+  {
+    "signal": "clean",
+    "decoder": "adaptive",
+    "exact": true,
+    "callsign": "AG7SU",
+    "pixels": 1024,
+    "diagnostics": {
+      "acquisition_score": 0.9998433358002161,
+      "carrier_offset_hz": 0.0,
+      "clock_ppm": 0.0,
+      "fractional_timing_samples": 0.0,
+      "start_seconds": 0.206,
+      "estimated_snr_db_2500": 37.15886897476541,
+      "equalizer": "21-tap fractionally spaced training + pilot/DD NLMS",
+      "equalizer_tap_spacing_seconds": 0.00025,
+      "equalizer_pilot_mse": 0.01,
+      "combined_copies": 1,
+      "acquired_copies": 1,
+      "copy_diagnostics": [
+        {
+          "acquisition_score": 0.9998433358002161,
+          "carrier_offset_hz": 0.0,
+          "clock_ppm": 0.0,
+          "fractional_timing_samples": 0.0,
+          "start_seconds": 0.206,
+          "estimated_snr_db_2500": 37.15886897476541,
+          "equalizer": "21-tap fractionally spaced training + pilot/DD NLMS",
+          "equalizer_tap_spacing_seconds": 0.00025,
+          "equalizer_pilot_mse": 0.01
+        }
+      ],
+      "ldpc_iterations": 2,
+      "successful_receiver": "adaptive_equalizer"
+    },
+    "pixel_sha256": "18f470cca82e5ea59ed415c6e240af0391826a58047a29466e99c35e1ae76767",
+    "elapsed_s": 0.7028133029816672
+  },
+  {
+    "signal": "field-third",
+    "decoder": "native_pilot",
+    "error": "Experimental LDPC parity checks did not converge",
+    "elapsed_s": 2.2692451500042807
+  },
+  {
+    "signal": "field-third",
+    "decoder": "adaptive",
+    "error": "Experimental LDPC parity checks did not converge",
+    "elapsed_s": 2.97625550700468
+  }
+]

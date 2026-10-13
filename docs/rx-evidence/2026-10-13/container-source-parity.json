@@ -1,0 +1,32 @@
+{
+  "date": "2026-10-13",
+  "scope": "read-only file identity comparison of active and staged radio-stream images against current PixelQSO checkout",
+  "images": {
+    "active": {
+      "tag": "radio-stream:pixelqso",
+      "digest": "sha256:b3b7d1b0cba870022edae71173d739ce7ba059ea017fce42f7c42a816f23c380",
+      "created": "2026-10-13T00:45:47-07:00"
+    },
+    "candidate": {
+      "tag": "radio-stream:pixelqso-rxfix-20261013",
+      "digest": "sha256:088e1f0759271a09074419082bca4f73588220a7867e53a2576a467906301247",
+      "created": "2026-10-13T04:11:33-07:00"
+    }
+  },
+  "files": {
+    "cardmodem.py": {
+      "active": "dd2c14390a4dc8960ccf8e59c3b71915c1d84493c5ec3de30186d2a58b6d3d9c",
+      "candidate": "926bbf0d0c268f0012cdd0fe51af9f41d56b50bcea2ca3230c3fec4b29024749",
+      "workspace": "926bbf0d0c268f0012cdd0fe51af9f41d56b50bcea2ca3230c3fec4b29024749",
+      "candidate_matches_workspace": true
+    },
+    "app.py": "3cfc4ff8f59dd5eaf39b05985c12627451f93c1e7353ace2d751e1c624a0dfd8",
+    "data2g_receive_host.py": "add31ef48594355c30305d7affa29612d4ab0658bc399be6aa7bbe6ad9ade5ac",
+    "data2g_runtime.py": "11cc620dfa8b27fcbc8cbcd276ec59ab586f51c85fff9301c80bed250b05babe",
+    "experimental_burst_modem.py": "5ad10e36a439fcfeea8061b8e52635d730275d54034f8fcb10b85912f8ee34ae",
+    "modem_envelope.py": "cbad02cf14f9b9040826a001d7fab5210aa8ead3d64a86f89be54111fad5eba7",
+    "compressed_fsk_modem.py": "1aea34af2c6200fe76bac704531a06d57f1867a6cdc03c4f2aacd2388f33f9ee",
+    "weak_signal_modem.py": "bc6b1fc297ff93bc761a29175a2c021c277b37644a4c7bf7d6a5fd644e713585"
+  },
+  "interpretation": "Only cardmodem.py differs among examined receiver files; candidate matches current workspace for that file. Existing isolated saved-capture A/B in container-resilient-image-ab.json shows 4/10 blocks in active image and 10/10 in candidate. This is mode-specific saved-capture evidence, not a common explanation or on-air validation. Active service was not modified."
+}

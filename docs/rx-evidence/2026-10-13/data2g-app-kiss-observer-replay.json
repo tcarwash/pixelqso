@@ -1,0 +1,25 @@
+{
+  "source": "saved 59-second WebSDR PCM segment at 480-539 s",
+  "playback_sink": "pixelqso_test",
+  "host_kiss_port": 18100,
+  "local_app_connection": "connected before and after replay on same host port",
+  "pacat_exit": 0,
+  "elapsed_seconds": 61.16,
+  "kiss_frames": [
+    {
+      "kiss_port": 1,
+      "frame_bytes": 234,
+      "prefix": "PQI2",
+      "callsign": "AG7SU",
+      "grid": "CN85",
+      "card_id": 49374,
+      "offset": null,
+      "total_bytes": null,
+      "received_bytes": 181,
+      "exact": false,
+      "covered_pixels": 482,
+      "total_pixels": 1024
+    }
+  ],
+  "pacat_stderr": ""
+}

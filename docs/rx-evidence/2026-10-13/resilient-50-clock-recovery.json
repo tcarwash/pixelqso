@@ -1,0 +1,117 @@
+{
+  "variant": "source_after_resilient_local_timing_widening",
+  "elapsed_s": 10.21405973500805,
+  "callsign": "AG7SU",
+  "grid": "CN85",
+  "block_mask": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true
+  ],
+  "checked_blocks": 10,
+  "whole_raster_valid": true,
+  "content_tag_valid": true,
+  "image_crc32": 1491296454,
+  "image_tag": "c9109ede",
+  "pixel_sha256": "18f470cca82e5ea59ed415c6e240af0391826a58047a29466e99c35e1ae76767",
+  "matches_expected_pixels": true,
+  "local_recovery": [
+    {
+      "block": 1,
+      "start_sample": 44167,
+      "symbol_period_samples": 159.2,
+      "frequency_offset_hz": 4.0,
+      "corrected_symbols": true,
+      "crc16": 38799,
+      "timing_score": 0.9498734532882451,
+      "source_copy": 0
+    },
+    {
+      "block": 2,
+      "start_sample": 68234,
+      "symbol_period_samples": 159.2,
+      "frequency_offset_hz": 4.0,
+      "corrected_symbols": true,
+      "crc16": 61345,
+      "timing_score": 0.8085527960581798,
+      "source_copy": 1
+    },
+    {
+      "block": 3,
+      "start_sample": 85972,
+      "symbol_period_samples": 159.2,
+      "frequency_offset_hz": 4.0,
+      "corrected_symbols": true,
+      "crc16": 2198,
+      "timing_score": 0.9671208092824437,
+      "source_copy": 0
+    },
+    {
+      "block": 4,
+      "start_sample": 110045,
+      "symbol_period_samples": 158.4,
+      "frequency_offset_hz": 4.0,
+      "corrected_symbols": true,
+      "crc16": 47224,
+      "timing_score": 0.7787459451633757,
+      "source_copy": 1
+    },
+    {
+      "block": 5,
+      "start_sample": 130954,
+      "symbol_period_samples": 158.4,
+      "frequency_offset_hz": 4.0,
+      "corrected_symbols": true,
+      "crc16": 41035,
+      "timing_score": 0.939480167780847,
+      "source_copy": 1
+    },
+    {
+      "block": 6,
+      "start_sample": 151930,
+      "symbol_period_samples": 159.60000000000002,
+      "frequency_offset_hz": 4.0,
+      "corrected_symbols": false,
+      "crc16": 43609,
+      "timing_score": 0.9004912978365183,
+      "source_copy": 1
+    },
+    {
+      "block": 7,
+      "start_sample": 173026,
+      "symbol_period_samples": 159.86666666666667,
+      "frequency_offset_hz": 4.0,
+      "corrected_symbols": false,
+      "crc16": 51734,
+      "timing_score": 0.9326410065927497,
+      "source_copy": 1
+    },
+    {
+      "block": 8,
+      "start_sample": 194128,
+      "symbol_period_samples": 159.86666666666667,
+      "frequency_offset_hz": 4.0,
+      "corrected_symbols": false,
+      "crc16": 36043,
+      "timing_score": 0.9806798158553909,
+      "source_copy": 1
+    },
+    {
+      "block": 9,
+      "start_sample": 212142,
+      "symbol_period_samples": 160.79999999999998,
+      "frequency_offset_hz": 4.0,
+      "corrected_symbols": false,
+      "crc16": 18663,
+      "timing_score": 0.9615133063458188,
+      "source_copy": 0
+    }
+  ]
+}

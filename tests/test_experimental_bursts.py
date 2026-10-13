@@ -154,6 +154,23 @@ class ExperimentalBurstTests(unittest.TestCase):
         self.assert_verified(burst.QPSK_KEY, report)
         self.assertEqual(report["card"]["diagnostics"]["successful_receiver"], "adaptive_equalizer")
 
+    def test_qpsk_reacquires_from_distributed_pilots_after_a_timing_echo(self):
+        from scipy.signal import resample_poly
+        source = np.pad(resample_poly(self.audio[burst.QPSK_KEY], 1, 6), (400, 400))
+        _training, _pilots, _permutation, _whitening, taps = weak.constants()
+        start = round((.05 + weak.GUARD / weak.FS) * weak.FS) + len(taps) - 1
+        shift = 32
+        echo = 2 * source[start:start + weak.PREAMBLE * weak.SPS]
+        source[start - shift:start - shift + len(echo)] += echo
+
+        primary = weak.announced_candidate(source)
+        pilot = weak.pilot_candidate(source, primary[1])
+        self.assertNotEqual(primary[1], pilot[1])
+        report = burst.decode_copies(burst.QPSK_KEY, [source], 8000)
+        self.assert_verified(burst.QPSK_KEY, report)
+        self.assertEqual(report["card"]["diagnostics"]["acquisition_method"],
+                         "distributed QPSK pilot coherence")
+
     def test_receive_all_finds_each_new_mode(self):
         for key in burst.MODE_KEYS:
             with self.subTest(key=key):
@@ -199,7 +216,7 @@ class ExperimentalBurstTests(unittest.TestCase):
             for key in burst.MODE_KEYS:
                 with self.subTest(key=key):
                     window.mode_combo.setCurrentIndex(window.mode_combo.findData(key))
-                    self.assertEqual(window.repeat_count.value(), 3)
+                    self.assertEqual(window.repeat_count.value(), 1)
                     self.assertTrue(window.repeat_count.isHidden())
                     audio = window._card_tx_audio(self.card)
                     self.assertAlmostEqual(len(audio) / 48000,

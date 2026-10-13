@@ -14,6 +14,73 @@ from data2g_transport import Data2GMode
 
 
 class ReceiveResponsivenessTests(unittest.TestCase):
+    def test_soft_viterbi_is_receive_only_and_old_selection_falls_back(self):
+        qt = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), \
+                patch("app.QTimer.singleShot"):
+            window = MainWindow()
+            window.backend_combo.setCurrentIndex(window.backend_combo.findData("experimental"))
+            window.show_experimental_modes.setChecked(True)
+            window._set_mode_options("standard")
+
+            self.assertEqual(window.mode_combo.findData("standard"), -1)
+            self.assertEqual(window.selected_mode(), "resilient_100")
+            window.mode_combo.addItem("legacy", "standard")
+            window.mode_combo.setCurrentIndex(window.mode_combo.count() - 1)
+            with self.assertRaisesRegex(ValueError, "receive-only"):
+                window._card_tx_audio(pixel.example_card())
+            window.close()
+            qt.processEvents()
+
+    def test_rx_preference_follows_detected_mode_unless_locked_without_changing_tx(self):
+        qt = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), \
+                patch("app.QTimer.singleShot"):
+            window = MainWindow()
+            window.backend_combo.setCurrentIndex(window.backend_combo.findData("experimental"))
+            window.show_experimental_modes.setChecked(True)
+            window._set_mode_options("resilient_100")
+            window.settings.setValue("ui/advanced_controls", True)
+            window._update_rx_mode_controls()
+            self.assertFalse(window.rx_mode_lock.isHidden())
+            tx_mode = window.selected_mode()
+
+            window._follow_detected_rx_mode("experimental_qpsk_5s")
+            self.assertEqual(window.rx_preferred_mode, "experimental_qpsk_5s")
+            self.assertEqual(window.selected_mode(), tx_mode,
+                             "RX auto-follow must not change the selected TX mode")
+
+            window.rx_mode_lock.setChecked(True)
+            window._follow_detected_rx_mode("resilient_50")
+            self.assertEqual(window.rx_preferred_mode, "experimental_qpsk_5s")
+            self.assertEqual(window.rx_live_profile, "resilient_50",
+                             "lock preserves the preferred decoder but reports the actual detected mode")
+            window.close()
+            qt.processEvents()
+
+    def test_grid_tx_latency_setting_only_shows_for_grid_mode(self):
+        qt = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), \
+                patch("app.QTimer.singleShot"):
+            window = MainWindow()
+            window._set_advanced_controls(True)
+            window.backend_combo.setCurrentIndex(window.backend_combo.findData("experimental"))
+            window.show_experimental_modes.setChecked(True)
+            window._set_mode_options("experimental_16fsk_grid")
+            window._update_grid_tx_control_visibility()
+            self.assertFalse(window.grid_tx_latency.isHidden())
+            self.assertFalse(window.grid_tx_label.isHidden())
+
+            window._set_mode_options("resilient_100")
+            window._update_grid_tx_control_visibility()
+            self.assertTrue(window.grid_tx_latency.isHidden())
+            self.assertTrue(window.grid_tx_label.isHidden())
+            window.close()
+            qt.processEvents()
+
     def test_pcm_snapshot_conversion_matches_previous_values(self):
         from app import pcm16_to_float32
         samples=np.asarray([-32768,-32767,-1,0,1,32766,32767],dtype='<i2')

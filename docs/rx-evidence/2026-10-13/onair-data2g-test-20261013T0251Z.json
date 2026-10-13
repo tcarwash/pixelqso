@@ -1,0 +1,194 @@
+{
+  "date": "2026-10-13",
+  "source_session_id": "01a1331c-9c5d-7432-a0ec-27a224470298",
+  "receiver_capture": {
+    "file": "work/rx-analysis-20261012/websdr-audio.f16",
+    "sha256": "db2763a5b71756ae207e459db4811e270e0f67852e80079d73c11f40a6a86f5f",
+    "sample_format": "float16 mono 8000Hz",
+    "duration_s": 873.4,
+    "start_utc": "2026-10-13T02:46:33.550Z",
+    "end_utc": "2026-10-13T03:01:06.950Z"
+  },
+  "reported_user_markers": [
+    {
+      "utc": "2026-10-13T02:51:02.871Z",
+      "text": "sending now"
+    },
+    {
+      "utc": "2026-10-13T02:54:58.376Z",
+      "text": "still transmitting"
+    },
+    {
+      "utc": "2026-10-13T03:18:09.704Z",
+      "text": "sending another 8fsk"
+    },
+    {
+      "utc": "2026-10-13T03:20:42.849Z",
+      "text": "sending some other modes too"
+    },
+    {
+      "utc": "2026-10-13T03:31:05.763Z",
+      "text": "made several transmissions in different modes same card"
+    }
+  ],
+  "logged_tx_session_start_utc": "2026-10-13T02:50:01.545Z",
+  "logged_transmissions": [
+    {
+      "burst_seq": 1,
+      "mode": "n4-qpsk-r1/5",
+      "start_utc": "2026-10-13T02:50:58.045Z",
+      "end_utc": "2026-10-13T02:51:43.753Z",
+      "duration_s": 45.708,
+      "codeword_slots": 13
+    },
+    {
+      "burst_seq": 2,
+      "mode": "n4-qpsk-r1/5",
+      "start_utc": "2026-10-13T02:51:43.945Z",
+      "end_utc": "2026-10-13T02:52:26.197Z",
+      "duration_s": 42.252,
+      "codeword_slots": 12
+    },
+    {
+      "burst_seq": 3,
+      "mode": "n4-qpsk-r1/5",
+      "start_utc": "2026-10-13T02:52:26.445Z",
+      "end_utc": "2026-10-13T02:53:12.153Z",
+      "duration_s": 45.708,
+      "codeword_slots": 13
+    },
+    {
+      "burst_seq": 4,
+      "mode": "n4-qpsk-r1/5",
+      "start_utc": "2026-10-13T02:53:12.545Z",
+      "end_utc": "2026-10-13T02:53:54.797Z",
+      "duration_s": 42.252,
+      "codeword_slots": 12
+    },
+    {
+      "burst_seq": 5,
+      "mode": "n4-qpsk-r1/5",
+      "start_utc": "2026-10-13T02:53:54.945Z",
+      "end_utc": "2026-10-13T02:54:40.653Z",
+      "duration_s": 45.708,
+      "codeword_slots": 13
+    },
+    {
+      "burst_seq": 6,
+      "mode": "n4-qpsk-r1/5",
+      "start_utc": "2026-10-13T02:54:40.945Z",
+      "end_utc": "2026-10-13T02:55:23.197Z",
+      "duration_s": 42.252,
+      "codeword_slots": 12
+    }
+  ],
+  "receive_alignment": {
+    "method": "correlation of captured preambles against exact local Data2G TX waveform plus expected slot decoding",
+    "bursts": [
+      {
+        "burst_seq": 1,
+        "expected_mode": "n4-qpsk-r1/5",
+        "preamble_utc": "2026-10-13T02:51:01.055Z",
+        "preamble_match_correlation": 0.8673724293965953,
+        "mirrored_match_correlation": 0.25793698002857435,
+        "cfo_hz": 4.659584699543166,
+        "estimated_snr_db": -21.113272691574586,
+        "payload_slots_matching_tx": 0,
+        "payload_slots_expected": 13
+      },
+      {
+        "burst_seq": 2,
+        "expected_mode": "n4-qpsk-r1/5",
+        "preamble_utc": "2026-10-13T02:51:47.375Z",
+        "preamble_match_correlation": 0.7195734586508771,
+        "mirrored_match_correlation": 0.26468715846958263,
+        "cfo_hz": 4.4466077808281534,
+        "estimated_snr_db": -18.36643096304946,
+        "payload_slots_matching_tx": 0,
+        "payload_slots_expected": 12
+      },
+      {
+        "burst_seq": 3,
+        "expected_mode": "n4-qpsk-r1/5",
+        "preamble_utc": "2026-10-13T02:52:30.419Z",
+        "preamble_match_correlation": 0.8263489404072818,
+        "mirrored_match_correlation": 0.25924673894535294,
+        "cfo_hz": 4.4417308671769735,
+        "estimated_snr_db": -18.368441422776726,
+        "payload_slots_matching_tx": 0,
+        "payload_slots_expected": 13
+      },
+      {
+        "burst_seq": 4,
+        "expected_mode": "n4-qpsk-r1/5",
+        "preamble_utc": "2026-10-13T02:53:16.627Z",
+        "preamble_match_correlation": 0.7775449301355271,
+        "mirrored_match_correlation": 0.25645797120555514,
+        "cfo_hz": 4.394147921480318,
+        "estimated_snr_db": -16.12859241662395,
+        "payload_slots_matching_tx": 6,
+        "payload_slots_expected": 12
+      },
+      {
+        "burst_seq": 5,
+        "expected_mode": "n4-qpsk-r1/5",
+        "preamble_utc": "2026-10-13T02:53:59.609Z",
+        "preamble_match_correlation": 0.8646664457038487,
+        "mirrored_match_correlation": 0.25578139007344486,
+        "cfo_hz": 4.763901345988493,
+        "estimated_snr_db": -22.512902893192205,
+        "payload_slots_matching_tx": 0,
+        "payload_slots_expected": 13
+      },
+      {
+        "burst_seq": 6,
+        "expected_mode": "n4-qpsk-r1/5",
+        "preamble_utc": "2026-10-13T02:54:46.203Z",
+        "preamble_match_correlation": 0.5511943471212317,
+        "mirrored_match_correlation": 0.23619237845332086,
+        "cfo_hz": 4.582701339859569,
+        "estimated_snr_db": -12.939618360354437,
+        "payload_slots_matching_tx": 12,
+        "payload_slots_expected": 12
+      }
+    ]
+  },
+  "old_cap_vs_uncapped_replay": [
+    {
+      "max_receive_seconds": 16.0,
+      "window_s": [
+        480,
+        539
+      ],
+      "expected_mode_bursts_detected": [],
+      "frame": null,
+      "elapsed_s": 29.4964661480044
+    },
+    {
+      "max_receive_seconds": null,
+      "window_s": [
+        480,
+        539
+      ],
+      "expected_mode_bursts_detected": [
+        {
+          "mode": "n4-qpsk-r1/5",
+          "n_cw": 12,
+          "score": 0.6693962228175941,
+          "received": true
+        }
+      ],
+      "frame": {
+        "file": "recovered-cap-None-frame-0.bin",
+        "bytes": 234,
+        "callsign": "AG7SU",
+        "exact": false,
+        "received_pixels": 482,
+        "total_pixels": 1024,
+        "color_stage": "47% received"
+      },
+      "elapsed_s": 9.276526757981628
+    }
+  ],
+  "interpretation": "The first reported Data2G transmission is time-aligned with six local n4-qpsk-r1/5 bursts (about 42-46 seconds each) and a matching non-mirrored WebSDR preamble. A 59-second replay with the old 16-second admission cap produced no matching-mode frame. The same replay without that cap recovered one 234-byte PixelQSO KISS frame containing the final 181 bytes of a 384-byte raster (482/1024 pixels, 47% provisional); the earlier card fragments remain absent. This confirms the duration cap prevented a partial provisional card in this recorded Data2G test. The user-reported later 8-FSK and other-mode transmissions began after this recording ended at 03:01:07Z, so this capture does not validate them. This is a Data2G-specific defect, not a universal decoder fix."
+}

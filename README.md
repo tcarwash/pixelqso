@@ -12,9 +12,13 @@ See [copy framing and receiver details](tools/COPY_COMBINING.md) and
 
 ## Screenshots
 
-| QSO session | Card editor |
+| Operate · disconnected setup | Card editor · 73 Sunset starter |
 | --- | --- |
-| <img src="screenshots/qso-session.png" alt="Pixel QSO session wall with staged cards and receive preview" width="480"> | <img src="screenshots/card-editor.png" alt="Pixel QSO card editor with drawing tools, palette, and card settings" width="480"> |
+| <img src="screenshots/qso-session.png" alt="Pixel QSO Operate page with station connection guidance and an empty session wall" width="480"> | <img src="screenshots/card-editor.png" alt="Pixel QSO card editor showing the 73 Sunset starter card, pixel tools, palette, and save action" width="480"> |
+
+The Operate screenshot uses an isolated fresh profile and does not show active
+reception or transmission. The editor screenshot uses the included 73 Sunset
+starter card.
 
 Example cards made in the editor:
 
@@ -86,8 +90,9 @@ verification. See [experimental burst formats and validation](docs/EXPERIMENTAL-
 The experimental names describe modulation and decoding: **8-FSK · RS + soft Chase**
 uses Reed–Solomon with bounded soft recovery; **8-FSK · raw pixels** leaves image
 pixels unchecked; **QPSK · soft LDPC** uses iterative soft decoding and shared
-copy combining (the older combined-mode ID remains supported); **4-FSK · soft Viterbi**
-uses convolutional coding and progressive packets. Hover over a mode for its
+copy combining (the older combined-mode ID remains supported). The legacy
+**4-FSK · soft Viterbi** format remains receive-compatible, but is no longer
+selectable for transmission. Hover over a mode for its
 error correction and checksum details. Display names do not change saved mode
 IDs. The new common copy-header format is versioned; historical native payloads remain readable.
 
@@ -208,3 +213,5 @@ The [FSK receiver improvements](docs/FSK-RECEIVER.md) add distributed header acq
 Experimental UTC scheduling: [compressed 16-FSK on a 500 ms start grid](docs/GRID-FSK.md).
 
 Receive-all acquisition profiling and measured decoder latency: [profiling report](docs/RECEIVE-ALL-PROFILING.md).
+
+On-air receive diagnosis and resume notes: [2026-10-12 HF findings](docs/HF-RX-FINDINGS-2026-10-12.md).

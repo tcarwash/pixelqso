@@ -1,0 +1,73 @@
+[
+  {
+    "diagnostic_start_sample": 2448,
+    "diagnostics": {
+      "acquisition_score": 1.0,
+      "carrier_offset_hz": 5.25,
+      "clock_ppm": 80.00000000008001,
+      "fractional_timing_samples": 0.75,
+      "start_seconds": 0.306,
+      "estimated_snr_db_2500": -19.919191165290076,
+      "equalizer": "21-tap fractionally spaced training + pilot/DD NLMS",
+      "equalizer_tap_spacing_seconds": 0.00025,
+      "equalizer_pilot_mse": 10.008270833441767
+    },
+    "adaptive_ber": 0.4965909090909091,
+    "baseline_ber": 0.5068892045454545,
+    "error": "Experimental LDPC parity checks did not converge"
+  },
+  {
+    "diagnostic_start_sample": 2501,
+    "diagnostics": {
+      "acquisition_score": 1.0,
+      "carrier_offset_hz": 3.75,
+      "clock_ppm": 0.0,
+      "fractional_timing_samples": 0.0,
+      "start_seconds": 0.312625,
+      "estimated_snr_db_2500": 3.184093818788506,
+      "equalizer": "21-tap fractionally spaced training + pilot/DD NLMS",
+      "equalizer_tap_spacing_seconds": 0.00025,
+      "equalizer_pilot_mse": 0.8748226416481965
+    },
+    "adaptive_ber": 0.14026988636363635,
+    "baseline_ber": 0.03636363636363636,
+    "exact": true,
+    "decoder": "adaptive",
+    "pixels": 1024,
+    "pixel_sha256": "18f470cca82e5ea59ed415c6e240af0391826a58047a29466e99c35e1ae76767"
+  },
+  {
+    "diagnostic_start_sample": 2565,
+    "diagnostics": {
+      "acquisition_score": 1.0,
+      "carrier_offset_hz": 2.25,
+      "clock_ppm": -79.99999999996899,
+      "fractional_timing_samples": -1.0,
+      "start_seconds": 0.320625,
+      "estimated_snr_db_2500": -18.359405228664624,
+      "equalizer": "21-tap fractionally spaced training + pilot/DD NLMS",
+      "equalizer_tap_spacing_seconds": 0.00025,
+      "equalizer_pilot_mse": 11.148441313603463
+    },
+    "adaptive_ber": 0.503125,
+    "baseline_ber": 0.5051136363636364,
+    "error": "Experimental LDPC parity checks did not converge"
+  },
+  {
+    "diagnostic_start_sample": 2629,
+    "diagnostics": {
+      "acquisition_score": 1.0,
+      "carrier_offset_hz": 5.0,
+      "clock_ppm": -99.99999999998899,
+      "fractional_timing_samples": -1.0,
+      "start_seconds": 0.328625,
+      "estimated_snr_db_2500": -16.489886866178868,
+      "equalizer": "21-tap fractionally spaced training + pilot/DD NLMS",
+      "equalizer_tap_spacing_seconds": 0.00025,
+      "equalizer_pilot_mse": 13.51572889737656
+    },
+    "adaptive_ber": 0.49644886363636365,
+    "baseline_ber": 0.49772727272727274,
+    "error": "Experimental LDPC parity checks did not converge"
+  }
+]

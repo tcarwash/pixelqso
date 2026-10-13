@@ -2,6 +2,7 @@
 # the build host, so a Windows executable cannot be produced from Linux.
 import os
 import sys
+import glob
 
 platform_icon = None
 if sys.platform == "win32":
@@ -11,6 +12,9 @@ elif sys.platform == "darwin":
 
 include_data2g_host = True
 bundled_datas = [(os.path.join(SPECPATH, "icon.png"), ".")]
+bundled_datas.extend(
+    (path, "examples/starter-cards")
+    for path in glob.glob(os.path.join(SPECPATH, "examples", "starter-cards", "*.json")))
 bundled_binaries = []
 bundled_hidden = []
 if include_data2g_host:

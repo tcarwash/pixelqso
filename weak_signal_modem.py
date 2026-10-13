@@ -7,7 +7,7 @@ import zlib
 import numpy as np
 from scipy.signal import fftconvolve, resample_poly, find_peaks
 import cardmodem as pixel
-from copy_combining import SoftCopy, recovery_attempts, diagnostics_for
+from copy_combining import SoftCopy, recovery_attempts, hypothesis_attempts, diagnostics_for
 
 FS = 8000
 SPS = 4
@@ -280,21 +280,89 @@ def announced_candidate(source):
     return best
 
 
+def pilot_candidate(source, around, radius=640, *, minimum_score=.35):
+    """Reacquire QPSK timing from distributed pilots near a primary guess.
+
+    The common header identifies the waveform, so its known per-block pilots
+    can validate timing hypotheses even when the long preamble is distorted.
+    Work in bounded start chunks to keep the search memory predictable.
+    """
+    _, pilots, _, _, h = constants()
+    source = np.asarray(source, dtype=float)
+    frame_symbols = PREAMBLE + BLOCKS * (PILOTS + DATA)
+    low = max(0, int(round(around)) - int(radius))
+    high = min(int(round(around)) + int(radius), len(source) - frame_symbols*SPS)
+    if high < low:
+        raise ValueError('announced QPSK payload is incomplete')
+
+    time = np.arange(len(source)) / FS
+    base = np.sqrt(2) * source * np.exp(-2j*np.pi*CARRIER*time)
+    matched = fftconvolve(base, h)
+    pilot_symbols = (PREAMBLE + np.arange(BLOCKS)[:, None] * (PILOTS + DATA)
+                     + np.arange(PILOTS))
+    offsets = np.arange(-16, 17, 4)
+    best = None
+    for first in range(low, high + 1, 64):
+        starts = np.arange(first, min(first + 64, high + 1))
+        positions = starts[:, None, None] + pilot_symbols[None, :, :] * SPS
+        values = matched[positions]
+        energy = np.maximum(np.sum(np.abs(values)**2, axis=-1) * PILOTS, 1e-20)
+        for offset in offsets:
+            phase = np.exp(-2j*np.pi*offset*pilot_symbols*SPS/FS)
+            corr = np.sum(values * phase[None, :, :] * pilots.conj()[None, :, :], axis=-1)
+            scores = np.mean(np.abs(corr)**2 / energy, axis=-1)
+            index = int(np.argmax(scores))
+            score = float(scores[index])
+            candidate = (score, int(starts[index]), int(offset))
+            if best is None or candidate[0] > best[0]:
+                best = candidate
+    if best is None or best[0] < minimum_score:
+        raise ValueError('distributed QPSK pilots did not confirm a timing candidate')
+    return best
+
+
 def decode_copies(captures, sample_rate=48000):
     divisor = math.gcd(sample_rate,FS)
     frames=[]
     error=ValueError('no CRC-valid announced QPSK card')
     for audio in captures:
         source=resample_poly(np.asarray(audio,float),FS//divisor,sample_rate//divisor)
+        variants=[]
         try:
-            frames.append(SoftCopy(*soft_frame(source, announced_candidate(source))))
+            primary=announced_candidate(source)
+            evidence,diagnostic=soft_frame(source,primary)
+            frame=SoftCopy(evidence,diagnostic)
+            variants.append(frame)
+            try:
+                bits,iterations=decode_ldpc(evidence)
+                pixels,metadata=unpack(bits,diagnostics_for([frame],1)|{'ldpc_iterations':iterations})
+                return pixels,metadata
+            except ValueError as exc:
+                error=exc
         except ValueError as exc:
             error=exc
-    for evidence, used in recovery_attempts(frames):
+            continue
+        try:
+            pilot=pilot_candidate(source, primary[1])
+            if abs(pilot[1]-primary[1]) > 2:
+                alternative,details=soft_frame(source,pilot)
+                details.update(acquisition_method='distributed QPSK pilot coherence',
+                               pilot_coherence=pilot[0],pilot_start_sample=pilot[1])
+                frame=SoftCopy(alternative,details)
+                variants.append(frame)
+                try:
+                    bits,iterations=decode_ldpc(alternative)
+                    pixels,metadata=unpack(bits,diagnostics_for([frame],1)|{'ldpc_iterations':iterations})
+                    return pixels,metadata
+                except ValueError as exc:
+                    error=exc
+        except ValueError as exc:
+            error=exc
+        frames.append(variants)
+    for evidence, used in hypothesis_attempts(frames):
         try:
             bits, iterations=decode_ldpc(evidence)
-            diagnostic={**diagnostics_for(used,len(frames)), 'ldpc_iterations':iterations,
-                        'acquisition_method':'protected boundary + local QPSK training'}
+            diagnostic={**diagnostics_for(used,len(frames)), 'ldpc_iterations':iterations}
             pixels,metadata=unpack(bits,diagnostic)
             metadata['received_copies']=len(used)
             return pixels,metadata

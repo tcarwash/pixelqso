@@ -1,0 +1,16 @@
+[
+  {
+    "mode": "standard",
+    "forced_profile": "standard",
+    "phase_search": false,
+    "elapsed_s": 13.597975780983688,
+    "error": "DecodeFailure(adapter_key='experimental_local', kind=<DecodeFailureKind.NO_MATCH: 'no_match'>, message='No legacy packet card data received yet', retryable=True)"
+  },
+  {
+    "mode": "standard",
+    "forced_profile": "standard",
+    "phase_search": true,
+    "elapsed_s": 13.065474174974952,
+    "error": "DecodeFailure(adapter_key='experimental_local', kind=<DecodeFailureKind.NO_MATCH: 'no_match'>, message='No legacy packet card data received yet', retryable=True)"
+  }
+]

@@ -230,22 +230,29 @@ class CardPreviewAssembler:
                     for old, new in zip(old_checksums, incoming_checksums)):
                 raise ValueError("conflicting checked-block checksums for the same image identity")
         changed = reset_state or self.current_key != key
+        diagnostics = incoming_card.get("diagnostics") or {}
+        acquisition_start = diagnostics.get("acquisition_start_sample")
+        candidate_revision = (
+            diagnostics.get("receive_session_id", 0),
+            tuple(diagnostics.get("copy_revisions") or ()), acquisition_start,
+            int(incoming_card.get("received_copies", 0) or 0),
+            tuple(bool(value) for value in (incoming_card.get("pixel_coverage") or [])),
+            tuple(report.get("pixels") or ()),
+        )
         if reset_state:
             state = {"key": key, "pixels": [0] * count, "coverage": [False] * count,
                      "verified_pixels": [False] * count,
-                     "pixel_votes": [[0] * len(palette) for _ in range(count)],
                      "received_blocks": [False] * len(incoming_card.get("received_blocks") or []),
                      "block_checksums": list(incoming_checksums or []),
-                     "copies": 0, "window_id": self.window, "card": {}}
+                     "copies": 0, "window_id": self.window, "card": {},
+                     "candidate_revision": None, "integrity": {}}
 
         pixels = report.get("pixels") or []
         coverage = incoming_card.get("pixel_coverage")
         if coverage is None:
             coverage = [True] * min(count, len(pixels))
         copies = int(incoming_card.get("received_copies", 0) or 0)
-        acquisition_start = (incoming_card.get("acquisition") or {}).get("start_sample")
-        more_evidence = (self.window > state["window_id"] or copies > state["copies"] or
-                         (acquisition_start is not None and acquisition_start != state.get("last_start_sample")))
+        new_candidate_revision = candidate_revision != state["candidate_revision"]
         incoming_verified = [False] * count
         if incoming_card.get("exact"):
             for index in range(min(count, len(coverage))):
@@ -293,24 +300,16 @@ class CardPreviewAssembler:
                     state["pixels"][index] = pixels[index]
                     changed = True
                 state["verified_pixels"][index] = True
-            elif (not state["verified_pixels"][index] and
-                  (more_evidence or not state["coverage"][index])):
+            elif not state["verified_pixels"][index]:
                 value = int(pixels[index])
-                if 0 <= value < len(state["pixel_votes"][index]):
-                    weight = max(1, copies - state["copies"]) if more_evidence else 1
-                    state["pixel_votes"][index][value] += weight
-                    previous = state["pixels"][index]
-                    best_votes = max(state["pixel_votes"][index])
-                    # Keep the existing candidate on ties; change only when new
-                    # evidence makes another palette value more likely.
-                    if (not state["coverage"][index] or
-                            state["pixel_votes"][index][value] == best_votes and
-                            state["pixel_votes"][index][value] > state["pixel_votes"][index][previous]):
-                        state["pixels"][index] = value
-                    elif best_votes > state["pixel_votes"][index][previous]:
-                        state["pixels"][index] = state["pixel_votes"][index].index(best_votes)
-                    state["coverage"][index] = True
-                    changed = True
+                if not 0 <= value < len(palette):
+                    continue
+                previous = state["pixels"][index]
+                was_covered = state["coverage"][index]
+                if new_candidate_revision or not was_covered:
+                    state["pixels"][index] = value
+                state["coverage"][index] = True
+                changed = changed or not was_covered or state["pixels"][index] != previous
 
         if blocks is not None:
             if len(state["received_blocks"]) != len(blocks):
@@ -328,12 +327,23 @@ class CardPreviewAssembler:
         if copies > state["copies"]:
             state["copies"] = copies
             changed = True
-        if acquisition_start is not None:
-            state["last_start_sample"] = acquisition_start
+        if new_candidate_revision:
+            state["candidate_revision"] = candidate_revision
         state["window_id"] = self.window
         state["card"].update(incoming_card)
+        # Integrity claims are monotonic for this immutable content key. A
+        # later partial snapshot may omit or clear a flag, but cannot revoke a
+        # previously checked whole-raster result.
+        for name in ("whole_raster_valid", "whole_raster_crc32_valid",
+                     "content_tag_valid", "exact"):
+            if incoming_card.get(name):
+                state["integrity"][name] = True
+            elif name not in state["integrity"]:
+                state["integrity"][name] = False
+            state["card"][name] = state["integrity"][name]
         merged_card = {**state["card"], "pixel_coverage": state["coverage"],
                        "verified_pixel_coverage": state["verified_pixels"],
+                       "block_checksums": state["block_checksums"],
                        "received_blocks": state["received_blocks"] if blocks is not None else None,
                        "received_copies": state["copies"]}
         if blocks is not None:

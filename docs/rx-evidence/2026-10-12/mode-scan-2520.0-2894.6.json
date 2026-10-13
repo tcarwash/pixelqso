@@ -1,0 +1,85 @@
+{
+  "start_s": 2520.0,
+  "end_s": 2894.6,
+  "rms": 0.0559030773391698,
+  "copies": [
+    {
+      "mode": "experimental_qpsk_equalized",
+      "identity": "a4dff03a6be81229b07e69b33a79ae6a",
+      "payload_start_s": 2628.363,
+      "payload_end_s": 2632.985,
+      "diagnostics": {
+        "mode": "experimental_qpsk_equalized",
+        "trailer": true,
+        "payload_samples": 221856,
+        "identity": "a4dff03a6be81229b07e69b33a79ae6a",
+        "version": 1,
+        "corrected_symbols": 1,
+        "group_copies": 1,
+        "acquisition_score": 0.9249610293169155,
+        "carrier_offset_hz": 0
+      }
+    },
+    {
+      "mode": "experimental_qpsk_equalized",
+      "identity": "a4dff03a6be81229b07e69b33a79ae6a",
+      "payload_start_s": 2636.148,
+      "payload_end_s": 2640.77,
+      "diagnostics": {
+        "mode": "experimental_qpsk_equalized",
+        "trailer": true,
+        "payload_samples": 221856,
+        "identity": "a4dff03a6be81229b07e69b33a79ae6a",
+        "version": 1,
+        "corrected_symbols": 0,
+        "group_copies": 1,
+        "acquisition_score": 0.8693156161997453,
+        "carrier_offset_hz": 0
+      }
+    },
+    {
+      "mode": "experimental_qpsk_equalized",
+      "identity": "a4dff03a6be81229b07e69b33a79ae6a",
+      "payload_start_s": 2636.1825,
+      "payload_end_s": 2640.8045,
+      "diagnostics": {
+        "mode": "experimental_qpsk_equalized",
+        "trailer": false,
+        "payload_samples": 221856,
+        "identity": "a4dff03a6be81229b07e69b33a79ae6a",
+        "version": 1,
+        "corrected_symbols": 4,
+        "group_copies": 1,
+        "acquisition_score": 0.6961272546488311,
+        "carrier_offset_hz": 0
+      }
+    },
+    {
+      "mode": "experimental_qpsk_equalized",
+      "identity": "a4dff03a6be81229b07e69b33a79ae6a",
+      "payload_start_s": 2643.9355,
+      "payload_end_s": 2648.5575,
+      "diagnostics": {
+        "mode": "experimental_qpsk_equalized",
+        "trailer": true,
+        "payload_samples": 221856,
+        "identity": "a4dff03a6be81229b07e69b33a79ae6a",
+        "version": 1,
+        "corrected_symbols": 7,
+        "group_copies": 1,
+        "acquisition_score": 0.811334742278979,
+        "carrier_offset_hz": 10
+      }
+    }
+  ],
+  "results": [
+    {
+      "mode": "experimental_qpsk_equalized",
+      "identity": "a4dff03a6be81229b07e69b33a79ae6a",
+      "captured_copies": 4,
+      "audio_placement_hz": 300,
+      "error": "DecodeFailure(adapter_key='experimental_local', kind=<DecodeFailureKind.NO_MATCH: 'no_match'>, message='Experimental LDPC parity checks did not converge', retryable=True)"
+    }
+  ],
+  "elapsed_s": 109.2680488479964
+}

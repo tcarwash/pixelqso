@@ -1,0 +1,44 @@
+{
+  "date": "2026-10-13",
+  "session": {
+    "kind": "receive-only WebSDR capture",
+    "started_at_utc": "2026-10-13T14:20:30Z",
+    "frequency_khz": 7066,
+    "mode": "USB",
+    "duration_seconds_approx": 227.76,
+    "capture_bytes": 3644160,
+    "capture_sha256": "e4ab457a22b8af645fcb43f4a48add25f476fd6ebc47b38b1f42baa121d2b14c",
+    "capture_path": "/home/tyler/dev/pixelqso_stream/recordings/websdr-20261013T142030Z-7066kHz.s16",
+    "stopped_after_user_reported_no_tx_audio": true,
+    "relay_status_after_stop": "stopped"
+  },
+  "runtime": {
+    "container": "pixelqso_stream-radio-1",
+    "active_image": "sha256:088e1f0759271a09074419082bca4f73588220a7867e53a2576a467906301247",
+    "rollback_image_tag": "radio-stream:pixelqso-pre-rxfix-20261013",
+    "container_settings": {
+      "backend": "experimental",
+      "mode": "experimental_8fsk_outer_rs",
+      "receive_all": true
+    },
+    "host_data2g_process": {
+      "command_port": 18300,
+      "kiss_port": 18100,
+      "input_device": "pixelqso_test_in / PixelQSO-Test-RX"
+    },
+    "local_experimental_receiver_running": true
+  },
+  "data2g_candidate": {
+    "file": "rx_00101.npz",
+    "path": "/tmp/pixelqso-data2g-test/data2g-recordings/rx_00101.npz",
+    "bytes": 463204,
+    "sha256": "c543a29d9e1ded1963538ffc32d91d8ae0da5454e543050a0b7bca0bf19677c5",
+    "submode": "16qam-r1/2",
+    "n_codewords": 13,
+    "header_score": 0.33369783442404566,
+    "lost": true,
+    "body_decode": false,
+    "attribution": "unassigned; user reported no TX audio, so this is not an on-air receive result"
+  },
+  "interpretation": "The receive path was active and recording, but the intended Data2G signal was not emitted into the WebSDR audio. The header candidate is background/unattributed activity and must not be counted as a receiver miss or success. Repeat after TX audio is confirmed, with exact key-up and unkey markers."
+}

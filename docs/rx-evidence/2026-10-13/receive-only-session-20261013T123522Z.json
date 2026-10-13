@@ -1,0 +1,51 @@
+{
+  "recording": "/home/tyler/dev/pixelqso_stream/recordings/websdr-20261013T123522Z-7066kHz.s16",
+  "sha256": "d419b240ffd7b66ddf5d6d44559ff02f13a2ce559d30ce7f1561821bf4d1231a",
+  "bytes": 9575424,
+  "sample_format": "mono s16le 8000 Hz",
+  "sample_count": 4787712,
+  "duration_seconds": 598.464,
+  "recording_start_utc": "2026-10-13T12:35:22+00:00",
+  "recording_end_utc": "2026-10-13T12:45:20.464000+00:00",
+  "websdr": "Northern Utah WebSDR 1, 7066 kHz USB, 0-3000 Hz",
+  "stream_mode": "receive-only, no YouTube output",
+  "relay": "Pulse module-loopback active during capture; stopped by shell trap at exit",
+  "session_log": "598.5 s wall; 8000.04 effective samples/s; 0 browser queue samples dropped",
+  "pcm_rms": 0.05689405084113297,
+  "pcm_nonzero_fraction": 0.9997631436477382,
+  "data2g_candidate_sidecars_during_interval": [
+    {
+      "file": "rx_00086.npz",
+      "time_utc": "2026-10-13T12:37:46.110873+00:00",
+      "mode": "n4-qpsk-r2/3",
+      "n_cw": 29,
+      "score": 0.317768913893728,
+      "lost": false
+    },
+    {
+      "file": "rx_00087.npz",
+      "time_utc": "2026-10-13T12:39:01.272170+00:00",
+      "mode": "w48-256l-r5/8",
+      "n_cw": 33,
+      "score": 0.26111442401614965,
+      "lost": false
+    },
+    {
+      "file": "rx_00088.npz",
+      "time_utc": "2026-10-13T12:40:52.344120+00:00",
+      "mode": "qpsk-r1/5",
+      "n_cw": 54,
+      "score": 0.3370303733315337,
+      "lost": false
+    },
+    {
+      "file": "rx_00089.npz",
+      "time_utc": "2026-10-13T12:43:45.843459+00:00",
+      "mode": "n10-qpsk-r3/4",
+      "n_cw": 37,
+      "score": 0.3060089951445137,
+      "lost": false
+    }
+  ],
+  "interpretation": "No user TX start/stop marker or mode selection arrived during the session. This is audio-path health evidence only. Data2G events are unassigned background candidates and are not decode failures."
+}

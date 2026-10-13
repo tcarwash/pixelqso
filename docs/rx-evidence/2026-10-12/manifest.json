@@ -1,0 +1,223 @@
+{
+  "created_at_utc": "2026-10-13T04:03:39.827312+00:00",
+  "sample_format": "little-endian float16, mono",
+  "sample_rate_hz": 8000,
+  "results": [
+    {
+      "file": "audio-probe-buffered-results.json",
+      "bytes": 15316,
+      "sha256": "4b0ae2c936a7d3b2d265bcd690bdbe68e2ddd2832012e64f564346dce37d45f7"
+    },
+    {
+      "file": "audio-probe-default-results.json",
+      "bytes": 20175,
+      "sha256": "1bd59f122a94d23531214711c68529be0a90b67cbd60477c78f307fdc8595516"
+    },
+    {
+      "file": "compressed-boundary-replay.json",
+      "bytes": 2573,
+      "sha256": "fa6db155f0614e79b62471761dc873572dc995f1cb82ec0f864250af411783c2"
+    },
+    {
+      "file": "compressed-timing-results.json",
+      "bytes": 7603,
+      "sha256": "f8d49d473230826e9b2bd5c3230ef0f8767878083a665e1cc1217844bf02e40c"
+    },
+    {
+      "file": "compressed-wider-search-replay.json",
+      "bytes": 2013,
+      "sha256": "c31583da19553be75e3a6cef2b2fdaca316b475ecde3d64e2a9cc3b6f0bf0f02"
+    },
+    {
+      "file": "decode-results.json",
+      "bytes": 2381,
+      "sha256": "bce0d774c7d50de3c7137976a88062e28cbf315c115d8f6f55f8f761b462195d"
+    },
+    {
+      "file": "expected-card.json",
+      "bytes": 7723,
+      "sha256": "74dfe8e43c4e61994afb5ce13864b1dcf8a49cf206a579db5a7a73349cb3e6d2"
+    },
+    {
+      "file": "legacy-profile-replay.json",
+      "bytes": 617,
+      "sha256": "a380182b9d8f3b3aad7001b8bb0c5296479d4ca1d77e2140980c8e0ce7e90502"
+    },
+    {
+      "file": "mode-scan-1940.0-2109.6.json",
+      "bytes": 2991,
+      "sha256": "2d54e3e3ac56484466907ca29562ff929cd036ff4423169981c20ca7c0fcc5be"
+    },
+    {
+      "file": "mode-scan-2080.0-2237.0.json",
+      "bytes": 4597,
+      "sha256": "702347f5f0fb9e9c872ed3c75f950946851501efc56df3b99dfbe35f7decb34e"
+    },
+    {
+      "file": "mode-scan-2220.0-2416.6.json",
+      "bytes": 975,
+      "sha256": "2d22bfe757446379e10cbe523536f129b557b88abbdcfc2698dae983369c1144"
+    },
+    {
+      "file": "mode-scan-2370.0-2538.2.json",
+      "bytes": 977,
+      "sha256": "edf497635c30a653627ba0acbfd739b9a27eb882d8ddd738118d6b680a6a7f3b"
+    },
+    {
+      "file": "mode-scan-2520.0-2894.6.json",
+      "bytes": 2647,
+      "sha256": "fb741d6b1fe3f74b5c56f192e41b24a1ac1343d76f048f95c026e5009b828c36"
+    },
+    {
+      "file": "own-clean-reference-results.json",
+      "bytes": 449,
+      "sha256": "8a6a96b18bae460cd6e503d103a8cafa7827e93443344a56dd94b5444db6217e"
+    },
+    {
+      "file": "own-mode-1800.0-1940.8.json",
+      "bytes": 2354,
+      "sha256": "7e9426b4205de2e7528518acb7a8126b9da1e7449b70fa7927c2739770c01818"
+    },
+    {
+      "file": "qpsk-manual-timing-replay.json",
+      "bytes": 2533,
+      "sha256": "76d13f871b8358066c1f7618fcd8b1275b992f6a070ae476cc31fe505057b910"
+    },
+    {
+      "file": "qpsk-native-replay.json",
+      "bytes": 1723,
+      "sha256": "3c4cf1da2eee82ee8a437fd52c1f0a1c0ee631e791bf602be5dafb37f46f8f4f"
+    },
+    {
+      "file": "qpsk-pilot-acquisition-replay.json",
+      "bytes": 691,
+      "sha256": "41f3213d617bf36c544c358735eefa5b6c4e2579ee000ec10d4238e45444d279"
+    },
+    {
+      "file": "qpsk-segmented-training-replay.json",
+      "bytes": 679,
+      "sha256": "f36d1c6aceea7a9250cf75111bc84dc03669976d90040adbbaf44093c1a46117"
+    },
+    {
+      "file": "qpsk-soft-evidence-diagnostics.json",
+      "bytes": 1277,
+      "sha256": "5d9ac0fb80185a8e9c106318e6f51aff6cec7ab57e7f035ce16faf40e9e7460e"
+    },
+    {
+      "file": "qpsk-wider-search-replay.json",
+      "bytes": 329,
+      "sha256": "87dd5e78416b41ef0ebb41feda91e90b7eb41a3247d1d0e2ecf6d0f22d6eb6de"
+    },
+    {
+      "file": "resilient-50-placement-300.json",
+      "bytes": 2407,
+      "sha256": "7cd7688f3942ce852cd6b192a7e279fd696a4692414610499fe4f7445782f247"
+    },
+    {
+      "file": "stream-replay-results.json",
+      "bytes": 2240,
+      "sha256": "b3e4ecbf46746e797da024f6688690f8e79d017cf514b897d67c7d554d486a81"
+    },
+    {
+      "file": "template-matches.json",
+      "bytes": 2200,
+      "sha256": "e3e15d73e7a3bd04b987369528ad9964289a2d1f95367aeff3ae39e725478eeb"
+    },
+    {
+      "file": "timed-decode-results.json",
+      "bytes": 3563,
+      "sha256": "a5a30f5446d28c3e618aba47b41a1d7c097dd9b436ab77303c8ef4a8e85b9c8a"
+    },
+    {
+      "file": "timing-results.json",
+      "bytes": 14284,
+      "sha256": "978fc1a20479e8885ba4ea68689e4f62aa66c2502c8a757c44adbb4b7960e8c5"
+    },
+    {
+      "file": "current-fix-replays.json",
+      "bytes": 3229,
+      "sha256": "0bf09a9001cc4219819c26edce081d645330c31390488e2d558f0fc782275d5d"
+    },
+    {
+      "file": "audio-probe-loopback-results.json",
+      "bytes": 29678,
+      "sha256": "005c99e5d4cd17a60268f9cb945202cd3960ca7b09676b7f9f229d2d9f2f8a11"
+    },
+    {
+      "file": "audio-probe-direct-tunnel-results.json",
+      "bytes": 17007,
+      "sha256": "35bdde55358eeb8677d1ed35b9e81659cd8389af81434c4b47d6d6786a3b296d"
+    },
+    {
+      "file": "live-audio-stage-results.json",
+      "bytes": 6636,
+      "sha256": "9d3c7ad2358ac1e1670203520a250ae02e80c060374d8c4e88659c175a0e1b88"
+    }
+  ],
+  "local_recordings": [
+    {
+      "path": "work/rx-analysis-20261012/websdr-audio.f16",
+      "bytes": 13974400,
+      "sha256": "db2763a5b71756ae207e459db4811e270e0f67852e80079d73c11f40a6a86f5f",
+      "recording_clock_origin_seconds": 0,
+      "duration_seconds": 873.4
+    },
+    {
+      "path": "work/rx-analysis-20261012/own-modes-batch.f16",
+      "bytes": 14355200,
+      "sha256": "604056292ed03d605238ec62bdf4251fcafedfb09bb156f6d8e2c00b2a0bf678",
+      "recording_clock_origin_seconds": 1800,
+      "duration_seconds": 897.2
+    },
+    {
+      "path": "work/rx-analysis-20261012/mode-scan-1940.0-2109.6.f16",
+      "bytes": 2713600,
+      "sha256": "eb772cf9a8152d4777a9ea77e506153c846e1d48dd9c2cb51de4eda2e4f4864c",
+      "recording_clock_origin_seconds": 1940,
+      "duration_seconds": 169.6
+    },
+    {
+      "path": "work/rx-analysis-20261012/mode-scan-2220.0-2416.6.f16",
+      "bytes": 3145600,
+      "sha256": "3f1e00801739ce9687db2f4157151a05e9e8dbb97f53348160b54c50aebed50a",
+      "recording_clock_origin_seconds": 2220,
+      "duration_seconds": 196.6
+    },
+    {
+      "path": "work/rx-analysis-20261012/mode-scan-2520.0-2894.6.f16",
+      "bytes": 5993600,
+      "sha256": "b55bca824b63df00b1440a5c0afdedeaf9afab59142ed8115286a6d9ba28dd33",
+      "recording_clock_origin_seconds": 2520,
+      "duration_seconds": 374.6
+    }
+  ],
+  "installed_data2g_version": "0.0.1",
+  "installed_data2g_commit": "20bdb05c3cbb24d7d28b613a86841f51c00ba8f9",
+  "updated_at_utc": "2026-10-13T05:24:24+00:00",
+  "local_probe_recordings": [
+    {
+      "path": "work/rx-analysis-20261012/probe-container.s16",
+      "bytes": 499830,
+      "sha256": "0d9abcae44c0303df01af2edcaa62360b89549c8c22e22ab42ba6e1c96fa0580",
+      "sample_format": "little-endian signed int16, mono",
+      "sample_rate_hz": 8000,
+      "run": "buffered relay probe; deterministic noise, no RF"
+    },
+    {
+      "path": "work/rx-analysis-20261012/probe-host.s16",
+      "bytes": 512000,
+      "sha256": "faeb1c21cc281d10120cc7a3fd08e02e6a3fdd46d263969f337441db12b68819",
+      "sample_format": "little-endian signed int16, mono",
+      "sample_rate_hz": 8000,
+      "run": "buffered relay probe; deterministic noise, no RF"
+    },
+    {
+      "path": "work/rx-analysis-20261012/probe-source.s16",
+      "bytes": 480000,
+      "sha256": "7e13a66b51f54c3de4a46091ecd80bd6e97ec0337e5013c7571f0288ade269ea",
+      "sample_format": "little-endian signed int16, mono",
+      "sample_rate_hz": 8000,
+      "run": "buffered relay probe; deterministic noise, no RF"
+    }
+  ]
+}

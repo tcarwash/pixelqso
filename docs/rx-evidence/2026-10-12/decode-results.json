@@ -1,0 +1,86 @@
+{
+  "receiver_duration_s": 873.4,
+  "clock_offset_s": 207.99536633491516,
+  "bursts": [
+    {
+      "burst_seq": 1,
+      "expected_receiver_start_s": 264.49536633491516,
+      "window_start_s": 252.49536633491516,
+      "window_end_s": 326.20336633491513,
+      "forced": {
+        "error": "SyncError: header decode failed",
+        "elapsed_s": 1.869386205013143
+      }
+    },
+    {
+      "burst_seq": 2,
+      "expected_receiver_start_s": 310.39536633491514,
+      "window_start_s": 298.39536633491514,
+      "window_end_s": 368.64736633491515,
+      "forced": {
+        "error": "SyncError: header decode failed",
+        "elapsed_s": 1.9894636840035673
+      }
+    },
+    {
+      "burst_seq": 3,
+      "expected_receiver_start_s": 352.89536633491514,
+      "window_start_s": 340.89536633491514,
+      "window_end_s": 414.6033663349151,
+      "forced": {
+        "error": "SyncError: header decode failed",
+        "elapsed_s": 2.2018156359845307
+      }
+    },
+    {
+      "burst_seq": 4,
+      "expected_receiver_start_s": 398.99536633491516,
+      "window_start_s": 386.99536633491516,
+      "window_end_s": 457.24736633491517,
+      "forced": {
+        "error": "SyncError: header decode failed",
+        "elapsed_s": 1.9494191799894907
+      }
+    },
+    {
+      "burst_seq": 5,
+      "expected_receiver_start_s": 441.39536633491514,
+      "window_start_s": 429.39536633491514,
+      "window_end_s": 503.1033663349151,
+      "forced": {
+        "error": "SyncError: header decode failed",
+        "elapsed_s": 2.126899848022731
+      }
+    },
+    {
+      "burst_seq": 6,
+      "expected_receiver_start_s": 487.3953663349152,
+      "window_start_s": 475.3953663349152,
+      "window_end_s": 545.6473663349152,
+      "forced": {
+        "error": "SyncError: header decode failed",
+        "elapsed_s": 2.7729991160158534
+      }
+    }
+  ],
+  "clean_reference": {
+    "mode": "n4-qpsk-r1/5",
+    "n_cw": 13,
+    "score": 0.9402320632266681,
+    "cfo": 1.1873090868885251e-05,
+    "start_s": 0.1,
+    "measure": {
+      "snr_est": 19.981168136503598,
+      "spread_est": 0.03126176476681323,
+      "delay_est_ms": 0.0,
+      "headroom": 0,
+      "frames": 312,
+      "mi_gray-qam4": 1.0,
+      "mi_gray-qam16": 1.0,
+      "mi_c64-snr18": 0.9991028715781664,
+      "mi_c256-snr26": 0.8554043000730271
+    },
+    "matching_slots": 13,
+    "elapsed_s": 1.3820826080045663
+  }
+}

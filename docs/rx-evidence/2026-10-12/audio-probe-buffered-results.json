@@ -1,0 +1,655 @@
+{
+  "container": {
+    "origin_samples": 2884,
+    "capture_seconds": 31.239375,
+    "points": [
+      {
+        "source_s": 1.0,
+        "lag_ms": -0.125,
+        "correlation": 0.7760873971216127
+      },
+      {
+        "source_s": 1.5,
+        "lag_ms": 0.0,
+        "correlation": 0.7746581783968605
+      },
+      {
+        "source_s": 2.0,
+        "lag_ms": -0.125,
+        "correlation": 0.7900986562332469
+      },
+      {
+        "source_s": 2.5,
+        "lag_ms": 0.0,
+        "correlation": 0.7903619890314115
+      },
+      {
+        "source_s": 3.0,
+        "lag_ms": -0.125,
+        "correlation": 0.7805610525944137
+      },
+      {
+        "source_s": 3.5,
+        "lag_ms": 0.0,
+        "correlation": 0.7899068779984367
+      },
+      {
+        "source_s": 4.0,
+        "lag_ms": -0.125,
+        "correlation": 0.7879507731159816
+      },
+      {
+        "source_s": 4.5,
+        "lag_ms": -0.125,
+        "correlation": 0.7800831608634957
+      },
+      {
+        "source_s": 5.0,
+        "lag_ms": -0.125,
+        "correlation": 0.7743828826537223
+      },
+      {
+        "source_s": 5.5,
+        "lag_ms": -0.125,
+        "correlation": 0.7885566874470598
+      },
+      {
+        "source_s": 6.0,
+        "lag_ms": -0.125,
+        "correlation": 0.7897472182590537
+      },
+      {
+        "source_s": 6.5,
+        "lag_ms": 0.0,
+        "correlation": 0.7886235496062768
+      },
+      {
+        "source_s": 7.0,
+        "lag_ms": -0.125,
+        "correlation": 0.7893105737795318
+      },
+      {
+        "source_s": 7.5,
+        "lag_ms": -0.125,
+        "correlation": 0.7826353139362636
+      },
+      {
+        "source_s": 8.0,
+        "lag_ms": 0.0,
+        "correlation": 0.783334703252978
+      },
+      {
+        "source_s": 8.5,
+        "lag_ms": -0.125,
+        "correlation": 0.7763819958903336
+      },
+      {
+        "source_s": 9.0,
+        "lag_ms": 0.0,
+        "correlation": 0.7840074366202927
+      },
+      {
+        "source_s": 9.5,
+        "lag_ms": -0.125,
+        "correlation": 0.7701612344493015
+      },
+      {
+        "source_s": 10.0,
+        "lag_ms": 0.0,
+        "correlation": 0.782445023609911
+      },
+      {
+        "source_s": 10.5,
+        "lag_ms": 0.0,
+        "correlation": 0.780969239996781
+      },
+      {
+        "source_s": 11.0,
+        "lag_ms": -0.125,
+        "correlation": 0.7885777111186629
+      },
+      {
+        "source_s": 11.5,
+        "lag_ms": 0.0,
+        "correlation": 0.7853739053865931
+      },
+      {
+        "source_s": 12.0,
+        "lag_ms": -0.125,
+        "correlation": 0.7842417924758224
+      },
+      {
+        "source_s": 12.5,
+        "lag_ms": 0.0,
+        "correlation": 0.7816207713414387
+      },
+      {
+        "source_s": 13.0,
+        "lag_ms": 0.0,
+        "correlation": 0.769268401223675
+      },
+      {
+        "source_s": 13.5,
+        "lag_ms": 0.0,
+        "correlation": 0.7775731580693662
+      },
+      {
+        "source_s": 14.0,
+        "lag_ms": 0.0,
+        "correlation": 0.7930164274731534
+      },
+      {
+        "source_s": 14.5,
+        "lag_ms": 0.0,
+        "correlation": 0.7867568937270396
+      },
+      {
+        "source_s": 15.0,
+        "lag_ms": -0.125,
+        "correlation": 0.7829888862792015
+      },
+      {
+        "source_s": 15.5,
+        "lag_ms": 0.0,
+        "correlation": 0.7860128098716508
+      },
+      {
+        "source_s": 16.0,
+        "lag_ms": -0.125,
+        "correlation": 0.7805630105142446
+      },
+      {
+        "source_s": 16.5,
+        "lag_ms": 0.0,
+        "correlation": 0.7942983405603363
+      },
+      {
+        "source_s": 17.0,
+        "lag_ms": -0.125,
+        "correlation": 0.7938821384112896
+      },
+      {
+        "source_s": 17.5,
+        "lag_ms": 0.0,
+        "correlation": 0.784869437639131
+      },
+      {
+        "source_s": 18.0,
+        "lag_ms": 0.0,
+        "correlation": 0.7870515576536582
+      },
+      {
+        "source_s": 18.5,
+        "lag_ms": -0.125,
+        "correlation": 0.7855197920393417
+      },
+      {
+        "source_s": 19.0,
+        "lag_ms": -0.125,
+        "correlation": 0.7827691080922845
+      },
+      {
+        "source_s": 19.5,
+        "lag_ms": -0.125,
+        "correlation": 0.7815889749366319
+      },
+      {
+        "source_s": 20.0,
+        "lag_ms": 0.0,
+        "correlation": 0.7886248231727881
+      },
+      {
+        "source_s": 20.5,
+        "lag_ms": 0.0,
+        "correlation": 0.7843535317045972
+      },
+      {
+        "source_s": 21.0,
+        "lag_ms": 0.0,
+        "correlation": 0.7905365725062794
+      },
+      {
+        "source_s": 21.5,
+        "lag_ms": 0.0,
+        "correlation": 0.7862054486300765
+      },
+      {
+        "source_s": 22.0,
+        "lag_ms": 0.0,
+        "correlation": 0.7808363162441088
+      },
+      {
+        "source_s": 22.5,
+        "lag_ms": -0.125,
+        "correlation": 0.7700151840818845
+      },
+      {
+        "source_s": 23.0,
+        "lag_ms": -0.125,
+        "correlation": 0.7891126053300652
+      },
+      {
+        "source_s": 23.5,
+        "lag_ms": -0.125,
+        "correlation": 0.7882594839402832
+      },
+      {
+        "source_s": 24.0,
+        "lag_ms": 0.0,
+        "correlation": 0.7705673525062076
+      },
+      {
+        "source_s": 24.5,
+        "lag_ms": -0.125,
+        "correlation": 0.7816378918127457
+      },
+      {
+        "source_s": 25.0,
+        "lag_ms": 0.0,
+        "correlation": 0.8005298255210584
+      },
+      {
+        "source_s": 25.5,
+        "lag_ms": 0.0,
+        "correlation": 0.7768568077382176
+      },
+      {
+        "source_s": 26.0,
+        "lag_ms": -0.125,
+        "correlation": 0.7885261603068183
+      },
+      {
+        "source_s": 26.5,
+        "lag_ms": -0.125,
+        "correlation": 0.7774442930185275
+      },
+      {
+        "source_s": 27.0,
+        "lag_ms": -0.125,
+        "correlation": 0.7821137722520426
+      },
+      {
+        "source_s": 27.5,
+        "lag_ms": -0.125,
+        "correlation": 0.7757117737165841
+      },
+      {
+        "source_s": 28.0,
+        "lag_ms": -0.125,
+        "correlation": 0.771686574993142
+      }
+    ]
+  },
+  "host": {
+    "origin_samples": 31897,
+    "capture_seconds": 32.0,
+    "points": [
+      {
+        "source_s": 1.0,
+        "lag_ms": 0.0,
+        "correlation": 0.999996195391964
+      },
+      {
+        "source_s": 1.5,
+        "lag_ms": 0.0,
+        "correlation": 0.9999953059433975
+      },
+      {
+        "source_s": 2.0,
+        "lag_ms": 85.375,
+        "correlation": 0.7317841182838979
+      },
+      {
+        "source_s": 2.5,
+        "lag_ms": 85.375,
+        "correlation": 0.9034001337510292
+      },
+      {
+        "source_s": 3.0,
+        "lag_ms": 85.375,
+        "correlation": 0.8985312319492404
+      },
+      {
+        "source_s": 3.5,
+        "lag_ms": 85.375,
+        "correlation": 0.9030930959621695
+      }
+    ],
+    "global_points": [
+      {
+        "source_s": 1.0,
+        "matched_host_s": 4.987125,
+        "lag_ms": 0.0,
+        "correlation": 0.9999961953919638
+      },
+      {
+        "source_s": 1.5,
+        "matched_host_s": 5.487125,
+        "lag_ms": 0.0,
+        "correlation": 0.9999953059433975
+      },
+      {
+        "source_s": 2.0,
+        "matched_host_s": 6.0725,
+        "lag_ms": 85.375,
+        "correlation": 0.7317841182838978
+      },
+      {
+        "source_s": 2.5,
+        "matched_host_s": 6.5725,
+        "lag_ms": 85.375,
+        "correlation": 0.9034001337510291
+      },
+      {
+        "source_s": 3.0,
+        "matched_host_s": 7.0725,
+        "lag_ms": 85.375,
+        "correlation": 0.8985312319492403
+      },
+      {
+        "source_s": 3.5,
+        "matched_host_s": 7.5725,
+        "lag_ms": 85.375,
+        "correlation": 0.9030930959621695
+      },
+      {
+        "source_s": 4.0,
+        "matched_host_s": 8.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.9022748368106052
+      },
+      {
+        "source_s": 4.5,
+        "matched_host_s": 8.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.8985291368246922
+      },
+      {
+        "source_s": 5.0,
+        "matched_host_s": 9.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.8958565459242696
+      },
+      {
+        "source_s": 5.5,
+        "matched_host_s": 9.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.9024471166343736
+      },
+      {
+        "source_s": 6.0,
+        "matched_host_s": 10.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.903146419637949
+      },
+      {
+        "source_s": 6.5,
+        "matched_host_s": 10.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.9026699873020152
+      },
+      {
+        "source_s": 7.0,
+        "matched_host_s": 11.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.90270747441622
+      },
+      {
+        "source_s": 7.5,
+        "matched_host_s": 11.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.8998654870985724
+      },
+      {
+        "source_s": 8.0,
+        "matched_host_s": 12.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.8999094238617821
+      },
+      {
+        "source_s": 8.5,
+        "matched_host_s": 12.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.8968828993427089
+      },
+      {
+        "source_s": 9.0,
+        "matched_host_s": 13.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.9003260344290015
+      },
+      {
+        "source_s": 9.5,
+        "matched_host_s": 13.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.8939547021968257
+      },
+      {
+        "source_s": 10.0,
+        "matched_host_s": 14.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.8997339517102964
+      },
+      {
+        "source_s": 10.5,
+        "matched_host_s": 14.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.898983466977562
+      },
+      {
+        "source_s": 11.0,
+        "matched_host_s": 15.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.9025596407227929
+      },
+      {
+        "source_s": 11.5,
+        "matched_host_s": 15.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.9008883904003732
+      },
+      {
+        "source_s": 12.0,
+        "matched_host_s": 16.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.9005132286501057
+      },
+      {
+        "source_s": 12.5,
+        "matched_host_s": 16.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.8991923313963673
+      },
+      {
+        "source_s": 13.0,
+        "matched_host_s": 17.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.8935517521987885
+      },
+      {
+        "source_s": 13.5,
+        "matched_host_s": 17.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.8973275242217884
+      },
+      {
+        "source_s": 14.0,
+        "matched_host_s": 18.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.9044662521075202
+      },
+      {
+        "source_s": 14.5,
+        "matched_host_s": 18.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.9015230544559928
+      },
+      {
+        "source_s": 15.0,
+        "matched_host_s": 19.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.8999551776028559
+      },
+      {
+        "source_s": 15.5,
+        "matched_host_s": 19.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.9013031247505584
+      },
+      {
+        "source_s": 16.0,
+        "matched_host_s": 20.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.8988584178336522
+      },
+      {
+        "source_s": 16.5,
+        "matched_host_s": 20.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.905247656162927
+      },
+      {
+        "source_s": 17.0,
+        "matched_host_s": 21.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.9049956140943122
+      },
+      {
+        "source_s": 17.5,
+        "matched_host_s": 21.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.9007734284840623
+      },
+      {
+        "source_s": 18.0,
+        "matched_host_s": 22.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.9018797534845889
+      },
+      {
+        "source_s": 18.5,
+        "matched_host_s": 22.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.900964102647853
+      },
+      {
+        "source_s": 19.0,
+        "matched_host_s": 23.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.8997973886800249
+      },
+      {
+        "source_s": 19.5,
+        "matched_host_s": 23.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.8992934198240865
+      },
+      {
+        "source_s": 20.0,
+        "matched_host_s": 24.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.902542969121638
+      },
+      {
+        "source_s": 20.5,
+        "matched_host_s": 24.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.9004588367204484
+      },
+      {
+        "source_s": 21.0,
+        "matched_host_s": 25.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.9032307282066212
+      },
+      {
+        "source_s": 21.5,
+        "matched_host_s": 25.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.9014251019128334
+      },
+      {
+        "source_s": 22.0,
+        "matched_host_s": 26.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.8989155112438207
+      },
+      {
+        "source_s": 22.5,
+        "matched_host_s": 26.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.8937996416142872
+      },
+      {
+        "source_s": 23.0,
+        "matched_host_s": 27.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.9027737774751488
+      },
+      {
+        "source_s": 23.5,
+        "matched_host_s": 27.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.9022534273789132
+      },
+      {
+        "source_s": 24.0,
+        "matched_host_s": 28.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.8942133459099456
+      },
+      {
+        "source_s": 24.5,
+        "matched_host_s": 28.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.8992126311560277
+      },
+      {
+        "source_s": 25.0,
+        "matched_host_s": 29.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.9080219647048163
+      },
+      {
+        "source_s": 25.5,
+        "matched_host_s": 29.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.897109061093715
+      },
+      {
+        "source_s": 26.0,
+        "matched_host_s": 30.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.902516899603366
+      },
+      {
+        "source_s": 26.5,
+        "matched_host_s": 30.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.8973977430796837
+      },
+      {
+        "source_s": 27.0,
+        "matched_host_s": 31.28575,
+        "lag_ms": 298.625,
+        "correlation": 0.8994540688806919
+      },
+      {
+        "source_s": 27.5,
+        "matched_host_s": 31.78575,
+        "lag_ms": 298.625,
+        "correlation": 0.8965123135275196
+      }
+    ]
+  },
+  "configuration": {
+    "host_pacat": [
+      "--latency-msec=1000",
+      "--process-time-msec=20"
+    ],
+    "probe_source": "paced 200-ms blocks, 30 seconds of deterministic 500-2700 Hz filtered noise",
+    "sample_format": "signed little-endian int16, mono, 8000 Hz for saved probe captures",
+    "rf_transmission": false,
+    "limitations": "Synthetic virtual route probe; live WebSDR and RF path not exercised. Low-correlation/end-of-capture points are not delay evidence."
+  }
+}

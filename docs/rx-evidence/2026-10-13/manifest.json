@@ -1,0 +1,179 @@
+{
+  "date": "2026-10-13",
+  "items": [
+    {
+      "file": "audio-stage-correlation.json",
+      "sha256": "26e400be10d804d1eadd69eb6008f57a9f5e2ee46578687d930035024ee67179",
+      "bytes": 3237,
+      "source": "work/rx-analysis-20261013/audio-stage-correlation.json"
+    },
+    {
+      "file": "bridge-protected-header-scan.json",
+      "sha256": "cca9e60664ed517424dcb154600aede58ece411e969d5a3135c3cd26a441bdce",
+      "bytes": 3613,
+      "source": "work/rx-analysis-20261013/bridge-protected-header-scan-summary.json"
+    },
+    {
+      "file": "container-header-scan-followup.json",
+      "sha256": "85f7e9deda305d60f36f1a1192eaae7cab8a17d50414d386aec5bad996dbb8fa",
+      "bytes": 182,
+      "source": "work/rx-analysis-20261013/container-header-scan-followup.json"
+    },
+    {
+      "file": "container-header-scan.json",
+      "sha256": "0a675557478121f9bd3042ddfc69c5f388c09dfae655b2a24a999b9cad87a928",
+      "bytes": 182,
+      "source": "work/rx-analysis-20261013/container-header-scan.json"
+    },
+    {
+      "file": "container-qtaudiosource-loopback.json",
+      "sha256": "a7af9e2f7d287450a3c469deb23320e85eded5b311337ce0e4320ffc6a525ba1",
+      "bytes": 1115,
+      "source": "running container Qt QAudioSource synthetic PCM probe"
+    },
+    {
+      "file": "container-resilient-image-ab.json",
+      "sha256": "d17af2236bc7a604e3d5ef34b85f46c3f6def2d96707a5864b5cd009e8d13670",
+      "bytes": 1893,
+      "source": "one-shot A/B replay in isolated Docker images"
+    },
+    {
+      "file": "container-source-parity.json",
+      "sha256": "0affcf88a89ac0c1d9a3a1afda2a63288cee7575b2a7a67b9a6826eac6b31db7",
+      "bytes": 1979,
+      "source": "read-only SHA-256 comparison of active and candidate image files"
+    },
+    {
+      "file": "data2g-app-kiss-observer-replay.json",
+      "sha256": "4c397127c4d748f38a5d198a05c175f66fbd454d03a85a1f0c7ab8d7ad2924d8",
+      "bytes": 616,
+      "source": "connected local PixelQSO app and passive KISS observer during saved-audio replay"
+    },
+    {
+      "file": "data2g-bridge-interval-candidates.json",
+      "sha256": "a01c94278eb572023b2adf6e2602f3e72e5c155bac8a5a8423687cd1c2a0cf4b",
+      "bytes": 9649,
+      "source": "/tmp/pixelqso-data2g-test/data2g-recordings/events.jsonl and data2g-host.log"
+    },
+    {
+      "file": "data2g-burst-codeword-diagnostics.json",
+      "sha256": "fad6b481b191676056cd003ab6e39ee8d461c0c71504a7eeaadc917d444fe309",
+      "bytes": 668,
+      "source": "work/rx-analysis-20261012 Data2G control and payload-slot replay"
+    },
+    {
+      "file": "data2g-control-word-diagnostics.json",
+      "sha256": "f39bfc0fcc5f311b1b3bc19dcf10a4d04756e2d00c26a8ee2e382e620fe176ff",
+      "bytes": 1340,
+      "source": "work/rx-analysis-20261012 Data2G control-word replay"
+    },
+    {
+      "file": "data2g-full-capture-fragments.json",
+      "sha256": "5945aed462e3752d51df82d4e42cff80de639f8489494b8f1e928c2840b1d628",
+      "bytes": 4097,
+      "source": "work/rx-analysis-20261012/data2g_full_capture_scan.py"
+    },
+    {
+      "file": "data2g-no-tx-audio-session-20261013T1420Z.json",
+      "sha256": "de38f1ef3d1b82285e0df9aef5d5aa9027302ff789f5ffc9f85484e0848b0aed",
+      "bytes": 1893,
+      "source": "candidate-image receive-only session; user reported no TX audio"
+    },
+    {
+      "file": "data2g-pixelqso-widget-probe.json",
+      "sha256": "4eb446b66129538569805eaf366b61e05aa00008d398411fa1c2295749793158",
+      "bytes": 1206,
+      "source": "offscreen PixelQSO MainWindow handler with actual saved partial KISS PQI2 frame"
+    },
+    {
+      "file": "data2g-rx73-inversion-replay.json",
+      "sha256": "c3692760a2a9e79a1c390217a26f5c27816eaa5f3f666d36fbddd51632edd5e7",
+      "bytes": 2200,
+      "source": "normal/spectral-inversion replay plus known-good QPSK positive control"
+    },
+    {
+      "file": "data2g-sidecar-bridge-timeline.json",
+      "sha256": "80581a8e9e396774f177b1207e6c34c181377722d20e768c253e7ba2fb0d351f",
+      "bytes": 22347,
+      "source": "correlation of Data2G receiver sidecars against timestamped WebSDR bridge recordings"
+    },
+    {
+      "file": "direct-live-stage-results.json",
+      "sha256": "46fbb45f61fe762c714631291ec5f3cc0d1a8a36b2c204686dc6905ec90efb0b",
+      "bytes": 26926,
+      "source": "work/rx-analysis-20261013/direct-live-stage-results.json"
+    },
+    {
+      "file": "later-bridge-header-scan.json",
+      "sha256": "79d2123e92f33019c8ae77c9370a5b76d877c0f435dab903741c747811dac0d9",
+      "bytes": 8171,
+      "source": "seven later 7066 kHz WebSDR recordings, current find_copies source"
+    },
+    {
+      "file": "legacy-body-list-decode.json",
+      "sha256": "0403378f58543d52b936cf44a19d289903e8f156e55adb4cd300397f3afd8459",
+      "bytes": 1387,
+      "source": "work/rx-analysis-20261012/legacy_body_list_decode.py"
+    },
+    {
+      "file": "legacy-fine-timing-search.json",
+      "sha256": "cf45e4c5dee52b0344a0916c251e98f4cb2d813ccd5c5564b13836edd636600f",
+      "bytes": 1016,
+      "source": "work/rx-analysis-20261012/legacy_fine_timing_search.py"
+    },
+    {
+      "file": "live-websdr-session-stage-results.json",
+      "sha256": "53fb73ca0060b58567d2e3aafcf09c37fef5aaeb592e998db0361489d054dca4",
+      "bytes": 2789,
+      "source": "work/rx-analysis-20261013/live-websdr-session-stage-results.json"
+    },
+    {
+      "file": "loopback-live-stage-results.json",
+      "sha256": "db6f451cda29a7dbecc5c6b7ee1d17074c7b49f7c10e634d8a2bfa49f291bf23",
+      "bytes": 30318,
+      "source": "work/rx-analysis-20261013/loopback-live-stage-results.json"
+    },
+    {
+      "file": "onair-data2g-test-20261013T0251Z.json",
+      "sha256": "6ac96777a14fa5887d452445a7c5c9f3acebeb5db3cd77a7918e833a1f5e2b12",
+      "bytes": 6563,
+      "source": "time-aligned WebSDR capture, PixelQSO Data2G TX event log, preamble/slot replay, and capped/uncapped receiver replay"
+    },
+    {
+      "file": "qso-log-local-8fsk-receive-20261013T0318Z.json",
+      "sha256": "e017a7ae037362e9cf1828917c33d797aacddbaad5c7e677f208496bed9e7df5",
+      "bytes": 2934,
+      "source": "/home/tyler/dev/pixelqso_stream/state/pixelqso/qso-log/qso-20261013-022321-0500.json; user chat timestamp from the saved session rollout"
+    },
+    {
+      "file": "receive-only-123522-header-scan.json",
+      "sha256": "0727624b9469c8bda79d376c3d0d767ce324828976594fd800ab33583feff8bf",
+      "bytes": 3213,
+      "source": "built-in modem protected-header scan of 2026-10-13 12:35:22Z receive-only PCM"
+    },
+    {
+      "file": "receive-only-session-20261013T123522Z.json",
+      "sha256": "ddeee15ba64df6f1793b26459233849fa36280979a2b6e9cc7299163106f0acc",
+      "bytes": 1862,
+      "source": "10-minute receive-only Utah WebSDR recording summary; no TX markers"
+    },
+    {
+      "file": "receive-only-session-20261013T130712Z.json",
+      "sha256": "35e1e971720e58cacdf7b70e340c171d64df4023d6a5b2e754204603a06970b3",
+      "bytes": 3617,
+      "source": "10-minute receive-only Utah WebSDR recording and full protected-header scan; no TX markers"
+    },
+    {
+      "file": "receive-only-session-20261013T132348Z.json",
+      "sha256": "ae5480bb98fc6f672f6d301f75aa3ffe1d264f3c4b40ba088564a2a1dbff57ae",
+      "bytes": 7904,
+      "source": "10-minute receive-only Utah WebSDR recording, protected-header scan, local RX snapshot, contemporaneous host Data2G candidate replay/correlation, and container artifact timestamp audit; no TX markers"
+    },
+    {
+      "file": "receive-only-session-path-check.json",
+      "sha256": "53fb73ca0060b58567d2e3aafcf09c37fef5aaeb592e998db0361489d054dca4",
+      "bytes": 2789,
+      "source": "work/rx-analysis-20261013/live-websdr-session-stage-results.json"
+    }
+  ]
+}

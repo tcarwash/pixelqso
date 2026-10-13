@@ -1,0 +1,307 @@
+{
+  "date": "2026-10-13",
+  "data2g_event_source": "/tmp/pixelqso-data2g-test/data2g-recordings/events.jsonl",
+  "runs": [
+    {
+      "wall_utc": "2026-10-13T02:46:33.550590+00:00",
+      "sample_rate": 8000
+    },
+    {
+      "wall_utc": "2026-10-13T05:16:27.129634+00:00",
+      "sample_rate": 8000
+    }
+  ],
+  "event_kinds": {
+    "start": 2,
+    "rx": 95
+  },
+  "candidate_bursts_overlapping_bridge_recordings": 19,
+  "lost_marked": 7,
+  "not_lost_marked": 12,
+  "candidates": [
+    {
+      "time_utc": "2026-10-13T07:49:06.429+00:00",
+      "bridge_file": "websdr-20261013T074728Z-7066kHz.s16",
+      "candidate_file": "rx_00045.npz",
+      "submode": "n4-qpsk-r1/3",
+      "codewords": 26,
+      "header_score": 0.3001,
+      "burst_marked_lost": false,
+      "snr_est_db": -22.84
+    },
+    {
+      "time_utc": "2026-10-13T07:49:30.829+00:00",
+      "bridge_file": "websdr-20261013T074728Z-7066kHz.s16",
+      "candidate_file": "rx_00046.npz",
+      "submode": "w48-64l-r1/2",
+      "codewords": 38,
+      "header_score": 0.2622,
+      "burst_marked_lost": false,
+      "snr_est_db": -79.58
+    },
+    {
+      "time_utc": "2026-10-13T07:51:40.229+00:00",
+      "bridge_file": "websdr-20261013T074728Z-7066kHz.s16",
+      "candidate_file": "rx_00047.npz",
+      "submode": "n4-ack-8f",
+      "codewords": 46,
+      "header_score": 0.3178,
+      "burst_marked_lost": false,
+      "snr_est_db": -22.34
+    },
+    {
+      "time_utc": "2026-10-13T07:58:05.629+00:00",
+      "bridge_file": "websdr-20261013T075701Z-7066kHz.s16",
+      "candidate_file": "rx_00048.npz",
+      "submode": "n10-qpsk-r3/4",
+      "codewords": 27,
+      "header_score": 0.3008,
+      "burst_marked_lost": false,
+      "snr_est_db": -85.3
+    },
+    {
+      "time_utc": "2026-10-13T08:00:14.229+00:00",
+      "bridge_file": "websdr-20261013T075701Z-7066kHz.s16",
+      "candidate_file": "rx_00049.npz",
+      "submode": "n4-qpsk-r1/5",
+      "codewords": 28,
+      "header_score": 0.3108,
+      "burst_marked_lost": false,
+      "snr_est_db": -25.69
+    },
+    {
+      "time_utc": "2026-10-13T08:01:29.729+00:00",
+      "bridge_file": "websdr-20261013T075701Z-7066kHz.s16",
+      "candidate_file": "rx_00050.npz",
+      "submode": "qpsk-r1/3",
+      "codewords": 52,
+      "header_score": 0.3826,
+      "burst_marked_lost": false,
+      "snr_est_db": -82.59
+    },
+    {
+      "time_utc": "2026-10-13T08:09:41.129+00:00",
+      "bridge_file": "websdr-20261013T080831Z-7066kHz.s16",
+      "candidate_file": "rx_00052.npz",
+      "submode": "n10-qpsk-r3/4",
+      "codewords": 50,
+      "header_score": 0.3069,
+      "burst_marked_lost": true,
+      "snr_est_db": null
+    },
+    {
+      "time_utc": "2026-10-13T08:17:25.029+00:00",
+      "bridge_file": "websdr-20261013T081433Z-7066kHz.s16",
+      "candidate_file": "rx_00053.npz",
+      "submode": "n4-qpsk-r1/3",
+      "codewords": 44,
+      "header_score": 0.3209,
+      "burst_marked_lost": false,
+      "snr_est_db": -28.77
+    },
+    {
+      "time_utc": "2026-10-13T08:20:54.129+00:00",
+      "bridge_file": "websdr-20261013T081942Z-7066kHz.s16",
+      "candidate_file": "rx_00054.npz",
+      "submode": "n10-16qam-r3/4",
+      "codewords": 23,
+      "header_score": 0.3115,
+      "burst_marked_lost": false,
+      "snr_est_db": -89.06
+    },
+    {
+      "time_utc": "2026-10-13T08:22:34.329+00:00",
+      "bridge_file": "websdr-20261013T081942Z-7066kHz.s16",
+      "candidate_file": "rx_00055.npz",
+      "submode": "n4-qpsk-r1/3",
+      "codewords": 30,
+      "header_score": 0.3092,
+      "burst_marked_lost": true,
+      "snr_est_db": null
+    },
+    {
+      "time_utc": "2026-10-13T08:22:34.729+00:00",
+      "bridge_file": "websdr-20261013T081942Z-7066kHz.s16",
+      "candidate_file": "rx_00056.npz",
+      "submode": "ack-4f",
+      "codewords": 2,
+      "header_score": 0.3665,
+      "burst_marked_lost": true,
+      "snr_est_db": null
+    },
+    {
+      "time_utc": "2026-10-13T08:24:11.229+00:00",
+      "bridge_file": "websdr-20261013T082325Z-7066kHz.s16",
+      "candidate_file": "rx_00057.npz",
+      "submode": "n4-qpsk-r2/3",
+      "codewords": 13,
+      "header_score": 0.3283,
+      "burst_marked_lost": false,
+      "snr_est_db": -23.31
+    },
+    {
+      "time_utc": "2026-10-13T08:24:58.129+00:00",
+      "bridge_file": "websdr-20261013T082325Z-7066kHz.s16",
+      "candidate_file": "rx_00058.npz",
+      "submode": "qpsk-r1/5",
+      "codewords": 28,
+      "header_score": 0.3395,
+      "burst_marked_lost": false,
+      "snr_est_db": -14.31
+    },
+    {
+      "time_utc": "2026-10-13T08:25:45.329+00:00",
+      "bridge_file": "websdr-20261013T082325Z-7066kHz.s16",
+      "candidate_file": "rx_00059.npz",
+      "submode": "ack-1f",
+      "codewords": 60,
+      "header_score": 0.3367,
+      "burst_marked_lost": false,
+      "snr_est_db": -85.32
+    },
+    {
+      "time_utc": "2026-10-13T08:32:47.829+00:00",
+      "bridge_file": "websdr-20261013T083018Z-7066kHz.s16",
+      "candidate_file": "rx_00060.npz",
+      "submode": "n4-ack-8f",
+      "codewords": 17,
+      "header_score": 0.3011,
+      "burst_marked_lost": true,
+      "snr_est_db": null
+    },
+    {
+      "time_utc": "2026-10-13T08:59:57.529+00:00",
+      "bridge_file": "websdr-20261013T085846Z-7066kHz.s16",
+      "candidate_file": "rx_00067.npz",
+      "submode": "n10-qpsk-r3/4",
+      "codewords": 39,
+      "header_score": 0.3142,
+      "burst_marked_lost": false,
+      "snr_est_db": -85.23
+    },
+    {
+      "time_utc": "2026-10-13T09:00:20.529+00:00",
+      "bridge_file": "websdr-20261013T085846Z-7066kHz.s16",
+      "candidate_file": "rx_00068.npz",
+      "submode": "n10-ack-4f",
+      "codewords": 15,
+      "header_score": 0.3257,
+      "burst_marked_lost": true,
+      "snr_est_db": null
+    },
+    {
+      "time_utc": "2026-10-13T09:00:56.529+00:00",
+      "bridge_file": "websdr-20261013T085846Z-7066kHz.s16",
+      "candidate_file": "rx_00069.npz",
+      "submode": "16qam-r1/2",
+      "codewords": 20,
+      "header_score": 0.3336,
+      "burst_marked_lost": true,
+      "snr_est_db": null
+    },
+    {
+      "time_utc": "2026-10-13T09:03:28.529+00:00",
+      "bridge_file": "websdr-20261013T090249Z-7066kHz.s16",
+      "candidate_file": "rx_00071.npz",
+      "submode": "polar-k96-f8",
+      "codewords": 18,
+      "header_score": 0.3555,
+      "burst_marked_lost": true,
+      "snr_est_db": null
+    }
+  ],
+  "capture_queue_diagnostics": {
+    "log": "/tmp/pixelqso-data2g-test/data2g-host.log",
+    "backlog_warnings_over_1s": 89,
+    "backlog_warning_range_s": [
+      1.0,
+      3.4
+    ],
+    "portaudio_overflow_warnings": 0,
+    "meaning": "Backlog warnings indicate the Python receiver was processing queued audio late; no explicit PortAudio input-overflow warning appears in this log. This is not a user-transmission attribution or proof that no samples were lost elsewhere."
+  },
+  "interpretation": "Data2G receive events identify candidate bursts, not PixelQSO card delivery. User transmission times/modes are not mapped to these events, so do not label them as the user\u2019s successes or failures.",
+  "content_correlations": [
+    {
+      "candidate_file": "rx_00071.npz",
+      "bridge_file": "websdr-20261013T090249Z-7066kHz.s16",
+      "candidate_audio_s": 21.368,
+      "one_second_matches": [
+        {
+          "candidate_offset_s": 1,
+          "bridge_offset_s": 28.173,
+          "signed_correlation": 0.5932
+        },
+        {
+          "candidate_offset_s": 5,
+          "bridge_offset_s": 32.172,
+          "signed_correlation": 0.7654
+        },
+        {
+          "candidate_offset_s": 10,
+          "bridge_offset_s": 37.171,
+          "signed_correlation": 0.8926
+        },
+        {
+          "candidate_offset_s": 15,
+          "bridge_offset_s": 42.171,
+          "signed_correlation": 0.7992
+        },
+        {
+          "candidate_offset_s": 20,
+          "bridge_offset_s": 47.172,
+          "signed_correlation": 0.7507
+        }
+      ],
+      "interpretation": "High, consistently offset matches establish that this receiver-sidecar audio is present in the named bridge recording; they do not identify the transmitter or prove this was the operator\u2019s transmission."
+    },
+    {
+      "candidate_file": "rx_00072.npz",
+      "bridge_file": "websdr-20261013T090548Z-7066kHz.s16",
+      "candidate_audio_s": 69.8,
+      "one_second_matches": [
+        {
+          "candidate_offset_s": 1,
+          "bridge_offset_s": 3.257,
+          "signed_correlation": 0.2639
+        },
+        {
+          "candidate_offset_s": 5,
+          "bridge_offset_s": 7.252,
+          "signed_correlation": 0.204
+        },
+        {
+          "candidate_offset_s": 10,
+          "bridge_offset_s": 12.247,
+          "signed_correlation": 0.2107
+        },
+        {
+          "candidate_offset_s": 15,
+          "bridge_offset_s": 17.241,
+          "signed_correlation": 0.196
+        },
+        {
+          "candidate_offset_s": 20,
+          "bridge_offset_s": 22.234,
+          "signed_correlation": 0.3181
+        },
+        {
+          "candidate_offset_s": 30,
+          "bridge_offset_s": 32.227,
+          "signed_correlation": 0.9139
+        },
+        {
+          "candidate_offset_s": 40,
+          "bridge_offset_s": 42.228,
+          "signed_correlation": 0.7827
+        },
+        {
+          "candidate_offset_s": 50,
+          "bridge_offset_s": 52.23,
+          "signed_correlation": 0.584
+        }
+      ],
+      "interpretation": "High, consistently offset matches establish that this receiver-sidecar audio is present in the named bridge recording; they do not identify the transmitter or prove this was the operator\u2019s transmission."
+    }
+  ]
+}

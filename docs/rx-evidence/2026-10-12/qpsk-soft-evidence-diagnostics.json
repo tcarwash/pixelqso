@@ -1,0 +1,46 @@
+[
+  {
+    "signal": "clean",
+    "candidate": [
+      0.9998433358002161,
+      1648,
+      0
+    ],
+    "diagnostics": {
+      "acquisition_score": 0.9998433358002161,
+      "carrier_offset_hz": 0.0,
+      "clock_ppm": 0.0,
+      "fractional_timing_samples": 0.0,
+      "start_seconds": 0.206,
+      "estimated_snr_db_2500": 37.15886897476541,
+      "equalizer": "21-tap fractionally spaced training + pilot/DD NLMS",
+      "equalizer_tap_spacing_seconds": 0.00025,
+      "equalizer_pilot_mse": 0.01
+    },
+    "adaptive_ber": 0.0,
+    "baseline_ber": 0.0,
+    "mean_abs_llr": 199.98293758695323
+  },
+  {
+    "signal": "field-third",
+    "candidate": [
+      0.42212364998198865,
+      2629,
+      4
+    ],
+    "diagnostics": {
+      "acquisition_score": 0.42212364998198865,
+      "carrier_offset_hz": 5.0,
+      "clock_ppm": -99.99999999998899,
+      "fractional_timing_samples": -1.0,
+      "start_seconds": 0.328625,
+      "estimated_snr_db_2500": -16.489886866178868,
+      "equalizer": "21-tap fractionally spaced training + pilot/DD NLMS",
+      "equalizer_tap_spacing_seconds": 0.00025,
+      "equalizer_pilot_mse": 13.51572889737656
+    },
+    "adaptive_ber": 0.49644886363636365,
+    "baseline_ber": 0.49772727272727274,
+    "mean_abs_llr": 0.43369126535081237
+  }
+]

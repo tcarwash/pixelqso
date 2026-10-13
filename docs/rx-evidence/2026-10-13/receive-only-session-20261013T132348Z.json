@@ -1,0 +1,279 @@
+{
+  "recording": "/home/tyler/dev/pixelqso_stream/recordings/websdr-20261013T132348Z-7066kHz.s16",
+  "start_utc": "2026-10-13T13:23:48Z",
+  "bytes": 9573888,
+  "samples": 4786944,
+  "duration_s": 598.368,
+  "sha256": "5c418be912f11b1d33701e0b963bebf6059691260bead756ba1dee4d8808955e",
+  "sample_format": "mono s16le 8000 Hz",
+  "effective_sample_rate_hz": 8001.47,
+  "browser_queue_samples_dropped": 0,
+  "windows": 29,
+  "protected_headers": 0,
+  "elapsed_s": 69.87310948999948,
+  "method": "Current modem_envelope.find_copies on 25-second windows with 20-second hops; the user supplied no TX start/stop marker or mode, so any candidates cannot be attributed to a user transmission. Data2G sidecars are separate and not included in this protected local-mode header scan.",
+  "results": [
+    {
+      "start_s": 0.0,
+      "end_s": 25.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 20.0,
+      "end_s": 45.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 40.0,
+      "end_s": 65.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 60.0,
+      "end_s": 85.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 80.0,
+      "end_s": 105.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 100.0,
+      "end_s": 125.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 120.0,
+      "end_s": 145.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 140.0,
+      "end_s": 165.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 160.0,
+      "end_s": 185.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 180.0,
+      "end_s": 205.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 200.0,
+      "end_s": 225.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 220.0,
+      "end_s": 245.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 240.0,
+      "end_s": 265.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 260.0,
+      "end_s": 285.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 280.0,
+      "end_s": 305.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 300.0,
+      "end_s": 325.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 320.0,
+      "end_s": 345.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 340.0,
+      "end_s": 365.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 360.0,
+      "end_s": 385.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 380.0,
+      "end_s": 405.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 400.0,
+      "end_s": 425.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 420.0,
+      "end_s": 445.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 440.0,
+      "end_s": 465.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 460.0,
+      "end_s": 485.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 480.0,
+      "end_s": 505.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 500.0,
+      "end_s": 525.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 520.0,
+      "end_s": 545.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 540.0,
+      "end_s": 565.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 560.0,
+      "end_s": 585.0,
+      "count": 0,
+      "headers": []
+    }
+  ],
+  "pcm_rms": 0.057223709706415445,
+  "pcm_nonzero_fraction": 0.9997505715546285,
+  "data2g_candidate_sidecars_during_interval": [
+    {
+      "file": "rx_00097.npz",
+      "event_utc": "2026-10-13T13:25:15.710873Z",
+      "mode": "n4-qpsk-r2/3",
+      "n_cw": 14,
+      "score": 0.30130178189037854,
+      "lost": true,
+      "attribution": "unassigned Data2G candidate; not proof of a user transmission or PixelQSO card frame"
+    },
+    {
+      "file": "rx_00098.npz",
+      "event_utc": "2026-10-13T13:29:31.810873Z",
+      "mode": "n4-qpsk-r1/5",
+      "n_cw": 50,
+      "score": 0.3021644789758335,
+      "lost": false,
+      "attribution": "unassigned Data2G candidate; not proof of a user transmission or PixelQSO card frame"
+    },
+    {
+      "file": "rx_00099.npz",
+      "event_utc": "2026-10-13T13:33:12.010873Z",
+      "mode": "n4-qpsk-r1/3",
+      "n_cw": 53,
+      "score": 0.3039124122808985,
+      "lost": true,
+      "attribution": "unassigned Data2G candidate; not proof of a user transmission or PixelQSO card frame"
+    }
+  ],
+  "interpretation": "Captured 598.368 seconds of source-stage WebSDR audio with zero browser queue drops. A full 29-window protected local-mode header scan found none. The local experimental PixelQSO instance was running on PixelQSO-Test-RX, but no user TX start/stop marker or mode selection was provided. The separate host Data2G process logged three low-score unassigned candidates during this interval; replay of rx_00098 recovered one non-broadcast PHY burst but no KISS frame. These events do not establish a user transmission or valid card. Old Data2G artifacts inside the container are timestamped on Oct. 12 and are not from this session. This is audio-path and decoder-activity evidence only, not an attributable on-air pass or failure.",
+  "data2g_replay_rx_00098": {
+    "source_event_mode": "n4-qpsk-r1/5",
+    "headers": 1,
+    "bursts": 1,
+    "phy_received": true,
+    "kiss_frames": 0,
+    "transport_events": [],
+    "interpretation": "KissLink returned no frame. Its API classifies this as a non-broadcast burst (for example ARQ) or a lost burst; because PHY receive returned a burst here, this candidate did not deliver a KISS broadcast/card frame."
+  },
+  "stale_container_data2g_artifacts": {
+    "events_log_mtime_utc": "2026-10-12T20:26:44.699821Z",
+    "host_log_mtime_utc": "2026-10-12T20:27:15.491472Z",
+    "container_process_snapshot": "only /opt/pixelqso/app.py; no Data2G child",
+    "interpretation": "These container-side files predate the 2026-10-13T13:23:48Z receive-only recording and are unrelated. The three interval sidecars above came from the separate /tmp/pixelqso-data2g-test host."
+  },
+  "data2g_bridge_audio_correlations": {
+    "method": "Cross-correlation of selected 1-second chunks from current /tmp Data2G sidecars against this bridge PCM within +/-20 seconds of the expected audio start (event file mtime minus the prior 8.4-second end-lag estimate, less sidecar duration).",
+    "matches": [
+      {
+        "file": "rx_00097.npz",
+        "sidecar_at_s": 0,
+        "expected_bridge_at_s": 30.354,
+        "bridge_at_s": 33.731125,
+        "correlation": 0.8838890914367414
+      },
+      {
+        "file": "rx_00098.npz",
+        "sidecar_at_s": 0,
+        "expected_bridge_at_s": 163.545,
+        "bridge_at_s": 165.42625,
+        "correlation": 0.8266646108102428
+      },
+      {
+        "file": "rx_00098.npz",
+        "sidecar_at_s": 85,
+        "expected_bridge_at_s": 248.545,
+        "bridge_at_s": 250.441125,
+        "correlation": 0.8533138473561971
+      },
+      {
+        "file": "rx_00099.npz",
+        "sidecar_at_s": 90,
+        "expected_bridge_at_s": 463.316,
+        "bridge_at_s": 465.477375,
+        "correlation": 0.9392653458245946
+      },
+      {
+        "file": "rx_00099.npz",
+        "sidecar_at_s": 181,
+        "expected_bridge_at_s": 554.316,
+        "bridge_at_s": 556.49525,
+        "correlation": 0.6697584882265945
+      }
+    ],
+    "interpretation": "The host-side candidate audio contains samples from the same source-stage WebSDR recording. Matched points are roughly 1.9-3.4 seconds later than the prior expected-time estimate; that supports a host buffering/timestamp offset but does not show sample loss, identify a transmitter, or prove a card was sent."
+  }
+}

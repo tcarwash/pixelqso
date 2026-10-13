@@ -1,0 +1,75 @@
+{
+  "sidecar": "rx_00073.npz",
+  "original_event": {
+    "submode": "qpsk-r1/3",
+    "n_cw": 35,
+    "score": 0.33067102542659227,
+    "lost": true
+  },
+  "method": "Replay raw sidecar through Data2G Receiver with protocol maximum length; compare original with analytic-signal conjugate for spectral inversion.",
+  "results": [
+    {
+      "variant": "normal",
+      "seconds": 40.952,
+      "headers": [
+        {
+          "mode": "qpsk-r1/3",
+          "n_cw": 35,
+          "score": 0.3306710231372494,
+          "start_s": 0.1
+        }
+      ],
+      "bursts": [
+        {
+          "mode": "qpsk-r1/3",
+          "n_cw": 35,
+          "score": 0.3306710231372494,
+          "start_s": 0.1,
+          "received": false
+        }
+      ],
+      "kiss_frames": [],
+      "elapsed_seconds": 4.1428613910102285
+    },
+    {
+      "variant": "spectral_inversion",
+      "seconds": 40.952,
+      "headers": [
+        {
+          "mode": "qpsk-r1/3",
+          "n_cw": 35,
+          "score": 0.3306709705299146,
+          "start_s": 0.1
+        }
+      ],
+      "bursts": [
+        {
+          "mode": "qpsk-r1/3",
+          "n_cw": 35,
+          "score": 0.3306709705299146,
+          "start_s": 0.1,
+          "received": false
+        }
+      ],
+      "kiss_frames": [],
+      "elapsed_seconds": 3.345706417982001
+    }
+  ],
+  "positive_control": {
+    "sidecar": "rx_00083.npz",
+    "mode": "n4-qpsk-r1/5",
+    "normal": {
+      "received": true,
+      "kiss_port": 1,
+      "frame_bytes": 234,
+      "frame_sha256": "f131bf9e79095e406c5787d9be77edc3e31781d550420a92787f48154cbf1798"
+    },
+    "spectral_inversion": {
+      "received": true,
+      "kiss_port": 1,
+      "frame_bytes": 234,
+      "frame_sha256": "f131bf9e79095e406c5787d9be77edc3e31781d550420a92787f48154cbf1798"
+    }
+  },
+  "interpretation": "The valid QPSK control yields the identical KISS frame in either orientation, so this receive path is invariant to the tested spectral inversion. The rx_00073 normal/inverted comparison is therefore not a discriminating inversion test: both variants keep the same low-score header and lose the burst. This probe does not assess other Data2G modes or identify the user transmission."
+}

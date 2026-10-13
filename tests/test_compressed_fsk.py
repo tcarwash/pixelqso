@@ -91,6 +91,25 @@ class CompressionTests(unittest.TestCase):
             with self.assertRaises(ValueError):envelope.header_symbols(key,48000,b'x'*16,copies=2)
 
 class CompressedModemTests(unittest.TestCase):
+    def test_reacquires_training_after_a_fifty_ms_guard_discontinuity(self):
+        key='experimental_8fsk_compressed';card=pixel.example_card();backend=get_backend(key)
+        audio=backend.encode(card,1,'cq',-9)
+        copies=envelope.find_copies(audio,48000)
+        self.assertEqual(len(copies),1)
+        copy=copies[0];shifted=audio.copy()
+        payload=shifted[copy.start:copy.end]
+        lost=round(.05*48000);guard=round(.1*48000)
+        # Remove 50 ms from the protected leading guard, preserve the actual
+        # training/data samples, and keep the announced payload length fixed.
+        payload=np.concatenate((payload[:guard-lost],payload[guard:],np.zeros(lost)))
+        shifted[copy.start:copy.end]=payload
+        report=backend.decode(shifted,48000)
+        expected=pixel.unpack_indices(pixel.minimal_avatar_payload(card),1024)
+        self.assertTrue(report['card']['exact'])
+        self.assertEqual(report['pixels'],expected)
+        self.assertEqual(report['card']['diagnostics']['acquisition_method'],
+                         'bounded known-tone training reacquisition')
+
     def test_real_waveforms_for_compressed_and_raw_cards(self):
         maker=CompressionTests()
         for key,native in compressed.MODES.items():

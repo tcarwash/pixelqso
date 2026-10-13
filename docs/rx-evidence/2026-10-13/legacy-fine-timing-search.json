@@ -1,0 +1,34 @@
+{
+  "capture": "mode-scan-2220.0-2416.6.f16",
+  "announced_payload_duration_s": 134.48,
+  "window": "first 20 seconds of the announced legacy standard payload",
+  "cfo_hz": 4.75,
+  "start_samples": [
+    0,
+    8
+  ],
+  "symbol_period_samples": [
+    159.8,
+    160.2
+  ],
+  "period_step_samples": 0.01,
+  "hypotheses": 369,
+  "crc_valid_packets": [],
+  "best_candidate": {
+    "mean_body_winner_probability": 0.8950060253361345,
+    "mean_header_winner_probability": 0.9100661673992778,
+    "start_sample": 8,
+    "symbol_period_samples": 160.19999999999965,
+    "packet_key": [
+      49374,
+      113,
+      0,
+      39
+    ],
+    "body_error": [
+      "seq 0: packet body undecodable after 1 copy/copies"
+    ]
+  },
+  "elapsed_seconds": 9.48,
+  "interpretation": "Fine constant start/period refinement raised soft tone confidence for the seq 0 candidate but still produced no decodable body or CRC-valid packet. This does not establish whether within-packet timing variation or body corruption is responsible."
+}

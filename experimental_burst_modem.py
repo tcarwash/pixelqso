@@ -324,6 +324,74 @@ def announced_fsk_candidates(analytic,fmt,*,radius=2):
                             'frequency_search_radius_hz':frequency_radius,
                             'acquisition_method':'protected boundary + known-tone training'}
 
+    # A clock discontinuity can move the payload by tens of milliseconds,
+    # outside the local header-boundary refinement above. Search known-tone
+    # training noncoherently over a bounded ±75 ms window, then run the same
+    # pilot/data decoder and integrity checks on the reacquired candidates.
+    for score, coarse_start, coarse_offset in _reacquire_fsk_training(analytic,fmt):
+        if abs(coarse_start - (GUARD_SECONDS+.05)*FS) <= max(2, radius)*FS/fmt.baud:
+            continue
+        start,offset = _refine_candidate(analytic,coarse_start,coarse_offset,fmt,
+                                         radius=.25,frequency_radius=20)
+        shifted = analytic*np.exp(-2j*np.pi*offset*np.arange(len(analytic))/FS)
+        for evidence,timing in demodulate_candidates(shifted,start,fmt):
+            yield evidence,{**timing,'start_sample':start,'carrier_offset_hz':offset,
+                            'frequency_search_radius_hz':20,
+                            'training_search_score':score,
+                            'acquisition_method':'bounded known-tone training reacquisition'}
+
+
+def _reacquire_fsk_training(analytic,fmt,*,window_seconds=.075,max_candidates=3):
+    """Find distinct training starts near a protected payload boundary."""
+    training = format_constants_for(fmt)[0]
+    step = FS // fmt.baud
+    center = round((GUARD_SECONDS+.05)*FS)
+    stride = max(1,step//4)
+    starts = np.arange(max(0,center-round(window_seconds*FS)),
+                       min(len(analytic)-len(training)*step,center+round(window_seconds*FS))+1,
+                       stride,dtype=int)
+    if not len(starts):
+        return []
+    threshold = 1/fmt.tones + 3.5*math.sqrt(
+        (fmt.tones-1)/(fmt.tones**2*(fmt.tones+1)*TRAINING))
+    t=np.arange(step)/FS
+    ranked=[]
+    for offset in range(-120,121,40):
+        shifted=analytic*np.exp(-2j*np.pi*offset*np.arange(len(analytic))/FS)
+        bank=[]
+        for tone in fmt.frequencies:
+            template=np.exp(-2j*np.pi*tone*t)
+            corr=fftconvolve(shifted,template[::-1],mode='valid')
+            bank.append(np.abs(corr)**2)
+        energies=np.asarray(bank)
+        limit=starts+len(training)*step
+        if limit.max()>=energies.shape[1]:
+            valid=limit<energies.shape[1]
+            starts_for_score=starts[valid]
+        else:
+            valid=slice(None); starts_for_score=starts
+        if not len(starts_for_score):
+            continue
+        positions=starts_for_score[:,None]+np.arange(TRAINING)[None,:]*step
+        total=np.maximum(energies[:,positions].sum(axis=0),1e-20)
+        chosen=energies[training[None,:],positions]
+        scores=np.mean(chosen/total,axis=1)
+        # Retain local peaks, allowing several possible timing interpretations
+        # for the same physical copy while bounding downstream decoder work.
+        peaks,_=find_peaks(np.pad(scores,(1,1)),distance=max(1,round(.01*FS/stride)))
+        peaks=peaks-1
+        for index in peaks:
+            score=float(scores[index])
+            if score>=threshold:
+                ranked.append((score,int(starts_for_score[index]),offset))
+    selected=[]
+    for candidate in sorted(ranked,reverse=True):
+        if all(abs(candidate[1]-other[1])>=max(step,round(.01*FS)) for other in selected):
+            selected.append(candidate)
+        if len(selected)>=max_candidates:
+            break
+    return selected
+
 
 def _track_frequency(analytic,fmt,timing,pilot_positions,pilot_tones):
     """Bounded linear residual-CFO fit to known symbols, never data decisions.
@@ -660,21 +728,45 @@ def decode_equalized(audio, sample_rate=48000):
         if len(source) < candidate[1] + frame_samples:
             incomplete = activity(QPSK_KEY, {"acquisition_score": candidate[0]})
             continue
-        try:
-            llrs, diagnostics, baseline = _adaptive_soft_frame(source, candidate)
-            for receiver, evidence in (("adaptive_equalizer", llrs), ("pilot_receiver_fallback", baseline)):
-                frame = SoftCopy(evidence, diagnostics)
-                frames[receiver].append(frame)
-                try:
-                    bits, iterations = weak.decode_ldpc(evidence)
-                    packet = np.packbits(bits ^ weak.constants()[3]).tobytes()
-                    return _whole_report(QPSK_KEY, packet, {
-                        **diagnostics_for([frame], len(candidates)), "ldpc_iterations": iterations,
-                        "successful_receiver": receiver})
-                except ValueError as exc:
-                    error = exc
-        except ValueError as exc:
-            error = exc
+        primary_failed = False
+        for hypothesis in (candidate,):
+            try:
+                llrs, diagnostics, baseline = _adaptive_soft_frame(source, hypothesis)
+                for receiver, evidence in (("adaptive_equalizer", llrs), ("pilot_receiver_fallback", baseline)):
+                    frame = SoftCopy(evidence, diagnostics)
+                    frames[receiver].append(frame)
+                    try:
+                        bits, iterations = weak.decode_ldpc(evidence)
+                        packet = np.packbits(bits ^ weak.constants()[3]).tobytes()
+                        return _whole_report(QPSK_KEY, packet, {
+                            **diagnostics_for([frame], len(candidates)), "ldpc_iterations": iterations,
+                            "successful_receiver": receiver})
+                    except ValueError as exc:
+                        error = exc
+                        primary_failed = True
+            except ValueError as exc:
+                error = exc
+                primary_failed = True
+        if primary_failed:
+            try:
+                pilot = weak.pilot_candidate(source, candidate[1])
+                if abs(pilot[1] - candidate[1]) > 2:
+                    llrs, diagnostics, baseline = _adaptive_soft_frame(source, pilot)
+                    diagnostics.update(acquisition_method="distributed QPSK pilot coherence",
+                                       pilot_coherence=pilot[0], pilot_start_sample=pilot[1])
+                    for receiver, evidence in (("adaptive_equalizer", llrs), ("pilot_receiver_fallback", baseline)):
+                        frame = SoftCopy(evidence, diagnostics)
+                        frames[receiver].append(frame)
+                        try:
+                            bits, iterations = weak.decode_ldpc(evidence)
+                            packet = np.packbits(bits ^ weak.constants()[3]).tobytes()
+                            return _whole_report(QPSK_KEY, packet, {
+                                **diagnostics_for([frame], len(candidates)), "ldpc_iterations": iterations,
+                                "successful_receiver": receiver})
+                        except ValueError as exc:
+                            error = exc
+            except ValueError as exc:
+                error = exc
     for receiver, copies in frames.items():
         for evidence, used in recovery_attempts(copies):
             if len(used) < 2:
@@ -697,27 +789,72 @@ def decode_copies(key, captures, sample_rate=48000, *, grouped=False):
     frames, partial = [], None
     error=ValueError('no CRC-valid announced experimental card')
     if key == QPSK_KEY:
-        receivers={'adaptive_equalizer':[], 'pilot_receiver_fallback':[]}
+        hypotheses=[]
         for audio in captures:
             source=_resample(audio,sample_rate,weak.FS)
             try:
                 candidate=weak.announced_candidate(source)
-                evidence, diagnostic, baseline=_adaptive_soft_frame(source,candidate)
-                receivers['adaptive_equalizer'].append(SoftCopy(evidence,diagnostic))
-                receivers['pilot_receiver_fallback'].append(SoftCopy(baseline,diagnostic))
             except ValueError as exc:
                 error=exc
-        for receiver,copies in receivers.items():
-            for evidence,used in recovery_attempts(copies):
+                continue
+            lanes={'adaptive_equalizer':[], 'pilot_receiver_fallback':[]}
+            primary_failed=False
+            try:
+                evidence,diagnostic,baseline=_adaptive_soft_frame(source,candidate)
+                lanes['adaptive_equalizer'].append(SoftCopy(evidence,diagnostic))
+                lanes['pilot_receiver_fallback'].append(SoftCopy(baseline,diagnostic))
+                for receiver,values in (("adaptive_equalizer",evidence),
+                                        ("pilot_receiver_fallback",baseline)):
+                    try:
+                        bits,iterations=weak.decode_ldpc(values)
+                        packet=np.packbits(bits^weak.constants()[3]).tobytes()
+                        frame=SoftCopy(values,diagnostic)
+                        return _whole_report(key,packet,{**diagnostics_for([frame],1),
+                            'ldpc_iterations':iterations,'successful_receiver':receiver,
+                            'acquisition_method':'protected boundary + local QPSK training'})
+                    except ValueError as exc:
+                        error=exc
+                        primary_failed=True
+            except ValueError as exc:
+                error=exc
+                primary_failed=True
+            if primary_failed:
+                try:
+                    pilot=weak.pilot_candidate(source,candidate[1])
+                    if abs(pilot[1]-candidate[1])>2:
+                        evidence,diagnostic,baseline=_adaptive_soft_frame(source,pilot)
+                        diagnostic.update(acquisition_method='distributed QPSK pilot coherence',
+                                          pilot_coherence=pilot[0],pilot_start_sample=pilot[1])
+                        lanes['adaptive_equalizer'].append(SoftCopy(evidence,diagnostic))
+                        lanes['pilot_receiver_fallback'].append(SoftCopy(baseline,diagnostic))
+                        for receiver,values in (("adaptive_equalizer",evidence),
+                                                ("pilot_receiver_fallback",baseline)):
+                            try:
+                                bits,iterations=weak.decode_ldpc(values)
+                                packet=np.packbits(bits^weak.constants()[3]).tobytes()
+                                frame=SoftCopy(values,diagnostic)
+                                return _whole_report(key,packet,{**diagnostics_for([frame],1),
+                                    'ldpc_iterations':iterations,'successful_receiver':receiver,
+                                    'acquisition_method':'distributed QPSK pilot coherence'})
+                            except ValueError as exc:
+                                error=exc
+                except ValueError as exc:
+                    error=exc
+            if lanes['adaptive_equalizer']:
+                hypotheses.append(lanes)
+        for receiver in ('adaptive_equalizer','pilot_receiver_fallback'):
+            copies=[item[receiver] for item in hypotheses]
+            for evidence,used in hypothesis_attempts(copies):
                 try:
                     bits,iterations=weak.decode_ldpc(evidence)
                     packet=np.packbits(bits^weak.constants()[3]).tobytes()
                     return _whole_report(key,packet,{**diagnostics_for(used,len(copies)),
                         'ldpc_iterations':iterations,'successful_receiver':receiver,
-                        'acquisition_method':'protected boundary + local QPSK training'})
+                        'acquisition_method':used[0].diagnostics.get('acquisition_method',
+                            'protected boundary + local QPSK training')})
                 except ValueError as exc:
                     error=exc
-        if not any(receivers.values()):
+        if not hypotheses:
             return activity(key,{'announced_copies':len(captures)})
         raise error
     fmt=FORMATS[key]

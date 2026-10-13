@@ -1,14 +1,14 @@
 import unittest
 
 from data2g import modem
-from data2g.config import MAX_CODEWORDS
-from data2g_receive_host import enable_advertised_receive_lengths
+from data2g.arq.engine import KISS_FRAME_BYTES, receive_accept
+from data2g import codes
 from data2g_runtime import (data2g_audio_device_selector, local_host_arguments,
                             local_host_command)
 
 
 class Data2GRuntimeTests(unittest.TestCase):
-    def test_source_install_launches_receive_compatibility_shim(self):
+    def test_source_install_launches_snr_host_wrapper(self):
         command = local_host_command(["--help"], frozen=False, executable="python")
         self.assertEqual(command[0], "python")
         self.assertTrue(command[1].endswith("/data2g_receive_host.py"))
@@ -19,19 +19,15 @@ class Data2GRuntimeTests(unittest.TestCase):
                                             executable="PixelQSO"),
                          ["PixelQSO", "--run-data2g-host", "--help"])
 
-    def test_receiver_acceptance_matches_advertised_codeword_range(self):
-        original = modem.Accept.of
-        try:
-            before = dict(modem.Accept.of(None, 16.0).max_cw)
-            self.assertLess(before["n4-qpsk-r1/5"], MAX_CODEWORDS)
-            enable_advertised_receive_lengths()
-            after = dict(modem.Accept.of(None, 16.0).max_cw)
-            self.assertEqual(after["n4-qpsk-r1/5"], MAX_CODEWORDS)
-            # Explicit submode lists keep any caller-supplied duration limit.
-            named = dict(modem.Accept.of(["n4-qpsk-r1/5"], 16.0).max_cw)
-            self.assertEqual(named["n4-qpsk-r1/5"], before["n4-qpsk-r1/5"])
-        finally:
-            modem.Accept.of = original
+    def test_upstream_receiver_accepts_256_byte_kiss_frame(self):
+        self.assertEqual(KISS_FRAME_BYTES, 256)
+        before = dict(modem.Accept.of(None, 16.0).max_cw)
+        after = dict(receive_accept(0.35).max_cw)
+        mode = modem.SUBMODES["n4-qpsk-r1/5"]
+        need = 4 + (2 + 256 + codes.payload_bytes(mode) - 1) // codes.payload_bytes(mode)
+        self.assertLess(before[mode.name], need)
+        self.assertGreaterEqual(after[mode.name], need)
+        self.assertEqual(receive_accept(0.35).min_score, 0.35)
 
     def test_host_configuration_maps_station_devices_and_radio_server(self):
         args = local_host_arguments(

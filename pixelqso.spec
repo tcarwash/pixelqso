@@ -33,6 +33,7 @@ hidden = [
     "cardmodem",
     "card_ids",
     "snr",
+    "receive_preview",
     "card_backends",
     "data2g_transport",
     "data2g_runtime",

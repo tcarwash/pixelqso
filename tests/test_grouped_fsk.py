@@ -96,11 +96,12 @@ class GroupedFSKTests(unittest.TestCase):
             copies=found,copy_decoder=backend.decode_payload_copies)
         self.assertTrue(report['card']['exact'])
 
-    def test_missing_opening_header_and_noise_reject(self):
+    def test_missing_opening_header_uses_native_decode_and_noise_rejects(self):
         card=pixel.example_card();key='experimental_8fsk_grouped';backend=get_backend(key)
         audio=backend.encode(card,2,'cq',None)
-        with self.assertRaises(ValueError):
-            backend.decode(audio[round(envelope.HEADER_SECONDS*48000):],48000)
+        report=backend.decode(audio[round(envelope.HEADER_SECONDS*48000):],48000)
+        self.assertTrue(report['card']['exact'])
+        self.assertEqual(report['pixels'],card.pixels)
         noise=np.random.default_rng(234).normal(0,.1,len(audio))
         with self.assertRaises(ValueError):
             backend.decode(noise,48000)
@@ -140,7 +141,7 @@ class GroupedFSKTests(unittest.TestCase):
         self.assertIsNone(result.failure)
         self.assertTrue(result.report['card']['exact'])
 
-    def test_receive_all_routes_group_and_content_mismatch_rejects(self):
+    def test_receive_all_routes_group_and_content_mismatch_falls_back(self):
         from app import decode_all_card_backends
         card=pixel.example_card();key='experimental_16fsk_grouped';backend=get_backend(key)
         audio=backend.encode(card,2,'cq',None)
@@ -151,9 +152,11 @@ class GroupedFSKTests(unittest.TestCase):
         copies=envelope.find_copies(audio,48000)
         for copy in copies:
             copy.identity='00'*16
-        with self.assertRaisesRegex(ValueError,'protected copy identity'):
-            envelope.decode_capture(key,audio,48000,backend.decode_payload,
-                copies=copies,copy_decoder=backend.decode_payload_copies)
+        report=envelope.decode_capture(key,audio,48000,backend.decode_payload,
+            copies=copies,copy_decoder=backend.decode_payload_copies)
+        self.assertTrue(report['card']['exact'])
+        self.assertEqual(report['pixels'],card.pixels)
+        self.assertNotIn('copy_header',report)
 
 if __name__=='__main__':
     unittest.main()

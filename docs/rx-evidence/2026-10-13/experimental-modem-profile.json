@@ -1,0 +1,2142 @@
+{
+  "results": [
+    {
+      "mode": "resilient_100",
+      "scenario": "clean",
+      "pipeline": "full",
+      "sample_rate": 48000,
+      "audio_s": 18.076666666666668,
+      "runs": [
+        {
+          "wall_s": 0.9569204779982101,
+          "cpu_s": 0.8657810569999997,
+          "cache": "cleared",
+          "verified": true
+        },
+        {
+          "wall_s": 0.6911618799786083,
+          "cpu_s": 0.6741987460000001,
+          "cache": "cleared",
+          "verified": true
+        },
+        {
+          "wall_s": 0.6999458530044649,
+          "cpu_s": 0.696613986,
+          "cache": "cleared",
+          "verified": true
+        }
+      ],
+      "median_wall_s": 0.6999458530044649,
+      "median_cpu_s": 0.696613986,
+      "profiled_wall_s": 0.7326306499890052,
+      "identical_buffer_cached_run": {
+        "wall_s": 0.6501400559791364,
+        "cpu_s": 0.65007313
+      },
+      "rss_before_mib": 110.33984375,
+      "process_peak_rss_mib": 596.12109375,
+      "memory_scope": "process high-water RSS includes imports and capture preparation; not isolated decoder allocations",
+      "verified": true,
+      "matched_expected_pixels": true,
+      "provenance": {
+        "reference": "synthetic seeded single transmission",
+        "seed": 1030,
+        "snr_db_2500": null,
+        "audio_sha256": "8a10602d6b685571781b5b04e498c02354de13ed36566c3c4678953d5007e123"
+      },
+      "measured_snr_db": 43,
+      "profile": "work/modem-profile-20261013/resilient_100-clean-full.prof",
+      "hotspots": [
+        {
+          "file": "profile_experimental_modems.py",
+          "line": 104,
+          "function": "checked",
+          "calls": 1,
+          "self_s": 8.220000000000001e-06,
+          "cumulative_s": 0.732553428
+        },
+        {
+          "file": "profile_experimental_modems.py",
+          "line": 98,
+          "function": "decode",
+          "calls": 1,
+          "self_s": 4.751e-06,
+          "cumulative_s": 0.7323020060000001
+        },
+        {
+          "file": "backend_adapters.py",
+          "line": 248,
+          "function": "decode_capture",
+          "calls": 1,
+          "self_s": 6.368000000000001e-06,
+          "cumulative_s": 0.7322972550000001
+        },
+        {
+          "file": "card_backends.py",
+          "line": 468,
+          "function": "decode",
+          "calls": 1,
+          "self_s": 0.000534968,
+          "cumulative_s": 0.7322866010000001
+        },
+        {
+          "file": "modem_envelope.py",
+          "line": 501,
+          "function": "decode_capture",
+          "calls": 1,
+          "self_s": 0.004507077,
+          "cumulative_s": 0.73173657
+        },
+        {
+          "file": "modem_envelope.py",
+          "line": 336,
+          "function": "find_copies",
+          "calls": 1,
+          "self_s": 0.033527269000000005,
+          "cumulative_s": 0.6474903350000001
+        },
+        {
+          "file": "_backend.py",
+          "line": 19,
+          "function": "__ua_function__",
+          "calls": 5,
+          "self_s": 2.6879e-05,
+          "cumulative_s": 0.398195481
+        },
+        {
+          "file": "_basic_backend.py",
+          "line": 27,
+          "function": "_execute_1D",
+          "calls": 5,
+          "self_s": 4.8473e-05,
+          "cumulative_s": 0.398145093
+        },
+        {
+          "file": "basic.py",
+          "line": 11,
+          "function": "c2c",
+          "calls": 5,
+          "self_s": 5.9239000000000007e-05,
+          "cumulative_s": 0.39809208300000004
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method scipy.fft._duccfft.pyduccfft.c2c>",
+          "calls": 5,
+          "self_s": 0.38974420600000004,
+          "cumulative_s": 0.38974420600000004
+        },
+        {
+          "file": "_basic_backend.py",
+          "line": 83,
+          "function": "ifft",
+          "calls": 2,
+          "self_s": 7.094e-06,
+          "cumulative_s": 0.206487459
+        },
+        {
+          "file": "_basic_backend.py",
+          "line": 77,
+          "function": "fft",
+          "calls": 3,
+          "self_s": 1.1271000000000001e-05,
+          "cumulative_s": 0.191675999
+        },
+        {
+          "file": "modem_envelope.py",
+          "line": 179,
+          "function": "decode_header",
+          "calls": 54,
+          "self_s": 0.001591074,
+          "cumulative_s": 0.103243126
+        },
+        {
+          "file": "experimental_fec.py",
+          "line": 100,
+          "function": "rs_decode",
+          "calls": 54,
+          "self_s": 0.012571574,
+          "cumulative_s": 0.094861413
+        },
+        {
+          "file": "card_backends.py",
+          "line": 472,
+          "function": "<lambda>",
+          "calls": 1,
+          "self_s": 6.029e-06,
+          "cumulative_s": 0.076679621
+        },
+        {
+          "file": "card_backends.py",
+          "line": 149,
+          "function": "decode_payload_copies",
+          "calls": 1,
+          "self_s": 7.497100000000001e-05,
+          "cumulative_s": 0.076673592
+        },
+        {
+          "file": "experimental_fec.py",
+          "line": 35,
+          "function": "evaluate",
+          "calls": 4340,
+          "self_s": 0.03577174,
+          "cumulative_s": 0.06766683200000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1456,
+          "function": "decode_avatar_copies",
+          "calls": 1,
+          "self_s": 8.7465e-05,
+          "cumulative_s": 0.054966362000000005
+        },
+        {
+          "file": "modem_envelope.py",
+          "line": 268,
+          "function": "_header_metrics",
+          "calls": 104,
+          "self_s": 0.013377529,
+          "cumulative_s": 0.053425183
+        },
+        {
+          "file": "_signaltools.py",
+          "line": 2434,
+          "function": "hilbert",
+          "calls": 1,
+          "self_s": 5.9633e-05,
+          "cumulative_s": 0.043010106
+        },
+        {
+          "file": "experimental_fec.py",
+          "line": 24,
+          "function": "mul",
+          "calls": 139707,
+          "self_s": 0.038584773,
+          "cumulative_s": 0.038584773
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1256,
+          "function": "_announced_avatar_acquisition",
+          "calls": 1,
+          "self_s": 0.029356505,
+          "cumulative_s": 0.034353955000000005
+        },
+        {
+          "file": "_function_base_impl.py",
+          "line": 1549,
+          "function": "interp",
+          "calls": 104,
+          "self_s": 0.000473442,
+          "cumulative_s": 0.028202242000000002
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method numpy._core._multiarray_umath.interp_complex>",
+          "calls": 104,
+          "self_s": 0.027453878,
+          "cumulative_s": 0.027453878
+        },
+        {
+          "file": "_signaltools.py",
+          "line": 3884,
+          "function": "resample_poly",
+          "calls": 1,
+          "self_s": 6.372800000000001e-05,
+          "cumulative_s": 0.02252296
+        },
+        {
+          "file": "_upfirdn.py",
+          "line": 108,
+          "function": "upfirdn",
+          "calls": 1,
+          "self_s": 1.2846e-05,
+          "cumulative_s": 0.021812215000000003
+        },
+        {
+          "file": "_upfirdn.py",
+          "line": 91,
+          "function": "apply_filter",
+          "calls": 1,
+          "self_s": 0.021681908,
+          "cumulative_s": 0.021751674000000002
+        },
+        {
+          "file": "numeric.py",
+          "line": 801,
+          "function": "convolve",
+          "calls": 1,
+          "self_s": 9.959e-06,
+          "cumulative_s": 0.021524771
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method numpy._core._multiarray_umath.correlate>",
+          "calls": 1,
+          "self_s": 0.021512154000000002,
+          "cumulative_s": 0.021512154000000002
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1219,
+          "function": "_avatar_metrics_report",
+          "calls": 1,
+          "self_s": 5.1238000000000006e-05,
+          "cumulative_s": 0.016524156
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 860,
+          "function": "decode_minimal_avatar_resilient_symbols",
+          "calls": 1,
+          "self_s": 0.001483476,
+          "cumulative_s": 0.016465101
+        },
+        {
+          "file": "modem_envelope.py",
+          "line": 311,
+          "function": "_refine_header",
+          "calls": 2,
+          "self_s": 0.00048494000000000006,
+          "cumulative_s": 0.013563489000000001
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method builtins.sum>",
+          "calls": 2274,
+          "self_s": 0.008334989000000001,
+          "cumulative_s": 0.012466217
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method numpy.arange>",
+          "calls": 373,
+          "self_s": 0.011200898,
+          "cumulative_s": 0.011200898
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method builtins.any>",
+          "calls": 464,
+          "self_s": 0.0023834570000000003,
+          "cumulative_s": 0.010123724
+        }
+      ],
+      "environment": {
+        "python": "3.13.6",
+        "numpy": "2.5.3",
+        "scipy": "1.18.1",
+        "machine": "x86_64",
+        "cpu_affinity_count": 8,
+        "load_before": [
+          3.64794921875,
+          4.1943359375,
+          4.34130859375
+        ],
+        "load_after": [
+          3.595703125,
+          4.17431640625,
+          4.333984375
+        ]
+      },
+      "commit": "dd76bbf220884989be9bb1d8b5bc896a50b1e97d",
+      "source_hashes": {
+        "cardmodem.py": "926bbf0d0c268f0012cdd0fe51af9f41d56b50bcea2ca3230c3fec4b29024749",
+        "card_backends.py": "a45d1dfcb8b986ebe63183063c8da1d7aebecb7e095af4cfdce151fb284c9f07",
+        "modem_envelope.py": "0c5f59ecc43be87c5da52851e9acd4d02389f0129f43d6eb9a7d0fb743e969c2",
+        "snr.py": "989ed26ddc81de337d0e3ccb9c401712b1cba6204ba631b1d1c4a0d87c6bb1b9",
+        "backend_adapters.py": "2aae1e8d1649ae3226353aa2a496077f701774f06971eb4efad9f2867f114528"
+      }
+    },
+    {
+      "mode": "resilient_100",
+      "scenario": "clean",
+      "pipeline": "payload",
+      "sample_rate": 48000,
+      "audio_s": 18.076666666666668,
+      "runs": [
+        {
+          "wall_s": 0.06914180799503811,
+          "cpu_s": 0.06597776300000002,
+          "cache": "cleared",
+          "verified": true
+        },
+        {
+          "wall_s": 0.0487533489940688,
+          "cpu_s": 0.04765232000000008,
+          "cache": "cleared",
+          "verified": true
+        },
+        {
+          "wall_s": 0.06016440800158307,
+          "cpu_s": 0.05766782199999998,
+          "cache": "cleared",
+          "verified": true
+        }
+      ],
+      "median_wall_s": 0.06016440800158307,
+      "median_cpu_s": 0.05766782199999998,
+      "profiled_wall_s": 0.07953112298855558,
+      "identical_buffer_cached_run": {
+        "wall_s": 0.053636847995221615,
+        "cpu_s": 0.05237365400000016
+      },
+      "rss_before_mib": 127.78125,
+      "process_peak_rss_mib": 596.12109375,
+      "memory_scope": "process high-water RSS includes imports and capture preparation; not isolated decoder allocations",
+      "verified": true,
+      "matched_expected_pixels": true,
+      "provenance": {
+        "reference": "synthetic seeded single transmission",
+        "seed": 1030,
+        "snr_db_2500": null,
+        "audio_sha256": "8a10602d6b685571781b5b04e498c02354de13ed36566c3c4678953d5007e123",
+        "payload_copies": 1
+      },
+      "measured_snr_db": null,
+      "profile": "work/modem-profile-20261013/resilient_100-clean-payload.prof",
+      "hotspots": [
+        {
+          "file": "profile_experimental_modems.py",
+          "line": 104,
+          "function": "checked",
+          "calls": 1,
+          "self_s": 9.174e-06,
+          "cumulative_s": 0.079456735
+        },
+        {
+          "file": "profile_experimental_modems.py",
+          "line": 95,
+          "function": "<lambda>",
+          "calls": 1,
+          "self_s": 3.541e-06,
+          "cumulative_s": 0.07917729600000001
+        },
+        {
+          "file": "card_backends.py",
+          "line": 149,
+          "function": "decode_payload_copies",
+          "calls": 1,
+          "self_s": 8.2551e-05,
+          "cumulative_s": 0.079173755
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1456,
+          "function": "decode_avatar_copies",
+          "calls": 1,
+          "self_s": 8.824700000000001e-05,
+          "cumulative_s": 0.052406301
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1256,
+          "function": "_announced_avatar_acquisition",
+          "calls": 1,
+          "self_s": 0.031988483000000005,
+          "cumulative_s": 0.036471251
+        },
+        {
+          "file": "numeric.py",
+          "line": 801,
+          "function": "convolve",
+          "calls": 1,
+          "self_s": 7.000000000000001e-06,
+          "cumulative_s": 0.026597398
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method numpy._core._multiarray_umath.correlate>",
+          "calls": 1,
+          "self_s": 0.026588107000000003,
+          "cumulative_s": 0.026588107000000003
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1219,
+          "function": "_avatar_metrics_report",
+          "calls": 1,
+          "self_s": 4.969e-05,
+          "cumulative_s": 0.013337587000000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 860,
+          "function": "decode_minimal_avatar_resilient_symbols",
+          "calls": 1,
+          "self_s": 0.0013109900000000002,
+          "cumulative_s": 0.013280225000000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 496,
+          "function": "_gf64_to_pixels",
+          "calls": 20,
+          "self_s": 0.0023694750000000002,
+          "cumulative_s": 0.005050146
+        },
+        {
+          "file": "fromnumeric.py",
+          "line": 2342,
+          "function": "sum",
+          "calls": 527,
+          "self_s": 0.00068526,
+          "cumulative_s": 0.003369473
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method builtins.sum>",
+          "calls": 2170,
+          "self_s": 0.0016983270000000001,
+          "cumulative_s": 0.003148367
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 831,
+          "function": "_decode_avatar_block_metrics",
+          "calls": 10,
+          "self_s": 0.000220243,
+          "cumulative_s": 0.002555461
+        },
+        {
+          "file": "fromnumeric.py",
+          "line": 66,
+          "function": "_wrapreduction",
+          "calls": 527,
+          "self_s": 0.0008134230000000001,
+          "cumulative_s": 0.002554717
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 325,
+          "function": "_pack_indices",
+          "calls": 1,
+          "self_s": 0.000881418,
+          "cumulative_s": 0.002372681
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<method 'reduce' of 'numpy.ufunc' objects>",
+          "calls": 530,
+          "self_s": 0.0016356970000000002,
+          "cumulative_s": 0.0016356970000000002
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1813,
+          "function": "demodulate_metrics",
+          "calls": 1,
+          "self_s": 0.0014151270000000002,
+          "cumulative_s": 0.0015440640000000002
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<method 'extend' of 'list' objects>",
+          "calls": 1045,
+          "self_s": 0.000753009,
+          "cumulative_s": 0.0014538200000000002
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 501,
+          "function": "<genexpr>",
+          "calls": 8192,
+          "self_s": 0.0012155730000000002,
+          "cumulative_s": 0.0012155730000000002
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method builtins.any>",
+          "calls": 51,
+          "self_s": 0.00047834200000000004,
+          "cumulative_s": 0.0009318400000000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 509,
+          "function": "_tones_to_gf64",
+          "calls": 22,
+          "self_s": 0.000150705,
+          "cumulative_s": 0.00085963
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 122,
+          "function": "crc16",
+          "calls": 13,
+          "self_s": 0.0007914360000000001,
+          "cumulative_s": 0.0007914360000000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 714,
+          "function": "_avatar_data_bytes",
+          "calls": 10,
+          "self_s": 0.000670516,
+          "cumulative_s": 0.00075203
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 330,
+          "function": "<genexpr>",
+          "calls": 4096,
+          "self_s": 0.0007008110000000001,
+          "cumulative_s": 0.0007008110000000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 583,
+          "function": "_decode_avatar_metadata",
+          "calls": 2,
+          "self_s": 5.6469000000000004e-05,
+          "cumulative_s": 0.000690002
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method builtins.next>",
+          "calls": 2,
+          "self_s": 2.0380000000000002e-06,
+          "cumulative_s": 0.000615978
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 867,
+          "function": "<genexpr>",
+          "calls": 2,
+          "self_s": 0.000518234,
+          "cumulative_s": 0.00061394
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 449,
+          "function": "_rs64_decode",
+          "calls": 12,
+          "self_s": 0.00024117800000000001,
+          "cumulative_s": 0.0005807000000000001
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method builtins.max>",
+          "calls": 1071,
+          "self_s": 0.000464721,
+          "cumulative_s": 0.000465577
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 640,
+          "function": "_decode_avatar_metadata_soft",
+          "calls": 1,
+          "self_s": 1.0105e-05,
+          "cumulative_s": 0.000427086
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method numpy.asarray>",
+          "calls": 275,
+          "self_s": 0.000417317,
+          "cumulative_s": 0.000417317
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 515,
+          "function": "_bytes_to_gf64",
+          "calls": 11,
+          "self_s": 0.000146636,
+          "cumulative_s": 0.000373774
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 510,
+          "function": "<genexpr>",
+          "calls": 2670,
+          "self_s": 0.000344282,
+          "cumulative_s": 0.000344282
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method builtins.abs>",
+          "calls": 255,
+          "self_s": 0.000342399,
+          "cumulative_s": 0.000342399
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 521,
+          "function": "_gf64_to_bytes",
+          "calls": 2,
+          "self_s": 0.000277031,
+          "cumulative_s": 0.000301093
+        }
+      ],
+      "environment": {
+        "python": "3.13.6",
+        "numpy": "2.5.3",
+        "scipy": "1.18.1",
+        "machine": "x86_64",
+        "cpu_affinity_count": 8,
+        "load_before": [
+          7.74462890625,
+          5.2724609375,
+          4.70068359375
+        ],
+        "load_after": [
+          7.74462890625,
+          5.2724609375,
+          4.70068359375
+        ]
+      },
+      "commit": "dd76bbf220884989be9bb1d8b5bc896a50b1e97d",
+      "source_hashes": {
+        "cardmodem.py": "926bbf0d0c268f0012cdd0fe51af9f41d56b50bcea2ca3230c3fec4b29024749",
+        "card_backends.py": "a45d1dfcb8b986ebe63183063c8da1d7aebecb7e095af4cfdce151fb284c9f07",
+        "modem_envelope.py": "0c5f59ecc43be87c5da52851e9acd4d02389f0129f43d6eb9a7d0fb743e969c2",
+        "snr.py": "989ed26ddc81de337d0e3ccb9c401712b1cba6204ba631b1d1c4a0d87c6bb1b9",
+        "backend_adapters.py": "2aae1e8d1649ae3226353aa2a496077f701774f06971eb4efad9f2867f114528"
+      }
+    },
+    {
+      "mode": "resilient_50",
+      "scenario": "awgn",
+      "pipeline": "full",
+      "sample_rate": 48000,
+      "audio_s": 32.35666666666667,
+      "runs": [
+        {
+          "wall_s": 2.5033430789771955,
+          "cpu_s": 2.495528886,
+          "cache": "cleared",
+          "verified": true
+        },
+        {
+          "wall_s": 2.5328720590041485,
+          "cpu_s": 2.5315531090000003,
+          "cache": "cleared",
+          "verified": true
+        },
+        {
+          "wall_s": 3.8126627349993214,
+          "cpu_s": 3.3370295949999997,
+          "cache": "cleared",
+          "verified": true
+        }
+      ],
+      "median_wall_s": 2.5328720590041485,
+      "median_cpu_s": 2.5315531090000003,
+      "profiled_wall_s": 4.198351516010007,
+      "identical_buffer_cached_run": {
+        "wall_s": 1.5333603260223754,
+        "cpu_s": 1.1993755840000002
+      },
+      "rss_before_mib": 115.4453125,
+      "process_peak_rss_mib": 596.12109375,
+      "memory_scope": "process high-water RSS includes imports and capture preparation; not isolated decoder allocations",
+      "verified": true,
+      "matched_expected_pixels": true,
+      "provenance": {
+        "reference": "synthetic seeded single transmission",
+        "seed": 1030,
+        "snr_db_2500": -6,
+        "audio_sha256": "35883c917aaf16770722cda68efb8022ae1d432aa13f30f08bd03d5f1de04fb8"
+      },
+      "measured_snr_db": -5,
+      "profile": "work/modem-profile-20261013/resilient_50-awgn-full.prof",
+      "hotspots": [
+        {
+          "file": "profile_experimental_modems.py",
+          "line": 106,
+          "function": "checked",
+          "calls": 1,
+          "self_s": 1.2790000000000001e-05,
+          "cumulative_s": 4.198272359000001
+        },
+        {
+          "file": "profile_experimental_modems.py",
+          "line": 100,
+          "function": "decode",
+          "calls": 1,
+          "self_s": 5.244e-06,
+          "cumulative_s": 4.197877775
+        },
+        {
+          "file": "backend_adapters.py",
+          "line": 248,
+          "function": "decode_capture",
+          "calls": 1,
+          "self_s": 1.3667000000000001e-05,
+          "cumulative_s": 4.197872531000001
+        },
+        {
+          "file": "card_backends.py",
+          "line": 468,
+          "function": "decode",
+          "calls": 1,
+          "self_s": 1.4374000000000002e-05,
+          "cumulative_s": 4.197851831
+        },
+        {
+          "file": "modem_envelope.py",
+          "line": 501,
+          "function": "decode_capture",
+          "calls": 1,
+          "self_s": 0.0028003190000000003,
+          "cumulative_s": 4.197836651
+        },
+        {
+          "file": "card_backends.py",
+          "line": 472,
+          "function": "<lambda>",
+          "calls": 1,
+          "self_s": 5.245000000000001e-06,
+          "cumulative_s": 3.010737885
+        },
+        {
+          "file": "card_backends.py",
+          "line": 149,
+          "function": "decode_payload_copies",
+          "calls": 1,
+          "self_s": 8.5685e-05,
+          "cumulative_s": 3.01073264
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1456,
+          "function": "decode_avatar_copies",
+          "calls": 1,
+          "self_s": 0.002058613,
+          "cumulative_s": 2.9706984690000002
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1219,
+          "function": "_avatar_metrics_report",
+          "calls": 9,
+          "self_s": 0.0007881440000000001,
+          "cumulative_s": 1.335275653
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 860,
+          "function": "decode_minimal_avatar_resilient_symbols",
+          "calls": 9,
+          "self_s": 0.012501660000000001,
+          "cumulative_s": 1.3343713480000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 831,
+          "function": "_decode_avatar_block_metrics",
+          "calls": 83,
+          "self_s": 0.0033031280000000002,
+          "cumulative_s": 1.2627236880000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 781,
+          "function": "_decode_soft_avatar_block",
+          "calls": 60,
+          "self_s": 0.23899465500000003,
+          "cumulative_s": 1.236373986
+        },
+        {
+          "file": "modem_envelope.py",
+          "line": 336,
+          "function": "find_copies",
+          "calls": 1,
+          "self_s": 0.07190482000000001,
+          "cumulative_s": 1.18158979
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 784,
+          "function": "checked",
+          "calls": 4155,
+          "self_s": 0.012321581000000002,
+          "cumulative_s": 0.9565667560000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 640,
+          "function": "_decode_avatar_metadata_soft",
+          "calls": 38,
+          "self_s": 0.09802443400000001,
+          "cumulative_s": 0.9178198230000001
+        },
+        {
+          "file": "_backend.py",
+          "line": 19,
+          "function": "__ua_function__",
+          "calls": 7,
+          "self_s": 5.834e-05,
+          "cumulative_s": 0.794676174
+        },
+        {
+          "file": "_basic_backend.py",
+          "line": 27,
+          "function": "_execute_1D",
+          "calls": 7,
+          "self_s": 8.9221e-05,
+          "cumulative_s": 0.794582408
+        },
+        {
+          "file": "basic.py",
+          "line": 11,
+          "function": "c2c",
+          "calls": 7,
+          "self_s": 9.2612e-05,
+          "cumulative_s": 0.7944834030000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 583,
+          "function": "_decode_avatar_metadata",
+          "calls": 2447,
+          "self_s": 0.017467568000000003,
+          "cumulative_s": 0.792921977
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 656,
+          "function": "check",
+          "calls": 2400,
+          "self_s": 0.009453708,
+          "cumulative_s": 0.787325672
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method scipy.fft._duccfft.pyduccfft.c2c>",
+          "calls": 7,
+          "self_s": 0.786427223,
+          "cumulative_s": 0.786427223
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1279,
+          "function": "_recover_avatar_blocks_with_local_timing",
+          "calls": 1,
+          "self_s": 0.039182022000000004,
+          "cumulative_s": 0.6355094170000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1813,
+          "function": "demodulate_metrics",
+          "calls": 1421,
+          "self_s": 0.460875175,
+          "cumulative_s": 0.557012232
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 449,
+          "function": "_rs64_decode",
+          "calls": 6685,
+          "self_s": 0.27693469000000004,
+          "cumulative_s": 0.53488022
+        },
+        {
+          "file": "_basic_backend.py",
+          "line": 83,
+          "function": "ifft",
+          "calls": 3,
+          "self_s": 1.1282000000000001e-05,
+          "cumulative_s": 0.48881123200000004
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 122,
+          "function": "crc16",
+          "calls": 6379,
+          "self_s": 0.43616257300000005,
+          "cumulative_s": 0.43616257300000005
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 714,
+          "function": "_avatar_data_bytes",
+          "calls": 4097,
+          "self_s": 0.315035298,
+          "cumulative_s": 0.35227105000000003
+        },
+        {
+          "file": "_basic_backend.py",
+          "line": 77,
+          "function": "fft",
+          "calls": 4,
+          "self_s": 1.4628000000000001e-05,
+          "cumulative_s": 0.305797086
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 521,
+          "function": "_gf64_to_bytes",
+          "calls": 2275,
+          "self_s": 0.280572455,
+          "cumulative_s": 0.30180004800000004
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method builtins.any>",
+          "calls": 16035,
+          "self_s": 0.11996947300000001,
+          "cumulative_s": 0.233770061
+        },
+        {
+          "file": "modem_envelope.py",
+          "line": 268,
+          "function": "_header_metrics",
+          "calls": 138,
+          "self_s": 0.029076266000000003,
+          "cumulative_s": 0.17601021700000002
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 425,
+          "function": "_gf64_mul",
+          "calls": 821547,
+          "self_s": 0.12253863300000001,
+          "cumulative_s": 0.12253863300000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 509,
+          "function": "_tones_to_gf64",
+          "calls": 2630,
+          "self_s": 0.022413267,
+          "cumulative_s": 0.12160167300000001
+        },
+        {
+          "file": "_function_base_impl.py",
+          "line": 1549,
+          "function": "interp",
+          "calls": 138,
+          "self_s": 0.00099205,
+          "cumulative_s": 0.09744862600000001
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method numpy._core._multiarray_umath.interp_complex>",
+          "calls": 138,
+          "self_s": 0.095917633,
+          "cumulative_s": 0.095917633
+        }
+      ],
+      "environment": {
+        "python": "3.13.6",
+        "numpy": "2.5.3",
+        "scipy": "1.18.1",
+        "machine": "x86_64",
+        "cpu_affinity_count": 8,
+        "load_before": [
+          7.17236328125,
+          6.208984375,
+          5.1455078125
+        ],
+        "load_after": [
+          8.66943359375,
+          6.5908203125,
+          5.2880859375
+        ]
+      },
+      "commit": "dd76bbf220884989be9bb1d8b5bc896a50b1e97d",
+      "source_hashes": {
+        "cardmodem.py": "926bbf0d0c268f0012cdd0fe51af9f41d56b50bcea2ca3230c3fec4b29024749",
+        "card_backends.py": "a45d1dfcb8b986ebe63183063c8da1d7aebecb7e095af4cfdce151fb284c9f07",
+        "modem_envelope.py": "0c5f59ecc43be87c5da52851e9acd4d02389f0129f43d6eb9a7d0fb743e969c2",
+        "experimental_fec.py": "f2d63130b5ce01ba7b609f5e00315ffc699587194cd20e35e27b9573888b07e2",
+        "snr.py": "989ed26ddc81de337d0e3ccb9c401712b1cba6204ba631b1d1c4a0d87c6bb1b9",
+        "backend_adapters.py": "2aae1e8d1649ae3226353aa2a496077f701774f06971eb4efad9f2867f114528"
+      }
+    },
+    {
+      "mode": "resilient_50",
+      "scenario": "clean",
+      "pipeline": "full",
+      "sample_rate": 48000,
+      "audio_s": 32.35666666666667,
+      "runs": [
+        {
+          "wall_s": 4.283365409006365,
+          "cpu_s": 4.27758798,
+          "cache": "cleared",
+          "verified": true
+        },
+        {
+          "wall_s": 4.111575632006861,
+          "cpu_s": 4.0258333429999995,
+          "cache": "cleared",
+          "verified": true
+        },
+        {
+          "wall_s": 4.024092726001982,
+          "cpu_s": 4.015098604,
+          "cache": "cleared",
+          "verified": true
+        }
+      ],
+      "median_wall_s": 4.111575632006861,
+      "median_cpu_s": 4.0258333429999995,
+      "profiled_wall_s": 5.627876741986256,
+      "identical_buffer_cached_run": {
+        "wall_s": 1.0392333450145088,
+        "cpu_s": 1.0011814020000003
+      },
+      "rss_before_mib": 115.546875,
+      "process_peak_rss_mib": 547.2734375,
+      "memory_scope": "process high-water RSS includes imports and capture preparation; not isolated decoder allocations",
+      "verified": true,
+      "matched_expected_pixels": true,
+      "provenance": {
+        "reference": "synthetic seeded single transmission",
+        "seed": 1030,
+        "snr_db_2500": null,
+        "audio_sha256": "1c7ef6ceb61b29704f158987a4c8f323bf30e1e83931eb26fe92658a00bec45e"
+      },
+      "measured_snr_db": 43,
+      "profile": "work/modem-profile-20261013/resilient_50-clean-full.prof",
+      "hotspots": [
+        {
+          "file": "profile_experimental_modems.py",
+          "line": 106,
+          "function": "checked",
+          "calls": 1,
+          "self_s": 1.535e-05,
+          "cumulative_s": 5.627798128
+        },
+        {
+          "file": "profile_experimental_modems.py",
+          "line": 100,
+          "function": "decode",
+          "calls": 1,
+          "self_s": 4.997000000000001e-06,
+          "cumulative_s": 5.6274167440000005
+        },
+        {
+          "file": "backend_adapters.py",
+          "line": 248,
+          "function": "decode_capture",
+          "calls": 1,
+          "self_s": 2.9921e-05,
+          "cumulative_s": 5.627411747
+        },
+        {
+          "file": "card_backends.py",
+          "line": 468,
+          "function": "decode",
+          "calls": 1,
+          "self_s": 1.2158000000000001e-05,
+          "cumulative_s": 5.627374089
+        },
+        {
+          "file": "modem_envelope.py",
+          "line": 501,
+          "function": "decode_capture",
+          "calls": 1,
+          "self_s": 0.0026100420000000004,
+          "cumulative_s": 5.627361066000001
+        },
+        {
+          "file": "card_backends.py",
+          "line": 472,
+          "function": "<lambda>",
+          "calls": 1,
+          "self_s": 3.801e-06,
+          "cumulative_s": 4.640205195
+        },
+        {
+          "file": "card_backends.py",
+          "line": 149,
+          "function": "decode_payload_copies",
+          "calls": 1,
+          "self_s": 7.0951e-05,
+          "cumulative_s": 4.640201394
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1456,
+          "function": "decode_avatar_copies",
+          "calls": 1,
+          "self_s": 0.002271658,
+          "cumulative_s": 4.596491168
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1219,
+          "function": "_avatar_metrics_report",
+          "calls": 21,
+          "self_s": 0.0016779350000000002,
+          "cumulative_s": 3.4645251360000002
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 860,
+          "function": "decode_minimal_avatar_resilient_symbols",
+          "calls": 21,
+          "self_s": 0.03079749,
+          "cumulative_s": 3.46258728
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 831,
+          "function": "_decode_avatar_block_metrics",
+          "calls": 191,
+          "self_s": 0.008446507,
+          "cumulative_s": 3.300110665
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 781,
+          "function": "_decode_soft_avatar_block",
+          "calls": 144,
+          "self_s": 0.537010575,
+          "cumulative_s": 3.235853656
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 784,
+          "function": "checked",
+          "calls": 11664,
+          "self_s": 0.029942037,
+          "cumulative_s": 2.6077473390000003
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 449,
+          "function": "_rs64_decode",
+          "calls": 13354,
+          "self_s": 0.5169489030000001,
+          "cumulative_s": 1.0044678360000001
+        },
+        {
+          "file": "modem_envelope.py",
+          "line": 336,
+          "function": "find_copies",
+          "calls": 1,
+          "self_s": 0.049487461,
+          "cumulative_s": 0.9819963460000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 714,
+          "function": "_avatar_data_bytes",
+          "calls": 11390,
+          "self_s": 0.8462719160000001,
+          "cumulative_s": 0.9493660410000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 122,
+          "function": "crc16",
+          "calls": 12835,
+          "self_s": 0.889073301,
+          "cumulative_s": 0.889073301
+        },
+        {
+          "file": "_backend.py",
+          "line": 19,
+          "function": "__ua_function__",
+          "calls": 7,
+          "self_s": 4.5616000000000005e-05,
+          "cumulative_s": 0.744251953
+        },
+        {
+          "file": "_basic_backend.py",
+          "line": 27,
+          "function": "_execute_1D",
+          "calls": 7,
+          "self_s": 8.5269e-05,
+          "cumulative_s": 0.744175547
+        },
+        {
+          "file": "basic.py",
+          "line": 11,
+          "function": "c2c",
+          "calls": 7,
+          "self_s": 7.930200000000001e-05,
+          "cumulative_s": 0.7440826100000001
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method scipy.fft._duccfft.pyduccfft.c2c>",
+          "calls": 7,
+          "self_s": 0.736424046,
+          "cumulative_s": 0.736424046
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 640,
+          "function": "_decode_avatar_metadata_soft",
+          "calls": 38,
+          "self_s": 0.054885923,
+          "cumulative_s": 0.538956533
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1279,
+          "function": "_recover_avatar_blocks_with_local_timing",
+          "calls": 1,
+          "self_s": 0.028946867,
+          "cumulative_s": 0.481096528
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 583,
+          "function": "_decode_avatar_metadata",
+          "calls": 1499,
+          "self_s": 0.009798842,
+          "cumulative_s": 0.47408680500000006
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 656,
+          "function": "check",
+          "calls": 1440,
+          "self_s": 0.004698425,
+          "cumulative_s": 0.46059546
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1813,
+          "function": "demodulate_metrics",
+          "calls": 1421,
+          "self_s": 0.367527435,
+          "cumulative_s": 0.440151964
+        },
+        {
+          "file": "_basic_backend.py",
+          "line": 83,
+          "function": "ifft",
+          "calls": 3,
+          "self_s": 9.368e-06,
+          "cumulative_s": 0.38117904700000005
+        },
+        {
+          "file": "_basic_backend.py",
+          "line": 77,
+          "function": "fft",
+          "calls": 4,
+          "self_s": 1.2875000000000001e-05,
+          "cumulative_s": 0.36301874300000003
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method builtins.any>",
+          "calls": 28524,
+          "self_s": 0.165156132,
+          "cumulative_s": 0.3229188
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 425,
+          "function": "_gf64_mul",
+          "calls": 1645035,
+          "self_s": 0.232424388,
+          "cumulative_s": 0.232424388
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 521,
+          "function": "_gf64_to_bytes",
+          "calls": 1428,
+          "self_s": 0.164941056,
+          "cumulative_s": 0.17759851000000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 454,
+          "function": "<genexpr>",
+          "calls": 854656,
+          "self_s": 0.12017575400000001,
+          "cumulative_s": 0.12017575400000001
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<method 'append' of 'bytearray' objects>",
+          "calls": 586032,
+          "self_s": 0.108467013,
+          "cumulative_s": 0.108467013
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 509,
+          "function": "_tones_to_gf64",
+          "calls": 1922,
+          "self_s": 0.016046024000000002,
+          "cumulative_s": 0.088087013
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 496,
+          "function": "_gf64_to_pixels",
+          "calls": 256,
+          "self_s": 0.035174632000000004,
+          "cumulative_s": 0.074333311
+        }
+      ],
+      "environment": {
+        "python": "3.13.6",
+        "numpy": "2.5.3",
+        "scipy": "1.18.1",
+        "machine": "x86_64",
+        "cpu_affinity_count": 8,
+        "load_before": [
+          8.65087890625,
+          6.33984375,
+          5.150390625
+        ],
+        "load_after": [
+          8.02587890625,
+          6.3359375,
+          5.17431640625
+        ]
+      },
+      "commit": "dd76bbf220884989be9bb1d8b5bc896a50b1e97d",
+      "source_hashes": {
+        "cardmodem.py": "926bbf0d0c268f0012cdd0fe51af9f41d56b50bcea2ca3230c3fec4b29024749",
+        "card_backends.py": "a45d1dfcb8b986ebe63183063c8da1d7aebecb7e095af4cfdce151fb284c9f07",
+        "modem_envelope.py": "0c5f59ecc43be87c5da52851e9acd4d02389f0129f43d6eb9a7d0fb743e969c2",
+        "experimental_fec.py": "f2d63130b5ce01ba7b609f5e00315ffc699587194cd20e35e27b9573888b07e2",
+        "snr.py": "989ed26ddc81de337d0e3ccb9c401712b1cba6204ba631b1d1c4a0d87c6bb1b9",
+        "backend_adapters.py": "2aae1e8d1649ae3226353aa2a496077f701774f06971eb4efad9f2867f114528"
+      }
+    },
+    {
+      "mode": "resilient_50",
+      "scenario": "clean",
+      "pipeline": "payload",
+      "sample_rate": 48000,
+      "audio_s": 32.35666666666667,
+      "runs": [
+        {
+          "wall_s": 2.262939800013555,
+          "cpu_s": 2.262691999,
+          "cache": "cleared",
+          "verified": true
+        },
+        {
+          "wall_s": 2.261755774001358,
+          "cpu_s": 2.261576455,
+          "cache": "cleared",
+          "verified": true
+        },
+        {
+          "wall_s": 2.184259708999889,
+          "cpu_s": 2.184203134999999,
+          "cache": "cleared",
+          "verified": true
+        }
+      ],
+      "median_wall_s": 2.261755774001358,
+      "median_cpu_s": 2.261576455,
+      "profiled_wall_s": 3.176998597016791,
+      "identical_buffer_cached_run": {
+        "wall_s": 0.031811083026695997,
+        "cpu_s": 0.031811016999999
+      },
+      "rss_before_mib": 144.29296875,
+      "process_peak_rss_mib": 450.5234375,
+      "memory_scope": "process high-water RSS includes imports and capture preparation; not isolated decoder allocations",
+      "verified": true,
+      "matched_expected_pixels": true,
+      "provenance": {
+        "reference": "synthetic seeded single transmission",
+        "seed": 1030,
+        "snr_db_2500": null,
+        "audio_sha256": "1c7ef6ceb61b29704f158987a4c8f323bf30e1e83931eb26fe92658a00bec45e",
+        "payload_copies": 1
+      },
+      "measured_snr_db": null,
+      "profile": "work/modem-profile-20261013/resilient_50-clean-payload.prof",
+      "hotspots": [
+        {
+          "file": "profile_experimental_modems.py",
+          "line": 106,
+          "function": "checked",
+          "calls": 1,
+          "self_s": 8.624e-06,
+          "cumulative_s": 3.1769422150000004
+        },
+        {
+          "file": "profile_experimental_modems.py",
+          "line": 97,
+          "function": "<lambda>",
+          "calls": 1,
+          "self_s": 1.855e-06,
+          "cumulative_s": 3.176678636
+        },
+        {
+          "file": "card_backends.py",
+          "line": 149,
+          "function": "decode_payload_copies",
+          "calls": 1,
+          "self_s": 5.3822e-05,
+          "cumulative_s": 3.1766767810000003
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1456,
+          "function": "decode_avatar_copies",
+          "calls": 1,
+          "self_s": 0.001297919,
+          "cumulative_s": 3.151668206
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1219,
+          "function": "_avatar_metrics_report",
+          "calls": 21,
+          "self_s": 0.001099561,
+          "cumulative_s": 2.390841774
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 860,
+          "function": "decode_minimal_avatar_resilient_symbols",
+          "calls": 21,
+          "self_s": 0.020121383,
+          "cumulative_s": 2.389570891
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 831,
+          "function": "_decode_avatar_block_metrics",
+          "calls": 191,
+          "self_s": 0.005062074000000001,
+          "cumulative_s": 2.271516773
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 781,
+          "function": "_decode_soft_avatar_block",
+          "calls": 144,
+          "self_s": 0.37089195700000005,
+          "cumulative_s": 2.226199669
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 784,
+          "function": "checked",
+          "calls": 11664,
+          "self_s": 0.018643335,
+          "cumulative_s": 1.7951940640000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 449,
+          "function": "_rs64_decode",
+          "calls": 13354,
+          "self_s": 0.357038254,
+          "cumulative_s": 0.7096809030000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 714,
+          "function": "_avatar_data_bytes",
+          "calls": 11390,
+          "self_s": 0.579486932,
+          "cumulative_s": 0.6558819650000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 122,
+          "function": "crc16",
+          "calls": 12835,
+          "self_s": 0.579038154,
+          "cumulative_s": 0.579038154
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1279,
+          "function": "_recover_avatar_blocks_with_local_timing",
+          "calls": 1,
+          "self_s": 0.022427279,
+          "cumulative_s": 0.367523429
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 640,
+          "function": "_decode_avatar_metadata_soft",
+          "calls": 38,
+          "self_s": 0.031605784000000005,
+          "cumulative_s": 0.328036463
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1813,
+          "function": "demodulate_metrics",
+          "calls": 1421,
+          "self_s": 0.265845736,
+          "cumulative_s": 0.322683237
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 583,
+          "function": "_decode_avatar_metadata",
+          "calls": 1499,
+          "self_s": 0.005067502000000001,
+          "cumulative_s": 0.291705357
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 656,
+          "function": "check",
+          "calls": 1440,
+          "self_s": 0.002289969,
+          "cumulative_s": 0.28163640500000003
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method builtins.any>",
+          "calls": 28212,
+          "self_s": 0.12365966900000001,
+          "cumulative_s": 0.23281889300000003
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 425,
+          "function": "_gf64_mul",
+          "calls": 1645035,
+          "self_s": 0.165029943,
+          "cumulative_s": 0.165029943
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 521,
+          "function": "_gf64_to_bytes",
+          "calls": 1424,
+          "self_s": 0.09862833600000001,
+          "cumulative_s": 0.10699140700000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 454,
+          "function": "<genexpr>",
+          "calls": 854656,
+          "self_s": 0.08583223000000001,
+          "cumulative_s": 0.08583223000000001
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<method 'append' of 'bytearray' objects>",
+          "calls": 585912,
+          "self_s": 0.079798729,
+          "cumulative_s": 0.079798729
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 509,
+          "function": "_tones_to_gf64",
+          "calls": 1900,
+          "self_s": 0.008875267000000001,
+          "cumulative_s": 0.057742566
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 496,
+          "function": "_gf64_to_pixels",
+          "calls": 256,
+          "self_s": 0.026016306000000003,
+          "cumulative_s": 0.057068108000000006
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method builtins.sum>",
+          "calls": 28854,
+          "self_s": 0.02005707,
+          "cumulative_s": 0.036160325
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1256,
+          "function": "_announced_avatar_acquisition",
+          "calls": 1,
+          "self_s": 0.031856518,
+          "cumulative_s": 0.035501962000000005
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method numpy.asarray>",
+          "calls": 16204,
+          "self_s": 0.032966584,
+          "cumulative_s": 0.032966584
+        },
+        {
+          "file": "fromnumeric.py",
+          "line": 1115,
+          "function": "argsort",
+          "calls": 10152,
+          "self_s": 0.006831951,
+          "cumulative_s": 0.031741641
+        },
+        {
+          "file": "fromnumeric.py",
+          "line": 48,
+          "function": "_wrapfunc",
+          "calls": 12865,
+          "self_s": 0.007268164000000001,
+          "cumulative_s": 0.030740330000000003
+        },
+        {
+          "file": "numeric.py",
+          "line": 801,
+          "function": "convolve",
+          "calls": 1,
+          "self_s": 5.9090000000000005e-06,
+          "cumulative_s": 0.024898288
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method numpy._core._multiarray_umath.correlate>",
+          "calls": 1,
+          "self_s": 0.024891100000000003,
+          "cumulative_s": 0.024891100000000003
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 510,
+          "function": "<genexpr>",
+          "calls": 230638,
+          "self_s": 0.022906898000000002,
+          "cumulative_s": 0.022906898000000002
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<method 'argsort' of 'numpy.ndarray' objects>",
+          "calls": 10152,
+          "self_s": 0.017956419,
+          "cumulative_s": 0.017956419
+        },
+        {
+          "file": "fromnumeric.py",
+          "line": 3737,
+          "function": "mean",
+          "calls": 1421,
+          "self_s": 0.002990857,
+          "cumulative_s": 0.017825834000000002
+        },
+        {
+          "file": "_arraysetops_impl.py",
+          "line": 145,
+          "function": "unique",
+          "calls": 1421,
+          "self_s": 0.0026398610000000003,
+          "cumulative_s": 0.017284135000000003
+        }
+      ],
+      "environment": {
+        "python": "3.13.6",
+        "numpy": "2.5.3",
+        "scipy": "1.18.1",
+        "machine": "x86_64",
+        "cpu_affinity_count": 8,
+        "load_before": [
+          8.02587890625,
+          6.3359375,
+          5.17431640625
+        ],
+        "load_after": [
+          7.17236328125,
+          6.208984375,
+          5.1455078125
+        ]
+      },
+      "commit": "dd76bbf220884989be9bb1d8b5bc896a50b1e97d",
+      "source_hashes": {
+        "cardmodem.py": "926bbf0d0c268f0012cdd0fe51af9f41d56b50bcea2ca3230c3fec4b29024749",
+        "card_backends.py": "a45d1dfcb8b986ebe63183063c8da1d7aebecb7e095af4cfdce151fb284c9f07",
+        "modem_envelope.py": "0c5f59ecc43be87c5da52851e9acd4d02389f0129f43d6eb9a7d0fb743e969c2",
+        "experimental_fec.py": "f2d63130b5ce01ba7b609f5e00315ffc699587194cd20e35e27b9573888b07e2",
+        "snr.py": "989ed26ddc81de337d0e3ccb9c401712b1cba6204ba631b1d1c4a0d87c6bb1b9",
+        "backend_adapters.py": "2aae1e8d1649ae3226353aa2a496077f701774f06971eb4efad9f2867f114528"
+      }
+    },
+    {
+      "mode": "resilient_50",
+      "scenario": "saved-hf",
+      "pipeline": "payload",
+      "sample_rate": 8000,
+      "audio_s": 57.32,
+      "runs": [
+        {
+          "wall_s": 15.363095078995684,
+          "cpu_s": 14.499824308,
+          "cache": "cleared",
+          "verified": true
+        },
+        {
+          "wall_s": 14.539265133003937,
+          "cpu_s": 14.109773422000002,
+          "cache": "cleared",
+          "verified": true
+        },
+        {
+          "wall_s": 14.479556122998474,
+          "cpu_s": 13.876784315999998,
+          "cache": "cleared",
+          "verified": true
+        }
+      ],
+      "median_wall_s": 14.539265133003937,
+      "median_cpu_s": 14.109773422000002,
+      "profiled_wall_s": 21.294680826977128,
+      "identical_buffer_cached_run": {
+        "wall_s": 0.0072262379981111735,
+        "cpu_s": 0.007219410999994125
+      },
+      "rss_before_mib": 114.4921875,
+      "process_peak_rss_mib": 596.12109375,
+      "memory_scope": "process high-water RSS includes imports and capture preparation; not isolated decoder allocations",
+      "verified": true,
+      "matched_expected_pixels": true,
+      "provenance": {
+        "recording": "/home/tyler/dev/cardmodem/pixelqso-source/work/rx-analysis-20261012/mode-scan-2080.0-2237.0.f16",
+        "sha256": "43cd03d80dfd0f4ca1dcff3e983ea5406b34b0e34e5dae5682db8eb49c047a8a",
+        "physical_copies": 2,
+        "reference": "saved HF capture; no new RF reception"
+      },
+      "measured_snr_db": null,
+      "profile": "work/modem-profile-20261013/resilient_50-saved-hf-payload.prof",
+      "hotspots": [
+        {
+          "file": "profile_experimental_modems.py",
+          "line": 104,
+          "function": "checked",
+          "calls": 1,
+          "self_s": 1.1849000000000001e-05,
+          "cumulative_s": 21.294586452
+        },
+        {
+          "file": "profile_experimental_modems.py",
+          "line": 78,
+          "function": "<lambda>",
+          "calls": 1,
+          "self_s": 3.7590000000000003e-06,
+          "cumulative_s": 21.294253032
+        },
+        {
+          "file": "card_backends.py",
+          "line": 149,
+          "function": "decode_payload_copies",
+          "calls": 1,
+          "self_s": 2.0114e-05,
+          "cumulative_s": 21.294249273000002
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1456,
+          "function": "decode_avatar_copies",
+          "calls": 1,
+          "self_s": 0.006190520000000001,
+          "cumulative_s": 21.294224272
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1279,
+          "function": "_recover_avatar_blocks_with_local_timing",
+          "calls": 1,
+          "self_s": 0.667228724,
+          "cumulative_s": 12.194138345
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 831,
+          "function": "_decode_avatar_block_metrics",
+          "calls": 380,
+          "self_s": 0.018955929,
+          "cumulative_s": 9.214622092
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 781,
+          "function": "_decode_soft_avatar_block",
+          "calls": 362,
+          "self_s": 1.541830633,
+          "cumulative_s": 9.080202677
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1813,
+          "function": "demodulate_metrics",
+          "calls": 25439,
+          "self_s": 7.303541455,
+          "cumulative_s": 8.907912298000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1219,
+          "function": "_avatar_metrics_report",
+          "calls": 33,
+          "self_s": 0.0026721320000000002,
+          "cumulative_s": 7.645354756000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 860,
+          "function": "decode_minimal_avatar_resilient_symbols",
+          "calls": 33,
+          "self_s": 0.051458563000000006,
+          "cumulative_s": 7.6423087910000005
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 784,
+          "function": "checked",
+          "calls": 28798,
+          "self_s": 0.107160747,
+          "cumulative_s": 7.27771141
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 449,
+          "function": "_rs64_decode",
+          "calls": 31744,
+          "self_s": 1.3789737930000001,
+          "cumulative_s": 2.6875549760000004
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 714,
+          "function": "_avatar_data_bytes",
+          "calls": 28231,
+          "self_s": 2.38583678,
+          "cumulative_s": 2.667530203
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 122,
+          "function": "crc16",
+          "calls": 30653,
+          "self_s": 2.3334699750000003,
+          "cumulative_s": 2.3334699750000003
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 640,
+          "function": "_decode_avatar_metadata_soft",
+          "calls": 62,
+          "self_s": 0.12872007100000002,
+          "cumulative_s": 1.0804041420000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 583,
+          "function": "_decode_avatar_metadata",
+          "calls": 2566,
+          "self_s": 0.022442641000000003,
+          "cumulative_s": 0.9258814240000001
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 656,
+          "function": "check",
+          "calls": 2471,
+          "self_s": 0.01149675,
+          "cumulative_s": 0.902258188
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method builtins.any>",
+          "calls": 66524,
+          "self_s": 0.417903774,
+          "cumulative_s": 0.815349713
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 425,
+          "function": "_gf64_mul",
+          "calls": 3928044,
+          "self_s": 0.631996851,
+          "cumulative_s": 0.631996851
+        },
+        {
+          "file": "_arraysetops_impl.py",
+          "line": 145,
+          "function": "unique",
+          "calls": 25439,
+          "self_s": 0.076398192,
+          "cumulative_s": 0.49586513400000004
+        },
+        {
+          "file": "fromnumeric.py",
+          "line": 3737,
+          "function": "mean",
+          "calls": 25354,
+          "self_s": 0.082844768,
+          "cumulative_s": 0.48370979000000003
+        },
+        {
+          "file": "numeric.py",
+          "line": 675,
+          "function": "flatnonzero",
+          "calls": 50907,
+          "self_s": 0.131492375,
+          "cumulative_s": 0.463729259
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method numpy.arange>",
+          "calls": 156615,
+          "self_s": 0.40556846100000005,
+          "cumulative_s": 0.40556846100000005
+        },
+        {
+          "file": "_methods.py",
+          "line": 115,
+          "function": "_mean",
+          "calls": 25354,
+          "self_s": 0.15517995,
+          "cumulative_s": 0.400865022
+        },
+        {
+          "file": "_arraysetops_impl.py",
+          "line": 350,
+          "function": "_unique1d",
+          "calls": 25439,
+          "self_s": 0.161560916,
+          "cumulative_s": 0.39819697800000003
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 521,
+          "function": "_gf64_to_bytes",
+          "calls": 2389,
+          "self_s": 0.32539917100000004,
+          "cumulative_s": 0.348683208
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<built-in method numpy.asarray>",
+          "calls": 150909,
+          "self_s": 0.31481026700000003,
+          "cumulative_s": 0.31481026700000003
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 454,
+          "function": "<genexpr>",
+          "calls": 2031616,
+          "self_s": 0.312962691,
+          "cumulative_s": 0.312962691
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<method 'append' of 'bytearray' objects>",
+          "calls": 1401756,
+          "self_s": 0.28490208300000003,
+          "cumulative_s": 0.28490208300000003
+        },
+        {
+          "file": "fromnumeric.py",
+          "line": 48,
+          "function": "_wrapfunc",
+          "calls": 75853,
+          "self_s": 0.07900947400000001,
+          "cumulative_s": 0.254933423
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<method 'reduce' of 'numpy.ufunc' objects>",
+          "calls": 52265,
+          "self_s": 0.24963606700000002,
+          "cumulative_s": 0.24963606700000002
+        },
+        {
+          "file": "~",
+          "line": 0,
+          "function": "<method 'sum' of 'numpy.ndarray' objects>",
+          "calls": 25796,
+          "self_s": 0.047638212000000006,
+          "cumulative_s": 0.230523687
+        },
+        {
+          "file": "cardmodem.py",
+          "line": 1256,
+          "function": "_announced_avatar_acquisition",
+          "calls": 2,
+          "self_s": 0.163969574,
+          "cumulative_s": 0.18499741900000002
+        },
+        {
+          "file": "fromnumeric.py",
+          "line": 2031,
+          "function": "nonzero",
+          "calls": 50907,
+          "self_s": 0.038388365,
+          "cumulative_s": 0.18337560600000002
+        },
+        {
+          "file": "_methods.py",
+          "line": 47,
+          "function": "_sum",
+          "calls": 25796,
+          "self_s": 0.016175229,
+          "cumulative_s": 0.18288547500000002
+        }
+      ],
+      "environment": {
+        "python": "3.13.6",
+        "numpy": "2.5.3",
+        "scipy": "1.18.1",
+        "machine": "x86_64",
+        "cpu_affinity_count": 8,
+        "load_before": [
+          7.3134765625,
+          5.4580078125,
+          4.78564453125
+        ],
+        "load_after": [
+          9.49658203125,
+          6.419921875,
+          5.1630859375
+        ]
+      },
+      "commit": "dd76bbf220884989be9bb1d8b5bc896a50b1e97d",
+      "source_hashes": {
+        "cardmodem.py": "926bbf0d0c268f0012cdd0fe51af9f41d56b50bcea2ca3230c3fec4b29024749",
+        "card_backends.py": "a45d1dfcb8b986ebe63183063c8da1d7aebecb7e095af4cfdce151fb284c9f07",
+        "modem_envelope.py": "0c5f59ecc43be87c5da52851e9acd4d02389f0129f43d6eb9a7d0fb743e969c2",
+        "snr.py": "989ed26ddc81de337d0e3ccb9c401712b1cba6204ba631b1d1c4a0d87c6bb1b9",
+        "backend_adapters.py": "2aae1e8d1649ae3226353aa2a496077f701774f06971eb4efad9f2867f114528"
+      }
+    }
+  ],
+  "failed_case": {
+    "mode": "resilient_100",
+    "scenario": "awgn",
+    "snr_db_2500": -6,
+    "seed": 1030,
+    "pipeline": "full",
+    "error": "no CRC-valid avatar identity after soft recovery",
+    "timing_recorded": false
+  }
+}

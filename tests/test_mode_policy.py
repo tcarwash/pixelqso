@@ -1,7 +1,7 @@
 import unittest
 
 from card_backends import (BACKENDS, DEFAULT_MODE_KEY, LEGACY_MODE_KEY, MODE_REGISTRY, audio_backend_keys, available_modes,
-                           data2g_mode_key, get_backend, host_mode_backends, is_experimental_mode,
+                           data2g_max_frame_bytes, data2g_mode_key, get_backend, host_mode_backends, is_experimental_mode,
                            mode_supports_audio_placement, normal_default_mode, recommended_data2g_modes)
 from data2g_transport import Data2GMode
 import cardmodem
@@ -73,6 +73,40 @@ class ModePolicyTests(unittest.TestCase):
         self.assertLessEqual(estimate, 2 * frame_seconds)
         self.assertNotIn("data2g_1200_robust", audio_backend_keys())
         self.assertIn("resilient_100", audio_backend_keys())
+
+    def test_slow_host_frame_target_limits_burst_duration_and_airtime_matches_fragments(self):
+        from backend_adapters import DATA2G_ADAPTER
+        from card_transfer import HEADER
+        mode = Data2GMode("n10-qpsk-r1/5", 500, 23, 64, 2.0, 130.0)
+        backend = host_mode_backends([mode], {mode.name})[data2g_mode_key(mode.name)]
+        card = cardmodem.example_card()
+        frames = DATA2G_ADAPTER.frame_card(card, backend.max_frame_bytes, "card")
+        self.assertLess(backend.max_frame_bytes, 256)
+        self.assertTrue(all(len(frame) <= backend.max_frame_bytes for frame in frames))
+        self.assertTrue(all((4 + (len(frame) + 2 + mode.bytes_per_codeword - 1) // mode.bytes_per_codeword)
+                            <= mode.max_codewords for frame in frames))
+        step = (mode.seconds_at_max - mode.seconds_at_one) / (mode.max_codewords - 1)
+        expected = sum(mode.seconds_at_one + (3 + (len(frame) + 2 + mode.bytes_per_codeword - 1)
+                            // mode.bytes_per_codeword) * step for frame in frames)
+        self.assertAlmostEqual(backend.estimate_seconds(card, 2), 2 * expected)
+        self.assertTrue(all(mode.seconds_at_one + (3 + (len(frame) + 2 + mode.bytes_per_codeword - 1)
+                            // mode.bytes_per_codeword) * step <= 16 for frame in frames))
+        self.assertGreater(backend.max_frame_bytes, HEADER.size)
+
+    def test_narrow_mode_keeps_minimum_viable_fragment_when_16_seconds_is_impossible(self):
+        from card_transfer import HEADER
+        mode = Data2GMode("n4-qpsk-r1/2", 200, 58, 64, 4.14, 221.86)
+        limit = data2g_max_frame_bytes(mode)
+        self.assertGreater(limit, HEADER.size)
+        self.assertLess(limit, 256)
+        self.assertEqual(4 + (limit + 2 + 57) // 58,
+                         4 + (HEADER.size + 1 + 2 + 57) // 58)
+
+    def test_fast_host_preserves_256_byte_default_and_preference_is_capacity_bounded(self):
+        mode = Data2GMode("qpsk-r1/2", 1200, 116, 64, 1.78, 74.36)
+        self.assertEqual(data2g_max_frame_bytes(mode), 256)
+        self.assertEqual(data2g_max_frame_bytes(mode, preferred=100), 100)
+        self.assertIsNone(data2g_max_frame_bytes(mode, preferred=1))
 
     def test_host_catalog_exposes_every_advertised_mode_and_marks_unusable_ones(self):
         modes = [

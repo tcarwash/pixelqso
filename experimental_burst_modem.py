@@ -64,6 +64,7 @@ class FSKFormat:
 
 FORMATS = {
     "experimental_8fsk_ldpc": FSKFormat("experimental_8fsk_ldpc", 8, 600, 300, 450, 0x8F51),
+    "experimental_8fsk_orthogonal": FSKFormat("experimental_8fsk_orthogonal", 8, 200, 200, 600, 0x8F53),
     "experimental_16fsk_ldpc": FSKFormat("experimental_16fsk_ldpc", 16, 400, 150, 375, 0x16F51),
     "experimental_8fsk_outer_rs": FSKFormat("experimental_8fsk_outer_rs", 8, 400, 200, 800, 0x8F52, True),
 }
@@ -581,6 +582,10 @@ def _partial_outer(key, shards, diagnostics):
 
 
 def _decode_outer(key, evidence, diagnostics):
+    shards, corrected = _checked_outer_shards(key, evidence)
+    return _outer_from_shards(key, shards, corrected, diagnostics)
+
+def _checked_outer_shards(key, evidence):
     labels = format_constants(key)[3]
     shards, corrected, cursor = {}, 0, TRAINING
     for index, length in enumerate(FORMATS[key].block_lengths):
@@ -594,6 +599,9 @@ def _decode_outer(key, evidence, diagnostics):
         except ValueError:
             pass
         cursor += length
+    return shards, corrected
+
+def _outer_from_shards(key, shards, corrected, diagnostics):
     diagnostics = {**diagnostics, "checked_shards": len(shards), "corrected_rs_symbols": corrected}
     if len(shards) >= OUTER_DATA:
         recovered = outer_recover(shards)[:PACKET_BYTES]
@@ -787,6 +795,7 @@ def decode_equalized(audio, sample_rate=48000):
 def decode_copies(key, captures, sample_rate=48000, *, grouped=False):
     """Use protected payload boundaries for independent copy acquisition."""
     frames, partial = [], None
+    checked_by_copy = []
     error=ValueError('no CRC-valid announced experimental card')
     if key == QPSK_KEY:
         hypotheses=[]
@@ -866,16 +875,23 @@ def decode_copies(key, captures, sample_rate=48000, *, grouped=False):
         analytic=hilbert(source)
         radius = max(2, (.002 + copy_index*fmt.seconds*.0002)*fmt.baud) if grouped else 2
         variants = []
+        best_checked = ({}, 0)
         for evidence,timing in announced_fsk_candidates(analytic,fmt,radius=radius):
             diagnostic = timing
             try:
                 if len(evidence)<fmt.symbol_count:
                     partial=partial or (_decode_outer(key,evidence,diagnostic) if fmt.outer else activity(key,diagnostic))
                     continue
+                if fmt.outer:
+                    shards, corrected = _checked_outer_shards(key, evidence)
+                    if len(shards) > len(best_checked[0]):
+                        best_checked = shards, corrected
                 variants.append(SoftCopy(evidence[:fmt.symbol_count] if fmt.outer else _ldpc_evidence(key,evidence),diagnostic))
             except ValueError as exc:
                 error=exc
         if variants: frames.append(variants)
+        if fmt.outer and best_checked[0]:
+            checked_by_copy.append(best_checked)
     for evidence,used in hypothesis_attempts(frames):
         try:
             diagnostic=diagnostics_for(used,len(frames))
@@ -886,6 +902,32 @@ def decode_copies(key, captures, sample_rate=48000, *, grouped=False):
                 partial=report
         except ValueError as exc:
             error=exc
+    # Alternate timings are hypotheses of the SAME physical transmission.
+    # Keep only one checked-shard set per copy, bound to a protected identity.
+    if fmt.outer and ADMITTED_IDENTITY.get() is not None and checked_by_copy:
+        checked, conflicts, corrected = {}, set(), 0
+        for shards, count in checked_by_copy:
+            corrected += count
+            for index, shard in shards.items():
+                if index in conflicts:
+                    continue
+                if index in checked and checked[index] != shard:
+                    del checked[index]
+                    conflicts.add(index)
+                else:
+                    checked[index] = shard
+        if checked:
+            try:
+                report = _outer_from_shards(key, checked, corrected,
+                                            {'combined_copies':len(checked_by_copy),
+                                             'acquired_copies':len(frames),
+                                             'conflicting_shards':sorted(conflicts)})
+                if report.get('card',{}).get('exact'):
+                    return report
+                if partial is None or sum(report.get('card',{}).get('pixel_coverage') or []) > sum(partial.get('card',{}).get('pixel_coverage') or []):
+                    partial = report
+            except ValueError as exc:
+                error = exc
     if partial is not None:
         return partial
     raise error

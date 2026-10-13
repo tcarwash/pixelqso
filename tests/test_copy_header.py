@@ -161,15 +161,17 @@ class LiveCopyCacheTests(unittest.TestCase):
         self.assertEqual(cache.materialize()[1],[])
 
 class CompletedIdentityTests(unittest.TestCase):
-    def test_verified_native_card_must_match_common_content_id(self):
+    def test_discovery_mismatch_allows_independent_native_card(self):
         import weak_signal_modem as weak
         card=pixel.example_card(); other=pixel.example_card()
         other.pixels=[7-v for v in other.pixels]
         key='experimental_qpsk_5s'
         payload=weak.encode(other,1,'cq',None)
         wrong=envelope.transmit(key,card,payload,1,'cq',None)
-        with self.assertRaisesRegex(ValueError,'protected copy identity'):
-            get_backend(key).decode(wrong,48000)
+        report=get_backend(key).decode(wrong,48000)
+        self.assertTrue(report['card']['exact'])
+        self.assertEqual(report['pixels'],other.pixels)
+        self.assertNotIn('copy_header',report)
 
 class RawCopyTests(unittest.TestCase):
     def test_raw_mode_pools_copies_but_remains_unverified(self):

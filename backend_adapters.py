@@ -259,6 +259,10 @@ class ExperimentalLocalAdapter:
             # Decoder ValueErrors describe an absent or incomplete waveform
             # match; input selection/configuration errors happen before this
             # call and remain ordinary backend errors.
+            from receive_preview import unidentified_preview
+            preview = unidentified_preview(backend, audio, sample_rate, copies or ())
+            if preview is not None:
+                return DecodeOutcome(report=preview)
             return DecodeOutcome(failure=DecodeFailure(
                 cls.key, DecodeFailureKind.NO_MATCH, str(exc), True))
         except Exception as exc:

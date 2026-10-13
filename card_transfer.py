@@ -217,7 +217,7 @@ class CardPreviewAssembler:
         content_id = incoming_card.get("image_id", incoming_card.get("image_crc32"))
         key = (str(incoming_card.get("callsign", "")).upper(),
                str(incoming_card.get("grid", "")).upper(), protocol_version,
-               incoming_card.get("card_id") if content_id is None else None,
+               incoming_card.get("card_id"),
                width, height, palette, mode if content_id is None else None,
                content_id)
         state = self.states.get(key)

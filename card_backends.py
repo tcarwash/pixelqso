@@ -20,6 +20,7 @@ AUDIO_RATE = pixel.SAMPLE_RATE
 DATA2G_PREFERRED_FRAME_BYTES = 256
 DATA2G_LENGTH_PREFIX_BYTES = 2
 DATA2G_MAX_CONTROL_CODEWORDS = 4
+DATA2G_TARGET_BURST_SECONDS = 16.0
 DATA2G_MODE_KEY_PREFIX = "data2g_mode_"
 
 GROUPED_MODES = {
@@ -37,6 +38,7 @@ EXPERIMENTAL_MODE_LABELS = {
     **{key: f"{8 if '8fsk' in key else 16}-FSK · compressed LDPC copies" for key in COMPRESSED_MODE_KEYS},
     **{key: f"{8 if '8fsk' in key else 16}-FSK · grouped LDPC copies" for key in GROUPED_MODES},
     "experimental_8fsk_ldpc": "8-FSK · soft LDPC · copy combining",
+    "experimental_8fsk_orthogonal": "8-FSK · 200 baud orthogonal · soft LDPC",
     "experimental_qpsk_equalized": "QPSK · LDPC + adaptive equalizer",
     "experimental_8fsk_outer_rs": "8-FSK · strong RS + outer parity",
     "experimental_16fsk_ldpc": "16-FSK · soft LDPC · copy combining",
@@ -252,7 +254,11 @@ def data2g_mode_name(mode_key: str) -> str:
 
 
 def data2g_max_frame_bytes(mode, preferred=DATA2G_PREFERRED_FRAME_BYTES):
-    """Safe app-frame limit after Data2G's stream prefix and control reserve."""
+    """Bound a frame by codewords and a short burst target where feasible.
+
+    A header plus one image byte may itself exceed the duration target in
+    narrow modes; retain that minimum rather than disabling the mode.
+    """
     if mode is None:
         return None
     try:
@@ -269,7 +275,21 @@ def data2g_max_frame_bytes(mode, preferred=DATA2G_PREFERRED_FRAME_BYTES):
                          bytes_per_codeword - DATA2G_LENGTH_PREFIX_BYTES)
         if data_capacity < TRANSFER_HEADER.size + 1:
             return None
-        return min(int(preferred), data_capacity)
+        seconds_per_codeword = ((mode.seconds_at_max - mode.seconds_at_one) /
+                                (max_codewords - 1))
+        if seconds_per_codeword > 0:
+            target_codewords = 1 + math.floor(
+                (DATA2G_TARGET_BURST_SECONDS - mode.seconds_at_one) /
+                seconds_per_codeword)
+            minimum_data_codewords = math.ceil(
+                (TRANSFER_HEADER.size + 1 + DATA2G_LENGTH_PREFIX_BYTES) /
+                bytes_per_codeword)
+            target_codewords = max(target_codewords,
+                                   DATA2G_MAX_CONTROL_CODEWORDS + minimum_data_codewords)
+            data_capacity = min(data_capacity,
+                (target_codewords - DATA2G_MAX_CONTROL_CODEWORDS) *
+                bytes_per_codeword - DATA2G_LENGTH_PREFIX_BYTES)
+        return min(preferred, data_capacity)
     except (AttributeError, TypeError, ValueError, OverflowError):
         return None
 
@@ -524,7 +544,12 @@ class GroupedFSKBackend:
         return report
 
     def decode_payload(self, audio, sample_rate):
-        raise ValueError('grouped FSK requires a protected opening header')
+        import experimental_burst_modem as burst
+        report = burst.decode(GROUPED_MODES[self.key], audio, sample_rate)
+        report['receive_profile'] = self.key
+        if report.get('card'):
+            report['card']['avatar_mode'] = self.key
+        return report
 
     def decode(self, audio, sample_rate):
         from modem_envelope import decode_capture
@@ -592,7 +617,8 @@ BACKENDS: dict[str, CardBackend] = {
     **{key: GroupedFSKBackend(key) for key in GROUPED_MODES},
     **{key: ExperimentalBurstBackend(key) for key in (
         "experimental_8fsk_ldpc", "experimental_qpsk_equalized",
-        "experimental_8fsk_outer_rs", "experimental_16fsk_ldpc")},
+        "experimental_8fsk_outer_rs", "experimental_16fsk_ldpc",
+        "experimental_8fsk_orthogonal")},
     "experimental_qpsk_5s": WeakSignalBackend(),
     "experimental_qpsk_combined": WeakSignalCombinedBackend(),
     "fast_avatar": AvatarBackend("fast_avatar", EXPERIMENTAL_MODE_LABELS["fast_avatar"], False),
@@ -643,7 +669,8 @@ MODE_REGISTRY: dict[str, ModeSpec] = {
        for key in GROUPED_MODES},
     **{key: ModeSpec(key, EXPERIMENTAL_MODE_LABELS[key], True, "pixelqso_audio", "scipy")
        for key in ("experimental_8fsk_ldpc", "experimental_qpsk_equalized",
-                   "experimental_8fsk_outer_rs", "experimental_16fsk_ldpc")},
+                   "experimental_8fsk_outer_rs", "experimental_16fsk_ldpc",
+                   "experimental_8fsk_orthogonal")},
     "resilient_100": ModeSpec("resilient_100", EXPERIMENTAL_MODE_LABELS["resilient_100"], True, "pixelqso_audio", supports_audio_placement=True),
     "resilient_50": ModeSpec("resilient_50", EXPERIMENTAL_MODE_LABELS["resilient_50"], True, "pixelqso_audio", supports_audio_placement=True),
     "resilient_25": ModeSpec("resilient_25", EXPERIMENTAL_MODE_LABELS["resilient_25"], True, "pixelqso_audio", supports_audio_placement=True),

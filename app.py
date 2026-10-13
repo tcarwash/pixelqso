@@ -433,6 +433,8 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
     # A verified common header routes RX before costly native decoder trials.
     # An unannounced historical capture retains the blind receive-all path.
     copies = announced_copies
+    native_audio, native_rate = audio, sample_rate
+    preview, last_failure = None, None
     if include_experimental:
         from modem_envelope import find_copies, decode_capture
         copies = find_copies(audio, sample_rate) if announced_copies is None else announced_copies
@@ -452,12 +454,20 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
                     copy.mode, copy.identity)
             copies, newest_mode = newest_protected_acquisition(copies)
             preview, failure = None, None
+            if on_preview is not None:
+                on_preview({
+                    "card": {}, "receive_profile": newest_mode,
+                    "receive_activity": "New protected transmission detected · waiting for card data",
+                    "receive_identity": (capture_session_id, copies[0].mode, copies[0].identity),
+                    "copy_header": {**copies[0].diagnostics, "content_id": copies[0].identity},
+                })
 
             def consider_preview(report, fallback_start=None):
                 nonlocal preview
                 is_activity = bool(report.get('receive_activity'))
                 previous_activity = bool(preview and preview.get('receive_activity'))
                 if (preview is None or (previous_activity and not is_activity) or
+                        (previous_activity and report.get('unidentified_preview')) or
                         (not is_activity and preview is not None and not previous_activity and
                          _receive_report_rank(report) > _receive_report_rank(preview))):
                     preview = report
@@ -498,17 +508,23 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
                             if hasattr(backend, 'decode_payload_copies') else None,
                             announced_decoder=getattr(backend,'decode_announced_copies',None))
                         consider_preview(report)
+                        if report.get('card', {}).get('exact'):
+                            return DecodeOutcome(report=report)
                     except ValueError as exc:
+                        from receive_preview import unidentified_preview
+                        tentative = unidentified_preview(backend, audio, sample_rate, copies)
+                        if tentative is not None:
+                            consider_preview(tentative)
                         failure = DecodeFailure(EXPERIMENTAL_ADAPTER.key, DecodeFailureKind.NO_MATCH, str(exc), True)
-            if preview is not None:
+            if preview is not None and preview.get('card', {}).get('exact'):
                 return DecodeOutcome(report=preview)
-            if live_snapshot:
+            if live_snapshot and preview is None:
                 diagnostic = {**copies[0].diagnostics, "announced_mode": newest_mode,
                               "content_id": copies[0].identity, "announced_copies": len(copies)}
                 metadata = {}
                 set_measured_snr(metadata, diagnostic.get("estimated_snr_db_2500"),
                                  "common_header_training")
-                return DecodeOutcome(report={
+                preview = {
                     "card": metadata, "copy_header": diagnostic,
                     "receive_activity": "New protected transmission detected · waiting for card data",
                     "receive_profile": newest_mode,
@@ -518,14 +534,15 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
                     "acquisition_start_sample": max(int(copy.diagnostics.get(
                         "acquisition_start_sample", round(copy.start * 8000 / sample_rate)))
                         for copy in copies),
-                })
-            return DecodeOutcome(failure=failure or DecodeFailure(
-                EXPERIMENTAL_ADAPTER.key, DecodeFailureKind.NO_MATCH,
-                'Announced payload is incomplete', True))
+                }
+                if on_preview is not None:
+                    on_preview(preview)
+            last_failure = failure
         # No announced header can still be a valid legacy/native waveform.
         # Continue to bounded blind decoders instead of ending live RX here.
-    preview = None
-    last_failure = None
+    # Keep the original rolling capture for native acquisition. Materialized
+    # hinted copies can omit a newer transmission whose announcement was lost.
+    audio, sample_rate = native_audio, native_rate
     backends = available_modes(include_experimental=include_experimental)
     backends = [(key, backend) for key, backend in backends
                 if MODE_REGISTRY.get(key) is not None and
@@ -547,16 +564,36 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
             if on_mode_attempt is not None:
                 on_mode_attempt(key)
             outcome = local_adapter_for_mode(key).decode_capture(
-                get_backend(key, placement), audio, sample_rate, copies=copies or [])
+                get_backend(key, placement), audio, sample_rate, copies=[])
             if outcome.failure:
                 if outcome.failure.kind is DecodeFailureKind.NO_MATCH:
                     last_failure = outcome.failure
                     continue
                 return outcome
             report = outcome.report
+            card = report.get("card") or {}
+            frame_start = card.get("native_frame_start_sample")
+            frame_rate = card.get("native_frame_sample_rate")
+            if frame_start is not None and frame_rate:
+                diagnostic = dict(card.get("diagnostics") or {})
+                diagnostic.update(receive_session_id=capture_session_id,
+                    acquisition_start_sample=round(
+                        capture_start_sample * 8000 / native_rate + frame_start * 8000 / frame_rate))
+                card["diagnostics"] = diagnostic
+                if copies:
+                    newest_start = min(int(copy.diagnostics.get(
+                        "acquisition_start_sample", copy.start)) for copy in copies)
+                    if diagnostic["acquisition_start_sample"] < newest_start:
+                        continue  # retain the newer preview, even when it has fewer pixels
             if report["card"].get("exact"):
                 return DecodeOutcome(report=report)
-            if preview is None or (preview.get("receive_activity") and not report.get("receive_activity")):
+            previous_card = (preview or {}).get("card") or {}
+            previous_start = (previous_card.get("diagnostics") or {}).get("acquisition_start_sample")
+            incoming_start = (card.get("diagnostics") or {}).get("acquisition_start_sample")
+            newer_native = (incoming_start is not None and previous_start is not None
+                            and incoming_start > previous_start)
+            if (preview is None or newer_native or
+                    (preview.get("receive_activity") and not report.get("receive_activity"))):
                 preview = report
                 if on_preview is not None:
                     on_preview(report)
@@ -5713,6 +5750,7 @@ class MainWindow(QMainWindow):
                 f"{verified_percent} percent of image regions verified. "
                 "The preview is provisional until whole-card integrity verification completes.")
         self.receive_preview_box.show()
+
         if exact and not duplicate:
             self.live_preview_timeout.start(5000)
         else:
@@ -5768,6 +5806,15 @@ class MainWindow(QMainWindow):
                 "Signal detected. Waiting for card data; card-image progress is not available yet.")
             self.receive_progress.hide()
         self.receive_preview_box.show()
+        if report is not None and report.get("unidentified_preview"):
+            card = report["card"]
+            self._show_receive_preview(self.card_image(report), card=card,
+                coverage=card.get("pixel_coverage"),
+                verified_coverage=card.get("verified_pixel_coverage"), report=report)
+            self.receive_activity_pending = True
+            self.rx_status.setText(
+                "Tentative image · identity header not verified · "
+                f"RX mode: {self._receive_mode_label(report.get('receive_profile'))}")
 
     def _receive_activity_expired(self):
         self.receive_activity_pending = False

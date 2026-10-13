@@ -49,6 +49,7 @@ MODE_IDS = {
     'experimental_16fsk_ldpc': 13,
     'experimental_8fsk_grouped': 14, 'experimental_16fsk_grouped': 15,
     'experimental_8fsk_compressed': 16, 'experimental_16fsk_compressed': 17, 'experimental_16fsk_grid': 18,
+    'experimental_8fsk_orthogonal': 19,
 }
 ID_MODES = {v: k for k, v in MODE_IDS.items()}
 # Fixed native LDPC payload sizes are part of the grouped v2 specification.
@@ -502,11 +503,9 @@ def decode_capture(key, audio, sample_rate, decoder, copies=None, copy_decoder=N
     announced = find_copies(audio, sample_rate) if copies is None else copies
     matched = groups(announced, key)
     if not announced:
-        if key in GROUP_MODES or key in COMPRESSED_MODES:
-            raise ValueError('waiting for protected grouped header')
         return decoder(audio, sample_rate)  # historical native waveform
     if not matched:
-        raise ValueError('common header announces a different modem')
+        return decoder(audio, sample_rate)  # discovery is a hint, not a veto
     best, best_start, error = None, None, ValueError('announced payload is incomplete')
     for group in matched:
         # When a receive window contains more than one card, prefer the newest
@@ -559,9 +558,35 @@ def decode_capture(key, audio, sample_rate, decoder, copies=None, copy_decoder=N
         if best is None or best_start is None or group_start >= best_start:
             best = report
             best_start = group_start
-    if best is not None:
+    if best is not None and best.get('card', {}).get('exact'):
         return best
-    raise error
+    # A damaged/stale announcement or an incomplete hinted payload must not
+    # prevent native acquisition over the original capture. Native CRC and
+    # content checks remain the acceptance gates; do not attach the rejected
+    # discovery identity to this independently decoded result.
+    try:
+        # Search from the newest admitted identity's payload, so a stronger
+        # earlier unfinished card cannot win native reacquisition repeatedly.
+        newest_group = max(matched, key=lambda group: max(copy.start for copy in group))
+        native_start = min(copy.start for copy in newest_group)
+        native = decoder(np.asarray(audio)[native_start:], sample_rate)
+        native_card = native.get('card') or {}
+        native_diagnostic = dict(native_card.get('diagnostics') or {})
+        native_diagnostic.update(
+            acquisition_start_sample=max(int(copy.diagnostics.get(
+                'acquisition_start_sample', round(copy.start * RATE / sample_rate)))
+                for copy in newest_group),
+            receive_session_id=int(newest_group[0].diagnostics.get('receive_session_id', 0)))
+        native_card['diagnostics'] = native_diagnostic
+    except ValueError:
+        if best is not None:
+            return best
+        raise error
+    if best is None or native.get('card', {}).get('exact'):
+        return native
+    native_coverage = sum(native.get('card', {}).get('pixel_coverage') or [])
+    hinted_coverage = sum(best.get('card', {}).get('pixel_coverage') or [])
+    return native if native_coverage > hinted_coverage else best
 
 class CopyCaptureCache:
     """Bounded live copy storage beyond the rolling audio window.

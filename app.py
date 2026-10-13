@@ -152,9 +152,7 @@ def received_card_key(report):
 
 def session_wall_card_key(report):
     """Stable identity for one card while provisional snapshots improve."""
-    card = report.get("card") or {}
-    return (str(card.get("callsign", "")).upper(), str(card.get("grid", "")).upper(),
-            card.get("card_id"), card.get("message_type", "card"), card.get("snr_db"))
+    return received_card_key(report)
 
 
 class RigctlClient(QObject):
@@ -7979,8 +7977,6 @@ class MainWindow(QMainWindow):
         if image is None or image.isNull():
             return
         key = session_wall_card_key(report)
-        if duplicate:
-            key = ("duplicate", *received_card_key(report))
         existing = self.session_wall_items.get(key)
         callsign = str(card.get("callsign") or "Unknown station")
         grid = str(card.get("grid") or "")

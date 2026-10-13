@@ -2,6 +2,8 @@
 
 ## Beta 1 release checkpoint — 2026-10-13
 
+Wall duplicate follow-up: original and duplicate receptions now share one wall tile per station/card ID/message stage. Signal metadata changes update that tile instead of creating another. Duplicate transmission receipts remain recorded in the QSO deck.
+
 Packaging follow-up: upstream main tracks `ui_theme.py`, but setuptools omitted it from `py-modules`. Added it to the package manifest. A rebuilt wheel contains the module, and an isolated Python process imports it directly from that wheel outside the checkout. This fix is local pending publication; desktop bundle and hardware checks remain separate.
 
 Package metadata is set to `0.4.0b1`. Compressed 8-FSK, compressed 16-FSK, and UTC-grid 16-FSK are excluded from selectable/transmittable modes; saved preferences fall back to `resilient_100`. Their protocol IDs and decoders remain for receive compatibility. Release notes are in [CHANGELOG.md](CHANGELOG.md). No package build, automated suite, fresh-profile packaged launch, or hardware/RF validation has been performed for this checkpoint. Continue with those release checks before describing the beta as validated.

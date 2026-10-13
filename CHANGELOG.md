@@ -2,6 +2,8 @@
 
 ## 0.4.0b1 — Beta 1
 
+- Include the shared `ui_theme` module in installed wheels to prevent startup import errors.
+
 - First public beta candidate for Pixel QSO's card exchange, station setup, and QSO history workflows.
 - Disable compressed 8-FSK, compressed 16-FSK, and UTC-grid 16-FSK for transmission. Their wire formats remain in the receive decoder for compatibility. Saved selections move to the supported resilient 8-FSK default.
 - Show rig frequency as read-only; remove unused transfer bandwidth and grid audio-delay controls.

@@ -41,6 +41,9 @@ class CopyHeaderTests(unittest.TestCase):
         self.assertTrue(copies[0].diagnostics['trailer'])
         report = backend.decode(audio,48000)
         self.assertTrue(report['card']['exact'])
+        self.assertIsNotNone(report['card'].get('measured_snr_db'))
+        self.assertEqual(report['card']['measured_snr_bandwidth_hz'], 2500)
+        self.assertEqual(report['card']['snr_db'], -6)
 
     def test_same_card_id_with_different_pixels_is_not_combined(self):
         card = pixel.example_card()

@@ -17,6 +17,7 @@ from scipy.signal import hilbert, resample_poly, find_peaks
 import cardmodem as pixel
 from experimental_fec import rs_encode, rs_decode
 from copy_combining import MAX_COPIES, ADMITTED_IDENTITY
+from snr import set_measured_snr
 
 RATE = 8000
 BAUD = 100
@@ -272,6 +273,31 @@ def _header_metrics(analytic, start, offset, count=SYMBOLS):
     return abs(samples @ templates.T / step)**2
 
 
+def header_snr_db(analytic, start, offset):
+    """Estimate header SNR using known training tones and off-tone noise bins."""
+    step = RATE // BAUD
+    positions = start + np.arange(TRAINING * step)
+    if positions[0] < 0 or positions[-1] >= len(analytic):
+        return None
+    left = np.floor(positions).astype(int)
+    fraction = positions - left
+    samples = analytic[left] * (1-fraction) + analytic[np.minimum(left+1, len(analytic)-1)] * fraction
+    chunks = samples.reshape(TRAINING, step)
+    chunks *= np.exp(-2j * np.pi * offset * np.arange(step) / RATE)
+    power = abs(np.fft.fft(chunks, axis=1) / step)**2
+    training, _ = constants()
+    bins = (TONES[training] / BAUD).astype(int)
+    # Neighbor bins exclude leakage from clock error, fading, and imperfect CFO.
+    mask = np.broadcast_to((np.arange(step) >= 3) & (np.arange(step) <= 28), power.shape).copy()
+    for delta in (-1, 0, 1):
+        mask[np.arange(TRAINING), bins + delta] = False
+    noise = float(np.mean(power[mask]))
+    signal = float(np.mean(power[np.arange(TRAINING), bins])) - noise
+    if not np.isfinite(noise) or noise <= 0 or signal <= 0:
+        return None
+    return 10 * np.log10(signal / (noise * 2500 / BAUD))
+
+
 @lru_cache(None)
 def header_known_symbols():
     # The first 30 magic bits form ten tone symbols; their fixed permutation
@@ -431,6 +457,7 @@ def find_copies(audio, sample_rate, *, capture_start_utc=None, grid_window=.1):
         markers.append((start, header, score, offset))
     copies = []
     for start, header, score, offset in markers:
+        header = {**header, 'estimated_snr_db_2500': header_snr_db(analytic, start, offset)}
         payload_length = header['payload_samples'] * RATE / 48000
         boundary = (start - GUARD*RATE if header['trailer'] else
                     start + SYMBOLS*step + GUARD*RATE)
@@ -509,6 +536,11 @@ def decode_capture(key, audio, sample_rate, decoder, copies=None, copy_decoder=N
         finally:
             ADMITTED_IDENTITY.reset(token)
         card = report.get('card') or {}
+        estimates = [copy.diagnostics.get('estimated_snr_db_2500') for copy in group]
+        estimates = [float(value) for value in estimates if value is not None and np.isfinite(value)]
+        if estimates:
+            set_measured_snr(card, 10 * np.log10(np.mean(10 ** (np.asarray(estimates) / 10))),
+                             'common_header_training')
         diagnostic = dict(card.get('diagnostics') or {})
         diagnostic.update(copy_header_version=group[0].diagnostics.get('version', VERSION), announced_mode=key,
                           content_id=group[0].identity, announced_copies=len(group),

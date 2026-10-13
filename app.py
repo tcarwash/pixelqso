@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QListWidget
 
 import cardmodem as modem
 from card_ids import allocate_card_id
+from snr import set_measured_snr, snr_lines
 from backend_adapters import (AdapterKind, DATA2G_ADAPTER, DecodeFailure,
                               DecodeFailureKind, DecodeOutcome,
                               EXPERIMENTAL_ADAPTER, ReceiveStartError,
@@ -54,7 +55,7 @@ from data2g_runtime import (data2g_audio_device_selector,
                             local_host_arguments, local_host_command,
                             validate_data2g_ports)
 from on_air import SessionRecorder, card_reference, decoded_reference
-from card_views import DeckDialog, card_art, deck_events, deck_image
+from card_views import DeckDialog, card_art, deck_events, deck_image, incoming_card_text
 from webserver import CompanionServer
 from ui_theme import (COLORS, SPACING, build_app_stylesheet, palette_swatch_style,
                       semantic_text_style, status_label_style)
@@ -502,7 +503,13 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
             if preview is not None:
                 return DecodeOutcome(report=preview)
             if live_snapshot:
+                diagnostic = {**copies[0].diagnostics, "announced_mode": newest_mode,
+                              "content_id": copies[0].identity, "announced_copies": len(copies)}
+                metadata = {}
+                set_measured_snr(metadata, diagnostic.get("estimated_snr_db_2500"),
+                                 "common_header_training")
                 return DecodeOutcome(report={
+                    "card": metadata, "copy_header": diagnostic,
                     "receive_activity": "New protected transmission detected · waiting for card data",
                     "receive_profile": newest_mode,
                     "pivot_receive": True,
@@ -3690,6 +3697,14 @@ class MainWindow(QMainWindow):
         self._refresh_listen_indicator_width()
         view_heading.addWidget(self.listen_indicator)
         right_panel.addLayout(view_heading)
+        self.incoming_card_details = QLabel()
+        self.incoming_card_details.setTextFormat(Qt.TextFormat.PlainText)
+        self.incoming_card_details.setWordWrap(True)
+        self.incoming_card_details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.incoming_card_details.setAccessibleName("Incoming card metadata")
+        self.incoming_card_details.setStyleSheet(semantic_text_style("soft", padding="4px"))
+        self.incoming_card_details.hide()
+        right_panel.addWidget(self.incoming_card_details)
         self.rx_waterfall = RxAudioWaterfall()
         self.rx_visual_stack = QStackedWidget()
         self.rx_waterfall_unavailable = QLabel(
@@ -4945,6 +4960,22 @@ class MainWindow(QMainWindow):
     def _data2g_host_status(self, session, message):
         if session is not self.data2g_session:
             return
+        fields = message.split()
+        if len(fields) == 5 and fields[0] == "PIXELQSO_RX_SNR":
+            try:
+                port, digest, value, bandwidth = int(fields[1]), fields[2], float(fields[3]), int(fields[4])
+                measured = {}
+                if (port != DATA2G_ADAPTER.group_port(session) or len(digest) != 64 or
+                        not set_measured_snr(measured, value, "data2g_phy", bandwidth)):
+                    return
+                records = getattr(self, "data2g_rx_measurements", {})
+                records[(id(session), port, digest)] = measured
+                if len(records) > 256:
+                    records.pop(next(iter(records)))
+                self.data2g_rx_measurements = records
+            except (TypeError, ValueError):
+                pass
+            return
         if message in {"BUSY ON", "BUSY OFF"}:
             self.data2g_channel_busy = message == "BUSY ON"
             if (self.data2g_tx_waiting is None and not self.ptt_active and
@@ -4968,11 +4999,32 @@ class MainWindow(QMainWindow):
         fields = message.split()
         if (len(fields) >= 3 and fields[0] == "BCAST" and
                 fields[1] == str(DATA2G_ADAPTER.group_port(session))):
+            if fields[2] == "RXMETADATA" and len(fields) == 8:
+                try:
+                    metadata = {}
+                    if not set_measured_snr(metadata, fields[3], "data2g_phy", fields[4]):
+                        return
+                    if fields[5] != "-":
+                        metadata["callsign"] = fields[5]
+                    diagnostic = {"codewords": int(fields[7])}
+                    self._show_receive_activity(
+                        "Data2G burst heard · waiting for complete card frames",
+                        report={"card": metadata, "diagnostics": diagnostic,
+                                "receive_profile": f"Data2G · {fields[6]}"})
+                    self.receive_activity_timeout.start(15000)
+                except (TypeError, ValueError):
+                    pass
             if fields[2] == "HEARD":
                 snapshot = self.card_assembly.preview_snapshot()
                 if not snapshot or not snapshot.card.get("exact"):
+                    call = fields[3] if len(fields) > 3 else None
+                    metadata = (dict(snapshot.card) if snapshot and
+                                (not call or snapshot.card.get("callsign") == call) else {})
+                    if call:
+                        metadata["callsign"] = call
                     self._show_receive_activity(
-                        f"Receiving Data2G burst from {fields[3] if len(fields) > 3 else 'a station'} · checking card frames")
+                        f"Receiving Data2G burst from {call or 'a station'} · checking card frames",
+                        report={"card": metadata, "receive_profile": "Data2G host/KISS"})
                     self.receive_activity_timeout.start(15000)
             elif fields[2] in {"LOST", "DROPPED"}:
                 self.rx_status.setText("Data2G lost card frames · waiting for another copy")
@@ -5197,6 +5249,10 @@ class MainWindow(QMainWindow):
             palette = [list(color) for color in modem.AVATAR_PALETTES[palette_id]]
             card = {**metadata, "palette": palette, "avatar_burst": True,
                     "received_copies": 1}
+            measurement = getattr(self, "data2g_rx_measurements", {}).pop(
+                (id(session), port, frame_ref["sha256"]), None)
+            if measurement is not None:
+                card.update(measurement)
             report = {"sample_rate": 0, "receive_profile": "Data2G host/KISS",
                       "valid_packets": [], "valid_packet_count": 1, "errors": [],
                       "card": card, "pixels": pixels}
@@ -5612,6 +5668,7 @@ class MainWindow(QMainWindow):
 
     def _show_receive_preview(self, image, *, card=None, exact=False, coverage=None,
                               verified_coverage=None, duplicate=False, report=None):
+        self._update_receive_metadata(report or {"card": card or {}})
         if image is None:
             return
         self.receive_activity_timeout.stop()
@@ -5669,7 +5726,16 @@ class MainWindow(QMainWindow):
         self.current_preview_is_duplicate = False
         self.receive_preview_box.hide()
 
-    def _show_receive_activity(self, message, *, pivot=False):
+    def _update_receive_metadata(self, report):
+        if not hasattr(self, "incoming_card_details"):
+            return
+        mode = self._receive_mode_label(report.get("receive_profile"))
+        text = incoming_card_text(report, mode)
+        self.incoming_card_details.setText(text)
+        self.incoming_card_details.setAccessibleDescription(text)
+        self.incoming_card_details.show()
+
+    def _show_receive_activity(self, message, *, pivot=False, report=None):
         if pivot:
             self.card_assembly.clear_current_preview()
             self._hide_receive_preview()
@@ -5680,6 +5746,18 @@ class MainWindow(QMainWindow):
             self.receive_view.setAccessibleName(message)
         self.live_preview_timeout.stop()
         snapshot = None if pivot else self.card_assembly.preview_snapshot()
+        if report is not None:
+            incoming = report.get("card") or {}
+            if (snapshot and not snapshot.card.get("exact") and
+                    (not incoming.get("callsign") or
+                     incoming.get("callsign") == snapshot.card.get("callsign")) and
+                    (incoming.get("card_id") is None or
+                     incoming.get("card_id") == snapshot.card.get("card_id"))):
+                report = {**report, "card": {**dict(snapshot.card),
+                    **{key: value for key, value in incoming.items() if value is not None}}}
+            self._update_receive_metadata(report)
+        elif not snapshot or snapshot.card.get("exact"):
+            self._update_receive_metadata({})
         if (not snapshot or snapshot.card.get("exact")) and not self.current_preview_is_duplicate:
             self.receive_view.clear()
             self.receive_view.setText("Receiving signal…\nWaiting for card data")
@@ -7684,7 +7762,9 @@ class MainWindow(QMainWindow):
             f"Trying RX modem: {self._receive_mode_label(mode)} · receive-all scan")
 
     def _merge_live_preview(self, report):
-        return self.card_assembly.merge_preview(report)
+        snapshot, improved = self.card_assembly.merge_preview(report)
+        self._update_receive_metadata(snapshot)
+        return snapshot, improved
 
     def _report_receive_conflict(self, report, error):
         """Surface rejected evidence while keeping repeated scan callbacks bounded."""
@@ -7718,7 +7798,7 @@ class MainWindow(QMainWindow):
             if identity is not None:
                 self.active_receive_identity = identity
             self._show_receive_activity(report["receive_activity"],
-                                        pivot=pivot)
+                                        pivot=pivot, report=report)
             if pivot or not self.receive_activity_timeout.isActive():
                 self.receive_activity_timeout.start(12000)
             return
@@ -7806,7 +7886,7 @@ class MainWindow(QMainWindow):
             if identity is not None:
                 self.active_receive_identity = identity
             self._show_receive_activity(report["receive_activity"],
-                                        pivot=pivot)
+                                        pivot=pivot, report=report)
             if pivot or not self.receive_activity_timeout.isActive():
                 self.receive_activity_timeout.start(12000)
             if self.on_air and on_air_details is not None:
@@ -8025,9 +8105,8 @@ class MainWindow(QMainWindow):
             frequency_text = "Not recorded"
         measured_snr = card.get("measured_snr_db", report.get("measured_snr_db"))
         reported_snr = card.get("snr_db", report.get("snr_db"))
-        snr_text = (f"Measured SNR: {measured_snr} dB" if measured_snr is not None else
-                    f"Reported SNR: {reported_snr} dB" if reported_snr is not None else
-                    "SNR: Not available")
+        snr_text = "\n".join(snr_lines({**card, "measured_snr_db": measured_snr,
+                                       "snr_db": reported_snr}))
         profile = report.get("receive_profile") or self.receive_mode()
         if is_card_backend(profile):
             mode_text = get_backend(profile).label

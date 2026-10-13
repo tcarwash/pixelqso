@@ -10,6 +10,7 @@ import threading
 import time
 from concurrent.futures import Future
 from typing import Callable
+from snr import KISS_RX_SNR, decode_rx_snr
 
 FEND, FESC, TFEND, TFESC = 0xC0, 0xDB, 0xDC, 0xDD
 KISS_DATA, KISS_ACKMODE = 0x00, 0x0C
@@ -384,6 +385,12 @@ class Data2GTransport:
                                 f"expected a 2-byte tag, received {len(payload)} bytes")
                             return
                         self._callback(self.on_ack, port, payload)
+                    elif command == KISS_RX_SNR:
+                        try:
+                            digest, value, bandwidth = decode_rx_snr(payload)
+                        except ValueError:
+                            continue
+                        self._status(f"PIXELQSO_RX_SNR {port} {digest} {value} {bandwidth}")
                     elif command == KISS_DATA:
                         self._callback(self.on_frame, port, payload)
                     else:

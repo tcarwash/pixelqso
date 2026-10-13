@@ -60,7 +60,7 @@ class ReceiveResponsivenessTests(unittest.TestCase):
             window.close()
             qt.processEvents()
 
-    def test_grid_tx_latency_setting_only_shows_for_grid_mode(self):
+    def test_removed_grid_modes_and_latency_controls_are_not_offered(self):
         qt = QApplication.instance() or QApplication([])
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
                 os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), \
@@ -69,15 +69,12 @@ class ReceiveResponsivenessTests(unittest.TestCase):
             window._set_advanced_controls(True)
             window.backend_combo.setCurrentIndex(window.backend_combo.findData("experimental"))
             window.show_experimental_modes.setChecked(True)
-            window._set_mode_options("experimental_16fsk_grid")
-            window._update_grid_tx_control_visibility()
-            self.assertFalse(window.grid_tx_latency.isHidden())
-            self.assertFalse(window.grid_tx_label.isHidden())
-
             window._set_mode_options("resilient_100")
-            window._update_grid_tx_control_visibility()
-            self.assertTrue(window.grid_tx_latency.isHidden())
-            self.assertTrue(window.grid_tx_label.isHidden())
+            self.assertFalse(hasattr(window, 'grid_tx_latency'))
+            self.assertFalse(hasattr(window, 'grid_rx_latency'))
+            for key in ('experimental_16fsk_grid', 'experimental_8fsk_compressed',
+                        'experimental_16fsk_compressed'):
+                self.assertEqual(window.mode_combo.findData(key), -1)
             window.close()
             qt.processEvents()
 

@@ -2,6 +2,9 @@
 
 ## 0.4.0b1 — Beta 1
 
+- Populate a 2500 Hz receive SNR estimate from the shared local-mode header and managed Data2G PHY metadata; show receive and peer-reported SNR in the wall and QSO deck.
+- Show incoming station identity, mode, SNR, and decoded metadata before image completion, including managed Data2G bursts with lost application frames.
+
 - Allocate unused library IDs for new cards, duplicates, starter cards, and received artwork copied into My Cards.
 
 - Include the shared `ui_theme` module in installed wheels to prevent startup import errors.

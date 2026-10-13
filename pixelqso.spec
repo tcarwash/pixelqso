@@ -32,6 +32,7 @@ hidden = [
     # when the spec is invoked from outside this folder.
     "cardmodem",
     "card_ids",
+    "snr",
     "card_backends",
     "data2g_transport",
     "data2g_runtime",

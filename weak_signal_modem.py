@@ -123,6 +123,11 @@ def unpack(bits, diagnostics):
                     avatar_mode='experimental_qpsk_5s', avatar_burst=True,
                     received_blocks=[True], pixel_coverage=[True]*1024,
                     received_copies=1, color_stage='CRC checked card', diagnostics=diagnostics)
+    from snr import set_measured_snr
+    estimate = diagnostics.get('estimated_snr_db_2500')
+    if estimate is None:
+        estimate = diagnostics.get('mean_estimated_snr_db_2500')
+    set_measured_snr(metadata, estimate, 'qpsk_pilots')
     return pixels, metadata
 
 

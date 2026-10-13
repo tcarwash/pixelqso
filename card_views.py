@@ -3,6 +3,66 @@ from PySide6.QtCore import Qt, QSize, QRectF
 from PySide6.QtGui import QColor, QPainter, QPixmap, QIcon, QFont, QImage
 from PySide6.QtWidgets import QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget, QListWidgetItem, QSizePolicy, QStackedWidget
 from ui_theme import COLORS, SPACING
+from snr import snr_lines
+
+
+def incoming_card_text(report, mode_label=None):
+    """Show decoded metadata without requiring image pixels or whole-card proof."""
+    card = report.get('card') or {}
+    diagnostic = report.get('copy_header') or card.get('diagnostics') or report.get('diagnostics') or {}
+    call, grid = card.get('callsign'), card.get('grid')
+    lines = ['Incoming: ' + ' · '.join(str(value) for value in (call, grid) if value)
+             if call or grid else 'Incoming card · station identity pending']
+    identity = []
+    if card.get('card_id') is not None:
+        identity.append(f"Card ID: {int(card['card_id']):04X}")
+    if card.get('message_type'):
+        identity.append(f"Stage: {stage_label(report)}")
+    if card.get('width') and card.get('height'):
+        identity.append(f"Image: {card['width']} × {card['height']}")
+    if card.get('palette'):
+        identity.append(f"Colors: {len(card['palette'])}")
+    elif card.get('palette_id') is not None:
+        identity.append(f"Palette ID: {card['palette_id']}")
+    if identity:
+        lines.append(' · '.join(identity))
+    mode = mode_label or report.get('receive_profile') or diagnostic.get('announced_mode')
+    if mode:
+        lines.append(f"RX mode: {mode}")
+    if card.get('measured_snr_db') is not None or card.get('snr_db') is not None:
+        lines.extend(snr_lines(card))
+    if report.get('frequency_hz') is not None:
+        lines.append(f"Frequency: {float(report['frequency_hz'])/1e6:.6f} MHz")
+    progress = []
+    blocks = card.get('received_blocks')
+    if blocks:
+        progress.append(f"CRC-checked blocks: {sum(bool(value) for value in blocks)}/{len(blocks)}")
+    coverage = card.get('pixel_coverage')
+    if coverage:
+        progress.append(f"Image received: {round(100*sum(bool(value) for value in coverage)/len(coverage))}%")
+    copies = card.get('received_copies', diagnostic.get('announced_copies'))
+    if copies is not None:
+        progress.append(f"Copies: {copies}")
+    if progress:
+        lines.append(' · '.join(progress))
+    content = card.get('image_id') or diagnostic.get('content_id')
+    if content:
+        lines.append(f"Content ID: {str(content)[:16]}")
+    if diagnostic.get('payload_samples') is not None:
+        lines.append(f"Announced payload: {float(diagnostic['payload_samples'])/48000:g} seconds")
+    if diagnostic.get('corrected_symbols') is not None:
+        lines.append(f"Protected header corrections: {diagnostic['corrected_symbols']}")
+    if diagnostic.get('codewords'):
+        lines.append(f"Burst codewords: {diagnostic['codewords']}")
+    timing = []
+    if diagnostic.get('carrier_offset_hz') is not None:
+        timing.append(f"Frequency offset: {float(diagnostic['carrier_offset_hz']):+g} Hz")
+    if diagnostic.get('clock_ppm') is not None:
+        timing.append(f"Clock estimate: {float(diagnostic['clock_ppm']):+g} ppm")
+    if timing:
+        lines.append(' · '.join(timing))
+    lines.append('Whole card verified' if card.get('exact') else 'Image incomplete · waiting for more data')
+    return '\n'.join(lines)
 
 
 def deck_events(entry):
@@ -252,7 +312,7 @@ class DeckDialog(QDialog):
             detail += f" · Recorded {card['logged_at']}"
         else:
             detail += " · Event time not recorded in this log"
-        if meta.get('snr_db') is not None: detail += f"  ·  Report {meta['snr_db']:+d} dB"
+        detail += " · " + " · ".join(snr_lines(meta, sent=direction == 'sent_cards'))
         self.details.setText(detail)
         coverage = meta.get('pixel_coverage') or []
         received = sum(bool(value) for value in coverage)
@@ -273,6 +333,7 @@ class DeckDialog(QDialog):
             f"Grid: {meta.get('grid') or 'Not available'}",
             f"Card ID: {meta.get('card_id') if meta.get('card_id') is not None else 'Not available'}",
             integrity,
+            *snr_lines(meta, sent=direction == 'sent_cards'),
             f"Received: {card.get('logged_at') or 'time not recorded'}",
         )))
         self.add_button.setVisible(

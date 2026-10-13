@@ -1,19 +1,37 @@
 import unittest
 
+from data2g import modem
+from data2g.config import MAX_CODEWORDS
+from data2g_receive_host import enable_advertised_receive_lengths
 from data2g_runtime import (data2g_audio_device_selector, local_host_arguments,
                             local_host_command)
 
 
 class Data2GRuntimeTests(unittest.TestCase):
-    def test_source_install_launches_supported_module_cli(self):
-        self.assertEqual(local_host_command(["--help"], frozen=False,
-                                            executable="python"),
-                         ["python", "-m", "data2g.host", "--help"])
+    def test_source_install_launches_receive_compatibility_shim(self):
+        command = local_host_command(["--help"], frozen=False, executable="python")
+        self.assertEqual(command[0], "python")
+        self.assertTrue(command[1].endswith("/data2g_receive_host.py"))
+        self.assertEqual(command[2:], ["--help"])
 
     def test_frozen_app_reenters_only_at_server_cli_dispatch(self):
         self.assertEqual(local_host_command(["--help"], frozen=True,
                                             executable="PixelQSO"),
                          ["PixelQSO", "--run-data2g-host", "--help"])
+
+    def test_receiver_acceptance_matches_advertised_codeword_range(self):
+        original = modem.Accept.of
+        try:
+            before = dict(modem.Accept.of(None, 16.0).max_cw)
+            self.assertLess(before["n4-qpsk-r1/5"], MAX_CODEWORDS)
+            enable_advertised_receive_lengths()
+            after = dict(modem.Accept.of(None, 16.0).max_cw)
+            self.assertEqual(after["n4-qpsk-r1/5"], MAX_CODEWORDS)
+            # Explicit submode lists keep any caller-supplied duration limit.
+            named = dict(modem.Accept.of(["n4-qpsk-r1/5"], 16.0).max_cw)
+            self.assertEqual(named["n4-qpsk-r1/5"], before["n4-qpsk-r1/5"])
+        finally:
+            modem.Accept.of = original
 
     def test_host_configuration_maps_station_devices_and_radio_server(self):
         args = local_host_arguments(

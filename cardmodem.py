@@ -5,8 +5,10 @@ This development prototype searches frame start, carrier offset, and symbol
 clock drift. It remains intended for local loopback and channel experiments.
 """
 from __future__ import annotations
-import argparse, base64, hashlib, json, struct, wave, zlib
+import argparse, base64, copy, hashlib, json, struct, wave, zlib
 from dataclasses import dataclass
+from threading import RLock
+from collections import OrderedDict
 from pathlib import Path
 from typing import Iterable
 
@@ -826,6 +828,35 @@ def _decode_soft_avatar_block(codeword: list[int], received_tone_metrics: np.nda
     return None
 
 
+def _decode_avatar_block_metrics(block_tones, block_metrics, data_count, *,
+                                 block_index, block_count, image_tag_symbols=None):
+    """Return a checked RS/CRC block, including its protected image position."""
+    data_tone_count = (data_count + 2) * 2
+    tones = [int(value) for value in block_tones]
+    if len(tones) < data_tone_count + 6:
+        raise ValueError("incomplete avatar block")
+    coded = _tones_to_gf64(tones[:data_tone_count])
+    expected_crc = int.from_bytes(_tones_crc16(tones[data_tone_count:data_tone_count + 6]), "big")
+    shortened = AVATAR_RS_K - data_count
+    try:
+        values, corrected = _rs64_decode(coded, shortened=shortened)
+        if crc16(_avatar_data_bytes(values)) != expected_crc:
+            raise ValueError("avatar block checksum failed")
+    except ValueError:
+        if block_metrics is None:
+            raise
+        recovered = _decode_soft_avatar_block(coded, block_metrics[:data_tone_count],
+                                              expected_crc, shortened)
+        if recovered is None:
+            raise ValueError("avatar block checksum failed")
+        values, corrected = recovered
+    if image_tag_symbols is not None and (
+            values[0] != block_index or values[1] != block_count or
+            values[AVATAR_BLOCK_ID_SYMBOLS:AVATAR_V4_BLOCK_OVERHEAD] != image_tag_symbols):
+        raise ValueError("avatar block identity or position check failed")
+    return values, corrected, expected_crc
+
+
 def decode_minimal_avatar_resilient_symbols(symbols: Iterable[int], *, require_sync: bool = True,
                                              tone_metrics: np.ndarray | None = None) -> tuple[list[int], list[bool], int, dict]:
     tones = [int(value) for value in symbols]
@@ -900,27 +931,14 @@ def decode_minimal_avatar_resilient_symbols(symbols: Iterable[int], *, require_s
             if block_end <= len(tones):
                 wire = tones[block_start:block_end]
                 try:
-                    coded = _tones_to_gf64(wire[:data_tone_count])
-                    shortened = AVATAR_RS_K - data_count
-                    expected_crc = int.from_bytes(_tones_crc16(wire[data_tone_count:]), "big")
-                    try:
-                        values, corrected = _rs64_decode(coded, shortened=shortened)
-                        if crc16(_avatar_data_bytes(values)) != expected_crc:
-                            raise ValueError("avatar block checksum failed")
-                    except ValueError:
-                        if tone_metrics is None:
-                            raise
-                        block_metrics = tone_metrics[block_start:block_start + data_tone_count]
-                        recovered = _decode_soft_avatar_block(coded, block_metrics,
-                                                              expected_crc, shortened)
-                        if recovered is None:
-                            raise
-                        values, corrected = recovered
+                    block_metrics = (tone_metrics[block_start:block_start + data_tone_count]
+                                     if tone_metrics is not None else None)
+                    expected_tag_symbols = (_bytes_to_gf64(bytes.fromhex(metadata["image_tag"]))
+                                            if new_format else None)
+                    values, corrected, expected_crc = _decode_avatar_block_metrics(
+                        wire, block_metrics, data_count, block_index=block_index,
+                        block_count=block_count, image_tag_symbols=expected_tag_symbols)
                     if new_format:
-                        expected_tag_symbols = _bytes_to_gf64(bytes.fromhex(metadata["image_tag"]))
-                        if (values[0] != block_index or values[1] != block_count or
-                                values[AVATAR_BLOCK_ID_SYMBOLS:AVATAR_V4_BLOCK_OVERHEAD] != expected_tag_symbols):
-                            raise ValueError("avatar block identity or position check failed")
                         values = values[AVATAR_V4_BLOCK_OVERHEAD:]
                     block_pixels = _gf64_to_pixels(values, current_pixel_count, bpp)
                     group["pixels"][first_pixel:first_pixel + current_pixel_count] = block_pixels
@@ -1258,39 +1276,261 @@ def _announced_avatar_acquisition(audio, sample_rate, profile):
     return best[1],best[2],period
 
 
+def _recover_avatar_blocks_with_local_timing(copies, timing_hypotheses, report, evidence,
+                                              sample_rate, profile, header_count):
+    """Retry missing v4 RS blocks at nearby local sample positions.
+
+    A single clock hypothesis can align the identity and first block while
+    audio sample slips later move subsequent blocks by tens of milliseconds.
+    Each local candidate is admitted only by that block's RS, CRC16, block
+    index, block count, and protected image tag.
+    """
+    metadata = report[1]
+    if metadata.get("header_version") != 4:
+        return None
+    selected = resolve_profile(profile)
+    stitched = evidence.copy()
+    sync = np.asarray(FRAME_SYNC, dtype=int)
+    complete_cycle_samples = round(_resilient_cycle_tone_count(4) * sample_rate / selected.baud)
+    scored_copies = []
+    for index, group in enumerate(timing_hypotheses):
+        if not group:
+            continue
+        # A full-card local search is relatively expensive. Do not run it on
+        # the rolling live window until an entire v4 avatar cycle is present;
+        # the normal decoder can still expose its earlier provisional preview.
+        if len(copies[index]) < complete_cycle_samples + round(.08 * sample_rate):
+            continue
+        primary = group[0]
+        rows = primary.evidence[:len(sync)]
+        normalized = rows / np.maximum(rows.sum(axis=1, keepdims=True), 1e-12)
+        score = float(np.mean(normalized[np.arange(len(sync)), sync]))
+        scored_copies.append((score, index, primary.diagnostics))
+    # Marker detection can produce two slightly shifted windows around one
+    # physical copy. Limiting the slow local search to the three strongest
+    # sync captures avoids repeatedly decoding those weaker alternatives.
+    scored_copies = sorted((item for item in scored_copies if item[0] >= .6),
+                           reverse=True)[:3]
+    if not scored_copies:
+        return None
+
+    nominal = sample_rate / selected.baud
+    best_period = (metadata.get("acquisition") or {}).get("symbol_period_samples", nominal)
+    periods = sorted({float(best_period),
+                      *(nominal * factor for factor in (.99, .995, .9975,
+                                                        1.0025, 1.005, 1.01))},
+                     key=lambda value: abs(value - best_period))
+    # The saved HF capture needs block-local timing resets as large as several
+    # hundred milliseconds. Search a bounded +/-400 ms window at 4 ms steps;
+    # blocks are still admitted only by RS, CRC16, position, and protected tag.
+    offsets = sorted(set([0, *range(-3200, 3201, 32)]), key=lambda value: abs(value))
+    bits_per_pixel = metadata["bits_per_pixel"]
+    pixel_count = metadata["width"] * metadata["height"]
+    pixels_per_block = ((AVATAR_RS_K - AVATAR_V4_BLOCK_OVERHEAD) * 6) // bits_per_pixel
+    block_count = (pixel_count + pixels_per_block - 1) // pixels_per_block
+    tag_symbols = _bytes_to_gf64(bytes.fromhex(metadata["image_tag"]))
+    cursor = len(FRAME_SYNC) + header_count
+    recovered = []
+    for block_index in range(block_count):
+        current_pixels = min(pixels_per_block, pixel_count - block_index * pixels_per_block)
+        data_count = (current_pixels * bits_per_pixel + 5) // 6 + AVATAR_V4_BLOCK_OVERHEAD
+        data_tone_count = (data_count + 2) * 2
+        tone_count = data_tone_count + 6
+        end = cursor + tone_count
+        if block_index < len(report[1].get("received_blocks", [])) and report[1]["received_blocks"][block_index]:
+            cursor = end
+            continue
+        known_block_values = [block_index, block_count] + tag_symbols
+        found = None
+        ranked_starts = []
+        for _, copy_index, diagnostic in scored_copies:
+            audio = copies[copy_index]
+            start = int(diagnostic["start_sample"])
+            carrier = float(diagnostic["frequency_offset_hz"])
+            copy_starts = []
+            for period in periods:
+                predicted = round(start + cursor * period)
+                for delta in offsets:
+                    local_start = max(0, predicted + delta)
+                    quick = demodulate_metrics(audio, sample_rate, start_sample=local_start,
+                                frequency_offset_hz=carrier, symbol_period_samples=period,
+                                profile=selected,
+                                symbol_count=len(known_block_values)*2)
+                    if len(quick) < len(known_block_values)*2:
+                        continue
+                    normalized = quick / np.maximum(quick.sum(axis=1,keepdims=True),1e-20)
+                    expected_tones=np.asarray([tone for value in known_block_values
+                                               for tone in (value>>3,value&7)],dtype=int)
+                    score=float(np.mean(normalized[np.arange(len(expected_tones)),expected_tones]))
+                    copy_starts.append((score,copy_index,audio,carrier,period,local_start))
+            copy_starts.sort(key=lambda item:item[0],reverse=True)
+            selected_starts=[]
+            for candidate in copy_starts:
+                if any(candidate[1]==old[1] and abs(candidate[5]-old[5])<16 and
+                       abs(candidate[4]-old[4])<.05 for old in selected_starts):
+                    continue
+                selected_starts.append(candidate)
+                if len(selected_starts)>=40:
+                    break
+            ranked_starts.extend(selected_starts)
+        ranked_starts.sort(key=lambda item:item[0],reverse=True)
+        combined_metrics=[]
+        combined_origins=[]
+        for score,copy_index,audio,carrier,period,local_start in ranked_starts:
+            metrics = demodulate_metrics(audio, sample_rate, start_sample=local_start,
+                                frequency_offset_hz=carrier, symbol_period_samples=period,
+                                profile=selected,symbol_count=tone_count)
+            if len(metrics) < tone_count:
+                continue
+            local_tones = np.argmax(metrics, axis=1).astype(int).tolist()
+            try:
+                values, corrected, checksum = _decode_avatar_block_metrics(
+                    local_tones, metrics, data_count, block_index=block_index,
+                    block_count=block_count, image_tag_symbols=tag_symbols)
+            except ValueError:
+                pass
+            else:
+                found = (metrics, {"block": block_index, "start_sample": local_start,
+                                   "symbol_period_samples": period,
+                                   "frequency_offset_hz": carrier,
+                                   "corrected_symbols": bool(corrected),
+                                   "crc16": checksum,"timing_score":score,
+                                   "source_copy":copy_index})
+                break
+            aligned=metrics/np.maximum(metrics.sum(axis=1,keepdims=True),1e-20)
+            if copy_index not in combined_origins:
+                combined_metrics.append(aligned)
+                combined_origins.append(copy_index)
+        if found is None and len(combined_metrics)>=2:
+            fused=np.sum(combined_metrics,axis=0)
+            fused_tones=np.argmax(fused,axis=1).astype(int).tolist()
+            try:
+                values,corrected,checksum=_decode_avatar_block_metrics(
+                    fused_tones,fused,data_count,block_index=block_index,
+                    block_count=block_count,image_tag_symbols=tag_symbols)
+                source="combined:"+",".join(map(str,combined_origins))
+                found=(fused,{"block":block_index,"combined_copies":combined_origins,
+                              "corrected_symbols":bool(corrected),"crc16":checksum,
+                              "timing_score":None,"source_copy":source})
+            except ValueError:
+                pass
+        if found is not None:
+            if end > len(stitched):
+                stitched = np.pad(stitched, ((0, end - len(stitched)), (0, 0)))
+            stitched[cursor:end] = found[0]
+            recovered.append(found[1])
+        cursor = end
+    if not recovered:
+        return None
+    symbols = np.argmax(stitched, axis=1).astype(int).tolist()
+    symbols[:len(FRAME_SYNC)] = FRAME_SYNC
+    header_start = len(FRAME_SYNC)
+    symbols[header_start:header_start + header_count] = _metadata_tones_from_decoded(metadata)
+    diagnostic = dict(metadata.get("acquisition") or {})
+    diagnostic["local_block_timing_recovery"] = recovered
+    result = _avatar_metrics_report(symbols, metadata, stitched,
+                                    metadata.get("received_copies", 1), diagnostic, None)
+    return result
+
+
+_AVATAR_DECODE_CACHE = OrderedDict()
+_AVATAR_DECODE_CACHE_LOCK = RLock()
+_AVATAR_DECODE_CACHE_LIMIT = 4
+
+
+def _avatar_decode_cache_key(copies, sample_rate, profile, checked, wire_version):
+    """Fingerprint exact low-rate capture inputs for repeated live snapshots."""
+    digest = hashlib.blake2b(digest_size=20)
+    digest.update(repr((sample_rate, profile.key, profile.baud, profile.tones_hz,
+                        checked, wire_version)).encode("utf-8"))
+    for audio in copies:
+        samples = np.asarray(audio)
+        if not samples.flags.c_contiguous:
+            samples = np.ascontiguousarray(samples)
+        digest.update(samples.dtype.str.encode("ascii"))
+        digest.update(len(samples).to_bytes(8, "big"))
+        digest.update(memoryview(samples).cast("B"))
+    return digest.digest()
+
+
 def decode_avatar_copies(copies, sample_rate, profile, *, checked=True, wire_version=4):
     """Independently acquire copies admitted by the common identity header.
 
     Header and image likelihoods are combined before RS/CRC, including when
     none of the native identity headers could be decoded on its own.
     """
-    from copy_combining import SoftCopy, recovery_attempts, diagnostics_for
+    from copy_combining import SoftCopy, recovery_attempts, hypothesis_attempts, diagnostics_for
+    copies = list(copies)
     selected = resolve_profile(profile)
+    cache_key = None
+    if selected.baud <= 50 and checked and wire_version == 4:
+        cache_key = _avatar_decode_cache_key(copies, sample_rate, selected, checked, wire_version)
+        with _AVATAR_DECODE_CACHE_LOCK:
+            cached = _AVATAR_DECODE_CACHE.get(cache_key)
+            if cached is not None:
+                _AVATAR_DECODE_CACHE.move_to_end(cache_key)
+                return copy.deepcopy(cached)
     header_count = AVATAR_META_V4_TONE_COUNT if checked and wire_version == 4 else AVATAR_META_TONE_COUNT
-    frames, best = [], None
+    frames, timing_hypotheses, best, best_metrics = [], [], None, None
     error = ValueError("no valid avatar identity header received yet")
     for audio in copies:
         start, offset, period = _announced_avatar_acquisition(audio, sample_rate, selected)
-        metrics = demodulate_metrics(audio, sample_rate, start_sample=start,
-                   frequency_offset_hz=offset, symbol_period_samples=period, profile=selected)
-        if len(metrics) < len(FRAME_SYNC) + header_count:
-            continue
-        # Normalize by receiver noise, not signal strength: a deep fade must
-        # not get the same weight as a strong copy.
-        noise = max(float(np.median(np.sort(metrics, axis=1)[:, :4])), 1e-12)
-        evidence = metrics / noise
-        diagnostic = dict(start_sample=start, sample_rate=sample_rate,
-                          frequency_offset_hz=offset, symbol_period_samples=period,
-                          clock_error_ppm=(period/(sample_rate/selected.baud)-1)*1e6)
-        frames.append(SoftCopy(evidence, diagnostic, identity=('announced',)))
+        # At 50 baud the 24-symbol sync is too short to estimate clock error
+        # reliably. acquire() deliberately prefers the nominal period there,
+        # but a small clock mismatch accumulates across the long raster and
+        # smears every later RS block. Keep a bounded set of nearby clocks as
+        # alternative interpretations of this same physical copy; the block
+        # CRC and protected image identity remain the acceptance gates.
+        periods = [period]
+        if selected.baud <= 50:
+            periods = sorted({float(period * (1 + error)) for error in
+                              np.linspace(-0.005, 0.005, 13)},
+                             key=lambda value: abs(value - period))
+        alternatives = []
+        for candidate_period in periods:
+            metrics = demodulate_metrics(audio, sample_rate, start_sample=start,
+                       frequency_offset_hz=offset, symbol_period_samples=candidate_period,
+                       profile=selected)
+            if len(metrics) < len(FRAME_SYNC) + header_count:
+                continue
+            # Normalize by receiver noise, not signal strength: a deep fade
+            # must not get the same weight as a strong copy.
+            noise = max(float(np.median(np.sort(metrics, axis=1)[:, :4])), 1e-12)
+            evidence = metrics / noise
+            diagnostic = dict(start_sample=start, sample_rate=sample_rate,
+                              frequency_offset_hz=offset,
+                              symbol_period_samples=candidate_period,
+                              clock_error_ppm=(candidate_period/
+                                               (sample_rate/selected.baud)-1)*1e6)
+            frame = SoftCopy(evidence, diagnostic, identity=('announced',))
+            alternatives.append(frame)
+            if candidate_period == period:
+                frames.append(frame)
+        if alternatives:
+            timing_hypotheses.append(alternatives)
     if not frames:
         raise error
     # Different capture lengths can include trailing guards; pool only the
     # common complete symbol extent, never pad missing evidence with guesses.
-    count = min(len(c.evidence) for c in frames)
-    for frame in frames:
+    all_frames = [frame for group in timing_hypotheses for frame in group]
+    count = min(len(c.evidence) for c in all_frames)
+    for frame in all_frames:
         frame.evidence = frame.evidence[:count]
-    for metrics, used in recovery_attempts(frames):
+    if selected.baud <= 50:
+        def low_rate_attempts():
+            primary = [group[0] for group in timing_hypotheses if group]
+            yield from recovery_attempts(primary)
+            # A clock alternative belongs to one physical capture. Check it
+            # alone before any cross-copy pooling so a CRC-valid block can be
+            # retained without pretending alternative clocks are extra copies.
+            for group in timing_hypotheses:
+                for alternative in group[1:]:
+                    yield alternative.evidence, [alternative]
+            yield from hypothesis_attempts(timing_hypotheses, max_extra=32)
+        attempts = low_rate_attempts()
+    else:
+        attempts = recovery_attempts(frames)
+    for metrics, used in attempts:
         try:
             header_start = len(FRAME_SYNC)
             metadata = _decode_avatar_metadata_soft(metrics[header_start:header_start+header_count])
@@ -1311,9 +1551,28 @@ def decode_avatar_copies(copies, sample_rate, profile, *, checked=True, wire_ver
                 best[1].get('received_copies',1))
             if quality>previous_quality:
                 best=report
+                best_metrics=metrics
         except (ValueError, UnicodeDecodeError, ZeroDivisionError) as exc:
             error = exc
+    if best is not None and selected.baud <= 50 and best_metrics is not None:
+        locally_recovered = _recover_avatar_blocks_with_local_timing(
+            copies, timing_hypotheses, best, best_metrics, sample_rate, selected, header_count)
+        if locally_recovered is not None:
+            quality = (sum(locally_recovered[1].get('received_blocks') or []),
+                       sum(locally_recovered[1].get('pixel_coverage') or []),
+                       locally_recovered[1].get('received_copies', 1))
+            previous_quality = (sum(best[1].get('received_blocks') or []),
+                                sum(best[1].get('pixel_coverage') or []),
+                                best[1].get('received_copies', 1))
+            if quality > previous_quality:
+                best = locally_recovered
     if best is not None:
+        if cache_key is not None:
+            with _AVATAR_DECODE_CACHE_LOCK:
+                _AVATAR_DECODE_CACHE[cache_key] = copy.deepcopy(best)
+                _AVATAR_DECODE_CACHE.move_to_end(cache_key)
+                while len(_AVATAR_DECODE_CACHE) > _AVATAR_DECODE_CACHE_LIMIT:
+                    _AVATAR_DECODE_CACHE.popitem(last=False)
         return best
     raise error
 
@@ -1554,7 +1813,8 @@ def demodulate(audio: np.ndarray, sample_rate: int, baud: int | None = None,
 def demodulate_metrics(audio: np.ndarray, sample_rate: int, baud: int | None = None,
                        start_sample: int = 0, frequency_offset_hz: float = 0.0,
                        symbol_period_samples: float | None = None,
-                       profile: str | ModemProfile | None = None) -> np.ndarray:
+                       profile: str | ModemProfile | None = None,
+                       symbol_count: int | None = None) -> np.ndarray:
     selected = resolve_profile(profile)
     if profile is not None and baud is not None and baud != selected.baud:
         raise ValueError("baud conflicts with selected modem profile")
@@ -1562,6 +1822,8 @@ def demodulate_metrics(audio: np.ndarray, sample_rate: int, baud: int | None = N
     tones = selected.tones_hz if profile is not None or baud is None else TONES_HZ
     sps = symbol_period_samples or sample_rate / rate
     n = int(np.ceil((len(audio) - start_sample) / sps))
+    if symbol_count is not None:
+        n = min(n, max(0, int(symbol_count)))
     if n == 0:
         return np.empty((0, len(tones)), dtype=np.float64)
     symbols = np.arange(n)

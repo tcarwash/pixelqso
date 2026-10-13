@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 
 def int_setting(value, default: int) -> int:
@@ -16,8 +17,9 @@ def local_host_command(arguments: list[str], *, frozen: bool | None = None,
                        executable: str | None = None) -> list[str]:
     """Build argv for Data2G's server entry point in a child process.
 
-    Source installs use Data2G's published module CLI. Frozen builds dispatch
-    the same CLI arguments through PixelQSO's bundled host entry point.
+    Source installs and frozen builds use PixelQSO's isolated host shim. It
+    removes Data2G's receiver-only duration cap so its accepted codeword range
+    matches the maximum already advertised by that host.
     No modem classes or waveform functions are imported by this adapter.
     """
     if frozen is None:
@@ -25,7 +27,8 @@ def local_host_command(arguments: list[str], *, frozen: bool | None = None,
     executable = executable or sys.executable
     if frozen:
         return [executable, "--run-data2g-host", *arguments]
-    return [executable, "-m", "data2g.host", *arguments]
+    shim = Path(__file__).with_name("data2g_receive_host.py")
+    return [executable, str(shim), *arguments]
 
 
 def data2g_audio_device_selector(device_id: bytes | str, description: str) -> str:

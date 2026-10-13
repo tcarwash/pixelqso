@@ -1,0 +1,101 @@
+{
+  "date": "2026-10-13",
+  "scope": "Northern Utah WebSDR 1 bridge PCM recordings at 7066 kHz USB, 8 kHz mono s16le; excludes the diagnostic live-probe file",
+  "method": "PixelQSO modem_envelope.find_copies on 25-second windows with 20-second hop (5-second overlap); source is resampled by the detector to its 48 kHz acquisition rate",
+  "detector_source_sha256": "cbad02cf14f9b9040826a001d7fab5210aa8ead3d64a86f89be54111fad5eba7",
+  "recordings_scanned": 11,
+  "total_audio_s": 1995.792,
+  "windows_scanned": 101,
+  "protected_local_modem_headers": 0,
+  "files": [
+    {
+      "file": "websdr-20261013T074728Z-7066kHz.s16",
+      "sha256": "589ac54a70e78c54e26b07db04fba8e2e35e411386fa4c9611d822290f9063f6",
+      "duration_s": 330.72,
+      "rms": 0.048512,
+      "windows_scanned": 17,
+      "protected_headers": 0
+    },
+    {
+      "file": "websdr-20261013T075701Z-7066kHz.s16",
+      "sha256": "d24c2208951656365c328d0836aafdc23c7d337dfcf8aa5883de5113c4aefd32",
+      "duration_s": 298.704,
+      "rms": 0.049046,
+      "windows_scanned": 15,
+      "protected_headers": 0
+    },
+    {
+      "file": "websdr-20261013T080831Z-7066kHz.s16",
+      "sha256": "0e2bf0e4973d99d6062b86eef3ce2f4b18a82c8e840b68aa69a603591730bf0b",
+      "duration_s": 298.56,
+      "rms": 0.046537,
+      "windows_scanned": 15,
+      "protected_headers": 0
+    },
+    {
+      "file": "websdr-20261013T081433Z-7066kHz.s16",
+      "sha256": "c770fd9ef37f5a07870e9e000b23a54304b2fcf99a9f50b87bc343eeec7ef9ad",
+      "duration_s": 178.032,
+      "rms": 0.047612,
+      "windows_scanned": 9,
+      "protected_headers": 0
+    },
+    {
+      "file": "websdr-20261013T081942Z-7066kHz.s16",
+      "sha256": "bb4d230cd64f53822e0cb2d38320dca2a9c5b7ae2633de08a6f16d3b127711b0",
+      "duration_s": 178.512,
+      "rms": 0.048554,
+      "windows_scanned": 9,
+      "protected_headers": 0
+    },
+    {
+      "file": "websdr-20261013T082325Z-7066kHz.s16",
+      "sha256": "83a684370c2c4022a7a660e74db887d0158033da9c3b3d2cff56ac9c286d17f8",
+      "duration_s": 178.608,
+      "rms": 0.047649,
+      "windows_scanned": 9,
+      "protected_headers": 0
+    },
+    {
+      "file": "websdr-20261013T083018Z-7066kHz.s16",
+      "sha256": "e579db9157a200266004ba0182d67a0cad6fe8992151268d4b59274e46ab2b47",
+      "duration_s": 178.512,
+      "rms": 0.046528,
+      "windows_scanned": 9,
+      "protected_headers": 0
+    },
+    {
+      "file": "websdr-20261013T085846Z-7066kHz.s16",
+      "sha256": "f1b5d0b01cbcc2c2c03d28fb1f988921cc8a5555f791c52777fa4d1bb6b1e22d",
+      "duration_s": 178.56,
+      "rms": 0.044782,
+      "windows_scanned": 9,
+      "protected_headers": 0
+    },
+    {
+      "file": "websdr-20261013T090249Z-7066kHz.s16",
+      "sha256": "f510b09ea31be10d9e65be5c1a76863ee39cf8ad58b217dd092295d614cc57b6",
+      "duration_s": 58.512,
+      "rms": 0.0434,
+      "windows_scanned": 3,
+      "protected_headers": 0
+    },
+    {
+      "file": "websdr-20261013T090548Z-7066kHz.s16",
+      "sha256": "3e7ef2f5caab8ca7eef819324bdeea52b318d4f22f8706cb9ecacb1e79977a6c",
+      "duration_s": 58.56,
+      "rms": 0.046935,
+      "windows_scanned": 3,
+      "protected_headers": 0
+    },
+    {
+      "file": "websdr-20261013T091220Z-7066kHz.s16",
+      "sha256": "9ddbcf8635cb356639f3f2f7b5f74f6334ef8c63a3e6d38091229d0a4ecf3f6d",
+      "duration_s": 58.512,
+      "rms": 0.052159,
+      "windows_scanned": 3,
+      "protected_headers": 0
+    }
+  ],
+  "interpretation": "No common protected local-modem header was recovered from these recordings. This does not test Data2G payload decoding or prove a user transmission was present in each file."
+}

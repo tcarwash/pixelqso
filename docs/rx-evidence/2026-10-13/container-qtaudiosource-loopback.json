@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-13",
+  "container": "pixelqso_stream-radio-1",
+  "container_image": "sha256:b3b7d1b0cba870022edae71173d739ce7ba059ea017fce42f7c42a816f23c380",
+  "probe": "Inject synthetic broadband PCM into the container rx_audio Pulse sink and capture it through Qt QAudioSource using the configured Radio-Loopback input.",
+  "input_device_description": "Radio-Loopback",
+  "input_device_id": "rx_audio_input",
+  "format": "48000 Hz, mono, signed 16-bit PCM",
+  "qt_multimedia_backend": "FFmpeg 7.1.5; PipeWire plugin load/resolve warnings, but QAudioSource opened and remained ActiveState with Error.NoError",
+  "reference_samples": 288000,
+  "captured_samples": 360266,
+  "matched_lag_samples": 22912,
+  "full_reference_correlation": 1.0,
+  "half_second_windows": 10,
+  "window_correlations": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+  "measured_lag_drift_ms_per_s": 0.0,
+  "playback_exit_code": 0,
+  "interpretation": "The configured in-container Qt capture path was active and reproduced the synthetic PCM exactly over this six-second run. This does not test a modem decode or an HF signal."
+}

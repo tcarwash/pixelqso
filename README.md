@@ -12,9 +12,13 @@ See [copy framing and receiver details](tools/COPY_COMBINING.md) and
 
 ## Screenshots
 
-| QSO session | Card editor |
+| Operate · disconnected setup | Card editor · 73 Sunset starter |
 | --- | --- |
-| <img src="screenshots/qso-session.png" alt="Pixel QSO session wall with staged cards and receive preview" width="480"> | <img src="screenshots/card-editor.png" alt="Pixel QSO card editor with drawing tools, palette, and card settings" width="480"> |
+| <img src="screenshots/qso-session.png" alt="Pixel QSO Operate page with station connection guidance and an empty session wall" width="480"> | <img src="screenshots/card-editor.png" alt="Pixel QSO card editor showing the 73 Sunset starter card, pixel tools, palette, and save action" width="480"> |
+
+The Operate screenshot uses an isolated fresh profile and does not show active
+reception or transmission. The editor screenshot uses the included 73 Sunset
+starter card.
 
 Example cards made in the editor:
 
@@ -208,3 +212,5 @@ The [FSK receiver improvements](docs/FSK-RECEIVER.md) add distributed header acq
 Experimental UTC scheduling: [compressed 16-FSK on a 500 ms start grid](docs/GRID-FSK.md).
 
 Receive-all acquisition profiling and measured decoder latency: [profiling report](docs/RECEIVE-ALL-PROFILING.md).
+
+On-air receive diagnosis and resume notes: [2026-10-12 HF findings](docs/HF-RX-FINDINGS-2026-10-12.md).

@@ -200,7 +200,8 @@ def decode_copies(key,captures,sample_rate,announcements):
             radius = max(2,(.002+index*fmt.seconds*.0002)*fmt.baud)
             try:
                 variants = []
-                for evidence,timing in burst.announced_fsk_candidates(analytic,fmt,radius=radius):
+                for candidate_index,(evidence,timing) in enumerate(
+                        burst.announced_fsk_candidates(analytic,fmt,radius=radius)):
                     if len(evidence) < fmt.symbol_count:
                         continue
                     blocks,at = [],burst.TRAINING
@@ -212,6 +213,22 @@ def decode_copies(key,captures,sample_rate,announcements):
                         logsumexp(metrics[:,(labels&(1<<bit))!=0],axis=1)
                         for bit in range(fmt.bits_per_symbol-1,-1,-1)]).ravel()[:fmt.code_bits]
                     ordered = np.empty(fmt.code_bits);ordered[permutation] = llrs
+                    # Try the best normal hypothesis immediately. If it fails,
+                    # the generator continues with alternate timing and the
+                    # bounded training reacquisition. A reacquired single copy
+                    # can verify on its own without waiting for copy pooling.
+                    if candidate_index == 0 or 'training_search_score' in timing:
+                        try:
+                            bits,iterations=weak.decode_ldpc(ordered,code_instance=code(capacity))
+                            native,info=unpack(np.packbits(bits^whitening(capacity)).tobytes())
+                            return burst._whole_report(key,native,{
+                                **timing,**info,'ldpc_iterations':iterations,
+                                'coded_bits':fmt.code_bits,'information_bits':capacity*8,
+                                'combined_copies':1,'acquired_copies':len(audios),
+                                'acquisition_method':timing.get('acquisition_method',
+                                    'protected boundary + known-tone training')})
+                        except ValueError as exc:
+                            error=exc
                     variants.append(SoftCopy(ordered,timing))
                 if variants: frames.append(variants)
             except ValueError as exc:

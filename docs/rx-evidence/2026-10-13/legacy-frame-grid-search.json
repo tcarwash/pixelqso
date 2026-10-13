@@ -1,0 +1,456 @@
+[
+  {
+    "window_s": 0.0,
+    "acquire": [
+      1,
+      160.0,
+      4.75
+    ],
+    "tries": 20,
+    "successes": [],
+    "top": [
+      {
+        "score": 0.6895070390271577,
+        "start": 0,
+        "period": 160.0,
+        "cfo": 4.75,
+        "evidence": 1,
+        "valid": [],
+        "errors": [
+          "seq 0: packet body undecodable after 1 copy/copies"
+        ]
+      },
+      {
+        "score": 0.6888286238109266,
+        "start": 0,
+        "period": 160.0,
+        "cfo": 4.5,
+        "evidence": 1,
+        "valid": [],
+        "errors": [
+          "seq 0: packet body undecodable after 1 copy/copies"
+        ]
+      },
+      {
+        "score": 0.6881248003019709,
+        "start": 1,
+        "period": 159.84,
+        "cfo": 4.75,
+        "evidence": 1,
+        "valid": [],
+        "errors": [
+          "seq 0: packet body undecodable after 1 copy/copies"
+        ]
+      }
+    ],
+    "elapsed_s": 1.54
+  },
+  {
+    "window_s": 10.0,
+    "acquire": [
+      18578,
+      160.0,
+      4.75
+    ],
+    "tries": 20,
+    "successes": [],
+    "top": [
+      {
+        "score": 0.6888760736749894,
+        "start": 18581,
+        "period": 160.0,
+        "cfo": 4.75,
+        "evidence": 1,
+        "valid": [],
+        "errors": [
+          "seq 2: packet body undecodable after 1 copy/copies"
+        ]
+      },
+      {
+        "score": 0.6865962760129818,
+        "start": 18579,
+        "period": 160.16,
+        "cfo": 4.5,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      },
+      {
+        "score": 0.6857872111206889,
+        "start": 18582,
+        "period": 159.92,
+        "cfo": 4.75,
+        "evidence": 1,
+        "valid": [],
+        "errors": [
+          "seq 2: packet body undecodable after 1 copy/copies"
+        ]
+      }
+    ],
+    "elapsed_s": 3.0
+  },
+  {
+    "window_s": 20.0,
+    "acquire": [
+      6505,
+      160.0,
+      4.75
+    ],
+    "tries": 20,
+    "successes": [],
+    "top": [
+      {
+        "score": 0.6766532473058507,
+        "start": 6506,
+        "period": 160.0,
+        "cfo": 4.75,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      },
+      {
+        "score": 0.6743494344517351,
+        "start": 6507,
+        "period": 159.92,
+        "cfo": 4.75,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      },
+      {
+        "score": 0.6727336237269891,
+        "start": 6505,
+        "period": 160.08,
+        "cfo": 4.75,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      }
+    ],
+    "elapsed_s": 4.13
+  },
+  {
+    "window_s": 30.0,
+    "acquire": [
+      106969,
+      160.0,
+      4.5
+    ],
+    "tries": 20,
+    "successes": [],
+    "top": [
+      {
+        "score": 0.6016221262704637,
+        "start": 106969,
+        "period": 160.0,
+        "cfo": 4.5,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      },
+      {
+        "score": 0.5999062854680408,
+        "start": 106971,
+        "period": 159.84,
+        "cfo": 4.75,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      },
+      {
+        "score": 0.599128998303166,
+        "start": 106968,
+        "period": 160.08,
+        "cfo": 4.5,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      }
+    ],
+    "elapsed_s": 5.08
+  },
+  {
+    "window_s": 40.0,
+    "acquire": [
+      26969,
+      160.0,
+      4.5
+    ],
+    "tries": 20,
+    "successes": [],
+    "top": [
+      {
+        "score": 0.6016221262704637,
+        "start": 26969,
+        "period": 160.0,
+        "cfo": 4.5,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      },
+      {
+        "score": 0.5999062854680408,
+        "start": 26971,
+        "period": 159.84,
+        "cfo": 4.75,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      },
+      {
+        "score": 0.599128998303166,
+        "start": 26968,
+        "period": 160.08,
+        "cfo": 4.5,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      }
+    ],
+    "elapsed_s": 6.05
+  },
+  {
+    "window_s": 50.0,
+    "acquire": [
+      132337,
+      160.0,
+      4.75
+    ],
+    "tries": 20,
+    "successes": [],
+    "top": [
+      {
+        "score": 0.4989481086815507,
+        "start": 132338,
+        "period": 160.16,
+        "cfo": 4.5,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      },
+      {
+        "score": 0.49712445560570384,
+        "start": 132338,
+        "period": 160.08,
+        "cfo": 4.5,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      },
+      {
+        "score": 0.49708650822357947,
+        "start": 132340,
+        "period": 160.0,
+        "cfo": 4.75,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      }
+    ],
+    "elapsed_s": 6.99
+  },
+  {
+    "window_s": 60.0,
+    "acquire": [
+      52337,
+      160.0,
+      4.75
+    ],
+    "tries": 20,
+    "successes": [],
+    "top": [
+      {
+        "score": 0.4989481086815507,
+        "start": 52338,
+        "period": 160.16,
+        "cfo": 4.5,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      },
+      {
+        "score": 0.49712445560570384,
+        "start": 52338,
+        "period": 160.08,
+        "cfo": 4.5,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      },
+      {
+        "score": 0.49708650822357947,
+        "start": 52340,
+        "period": 160.0,
+        "cfo": 4.75,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      }
+    ],
+    "elapsed_s": 7.92
+  },
+  {
+    "window_s": 70.0,
+    "acquire": [
+      54568,
+      159.7616,
+      4.0
+    ],
+    "tries": 20,
+    "successes": [],
+    "top": [
+      {
+        "score": 0.32704790398017636,
+        "start": 54568,
+        "period": 159.76,
+        "cfo": 4.0,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      },
+      {
+        "score": 0.3266680729586086,
+        "start": 54571,
+        "period": 159.6,
+        "cfo": 4.25,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      },
+      {
+        "score": 0.32528799753486903,
+        "start": 54568,
+        "period": 159.68,
+        "cfo": 4.25,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      }
+    ],
+    "elapsed_s": 9.01
+  },
+  {
+    "window_s": 80.0,
+    "acquire": [
+      132564,
+      160.0,
+      4.75
+    ],
+    "tries": 20,
+    "successes": [],
+    "top": [
+      {
+        "score": 0.6128419965676506,
+        "start": 132564,
+        "period": 160.0,
+        "cfo": 4.75,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      },
+      {
+        "score": 0.6104986782542325,
+        "start": 132565,
+        "period": 159.92,
+        "cfo": 4.75,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      },
+      {
+        "score": 0.6103356993982553,
+        "start": 132564,
+        "period": 160.08,
+        "cfo": 4.75,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      }
+    ],
+    "elapsed_s": 10.01
+  },
+  {
+    "window_s": 90.0,
+    "acquire": [
+      52564,
+      160.0,
+      4.75
+    ],
+    "tries": 20,
+    "successes": [],
+    "top": [
+      {
+        "score": 0.6128419965676506,
+        "start": 52564,
+        "period": 160.0,
+        "cfo": 4.75,
+        "evidence": 1,
+        "valid": [],
+        "errors": [
+          "seq 102: packet body undecodable after 1 copy/copies"
+        ]
+      },
+      {
+        "score": 0.6104986782542325,
+        "start": 52565,
+        "period": 159.92,
+        "cfo": 4.75,
+        "evidence": 1,
+        "valid": [],
+        "errors": [
+          "seq 6: packet body undecodable after 1 copy/copies"
+        ]
+      },
+      {
+        "score": 0.6103356993982553,
+        "start": 52564,
+        "period": 160.08,
+        "cfo": 4.75,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      }
+    ],
+    "elapsed_s": 11.0
+  },
+  {
+    "window_s": 100.0,
+    "acquire": [
+      155867,
+      160.26079999999996,
+      4.5
+    ],
+    "tries": 20,
+    "successes": [],
+    "top": [
+      {
+        "score": 0.6658350615960619,
+        "start": 155870,
+        "period": 160.0,
+        "cfo": 4.75,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      },
+      {
+        "score": 0.6630307929004114,
+        "start": 155869,
+        "period": 160.08,
+        "cfo": 4.75,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      },
+      {
+        "score": 0.6618873570436079,
+        "start": 155871,
+        "period": 159.92,
+        "cfo": 4.75,
+        "evidence": 0,
+        "valid": [],
+        "errors": []
+      }
+    ],
+    "elapsed_s": 11.82
+  }
+]

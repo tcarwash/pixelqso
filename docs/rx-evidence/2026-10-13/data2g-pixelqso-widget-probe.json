@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-13",
+  "purpose": "Verify whether the PixelQSO Data2G partial-frame handler displays provisional pixels in the UI.",
+  "frame_source": "work/rx-analysis-20261012/recovered-cap-None-frame-0.bin",
+  "frame_bytes": 234,
+  "method": "Offscreen MainWindow in a temporary profile; injected the actual saved KISS PQI2 frame directly into _data2g_rx_frame with a connected-session stub; no audio device, network, CAT, PTT, or RF.",
+  "result": {
+    "preview_box_visible": true,
+    "preview_pixmap_null": false,
+    "listen_indicator": "\u25cf RECEIVING CARD",
+    "progress_visible": true,
+    "progress_percent": 47,
+    "progress_text": "47% received",
+    "rx_status": "Data2G preview from AG7SU \u00b7 482/1024 pixels \u00b7 1 copies \u00b7 unverified",
+    "assembly_stage": "47% received",
+    "whole_card_verified": false
+  },
+  "interpretation": "The app handler and preview widget render this partial Data2G frame correctly. This validates only the post-KISS UI path. A prior separate saved-audio replay had the PixelQSO app connected while a passive KISS observer saw the frame, but that run did not inspect widget state; no single end-to-end live app rendering run is claimed."
+}

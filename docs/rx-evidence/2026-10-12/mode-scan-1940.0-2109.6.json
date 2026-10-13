@@ -1,0 +1,93 @@
+{
+  "start_s": 1940.0,
+  "end_s": 2109.6,
+  "rms": 0.05262869750836369,
+  "copies": [
+    {
+      "mode": "experimental_8fsk_compressed",
+      "identity": "aa4841e4b6f84eedda4ba23c35e83e50",
+      "payload_start_s": 2042.395,
+      "payload_end_s": 2045.561625,
+      "diagnostics": {
+        "mode": "experimental_8fsk_compressed",
+        "trailer": false,
+        "payload_samples": 152000,
+        "identity": "aa4841e4b6f84eedda4ba23c35e83e50",
+        "version": 3,
+        "corrected_symbols": 0,
+        "group_copies": 3,
+        "copy_index": 0,
+        "acquisition_score": 0.8708865821388758,
+        "carrier_offset_hz": 0
+      }
+    },
+    {
+      "mode": "experimental_8fsk_compressed",
+      "identity": "aa4841e4b6f84eedda4ba23c35e83e50",
+      "payload_start_s": 2045.561625,
+      "payload_end_s": 2048.728375,
+      "diagnostics": {
+        "mode": "experimental_8fsk_compressed",
+        "trailer": false,
+        "payload_samples": 152000,
+        "identity": "aa4841e4b6f84eedda4ba23c35e83e50",
+        "version": 3,
+        "corrected_symbols": 0,
+        "group_copies": 3,
+        "copy_index": 1,
+        "acquisition_score": 0.8708865821388758,
+        "carrier_offset_hz": 0
+      }
+    },
+    {
+      "mode": "experimental_8fsk_compressed",
+      "identity": "aa4841e4b6f84eedda4ba23c35e83e50",
+      "payload_start_s": 2048.728375,
+      "payload_end_s": 2051.895,
+      "diagnostics": {
+        "mode": "experimental_8fsk_compressed",
+        "trailer": false,
+        "payload_samples": 152000,
+        "identity": "aa4841e4b6f84eedda4ba23c35e83e50",
+        "version": 3,
+        "corrected_symbols": 0,
+        "group_copies": 3,
+        "copy_index": 2,
+        "acquisition_score": 0.8708865821388758,
+        "carrier_offset_hz": 0
+      }
+    },
+    {
+      "mode": "resilient_50",
+      "identity": "be5dafd34406bad77bc0b56e6478cad3",
+      "payload_start_s": 2096.05,
+      "payload_end_s": 2109.6,
+      "diagnostics": {
+        "mode": "resilient_50",
+        "trailer": false,
+        "payload_samples": 1370880,
+        "identity": "be5dafd34406bad77bc0b56e6478cad3",
+        "version": 1,
+        "corrected_symbols": 4,
+        "group_copies": 1,
+        "acquisition_score": 0.8480877602876322,
+        "carrier_offset_hz": 0
+      }
+    }
+  ],
+  "results": [
+    {
+      "mode": "experimental_8fsk_compressed",
+      "identity": "aa4841e4b6f84eedda4ba23c35e83e50",
+      "captured_copies": 3,
+      "error": "DecodeFailure(adapter_key='experimental_local', kind=<DecodeFailureKind.NO_MATCH: 'no_match'>, message='Experimental LDPC parity checks did not converge', retryable=True)"
+    },
+    {
+      "mode": "resilient_50",
+      "identity": "be5dafd34406bad77bc0b56e6478cad3",
+      "captured_copies": 1,
+      "error": "DecodeFailure(adapter_key='experimental_local', kind=<DecodeFailureKind.NO_MATCH: 'no_match'>, message='no CRC-valid avatar identity after soft recovery', retryable=True)"
+    }
+  ],
+  "elapsed_s": 58.719216282013804
+}

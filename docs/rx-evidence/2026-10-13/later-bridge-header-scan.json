@@ -1,0 +1,385 @@
+{
+  "scope": "Later bridge recordings omitted from the original 11-file protected-header scan",
+  "method": "find_copies on 25-second windows with 20-second hop using current source",
+  "files": [
+    {
+      "file": "websdr-20261013T100049Z-7066kHz.s16",
+      "sha256": "435e4bc6062be15e2272f7e8c8c8c72111ebc9aabedcb5629a0d7e0ece939b60",
+      "bytes": 2830080,
+      "duration_s": 176.88,
+      "windows": [
+        {
+          "start_s": 0.0,
+          "end_s": 25.0,
+          "count": 0
+        },
+        {
+          "start_s": 20.0,
+          "end_s": 45.0,
+          "count": 0
+        },
+        {
+          "start_s": 40.0,
+          "end_s": 65.0,
+          "count": 0
+        },
+        {
+          "start_s": 60.0,
+          "end_s": 85.0,
+          "count": 0
+        },
+        {
+          "start_s": 80.0,
+          "end_s": 105.0,
+          "count": 0
+        },
+        {
+          "start_s": 100.0,
+          "end_s": 125.0,
+          "count": 0
+        },
+        {
+          "start_s": 120.0,
+          "end_s": 145.0,
+          "count": 0
+        },
+        {
+          "start_s": 140.0,
+          "end_s": 165.0,
+          "count": 0
+        },
+        {
+          "start_s": 151.88,
+          "end_s": 176.88,
+          "count": 0
+        }
+      ],
+      "headers": []
+    },
+    {
+      "file": "websdr-20261013T100443Z-7066kHz.s16",
+      "sha256": "aae930863121e59c0133d039c7a63654ad3561690a7e2cd6635e2200a3def883",
+      "bytes": 2856960,
+      "duration_s": 178.56,
+      "windows": [
+        {
+          "start_s": 0.0,
+          "end_s": 25.0,
+          "count": 0
+        },
+        {
+          "start_s": 20.0,
+          "end_s": 45.0,
+          "count": 0
+        },
+        {
+          "start_s": 40.0,
+          "end_s": 65.0,
+          "count": 0
+        },
+        {
+          "start_s": 60.0,
+          "end_s": 85.0,
+          "count": 0
+        },
+        {
+          "start_s": 80.0,
+          "end_s": 105.0,
+          "count": 0
+        },
+        {
+          "start_s": 100.0,
+          "end_s": 125.0,
+          "count": 0
+        },
+        {
+          "start_s": 120.0,
+          "end_s": 145.0,
+          "count": 0
+        },
+        {
+          "start_s": 140.0,
+          "end_s": 165.0,
+          "count": 0
+        },
+        {
+          "start_s": 153.56,
+          "end_s": 178.56,
+          "count": 0
+        }
+      ],
+      "headers": []
+    },
+    {
+      "file": "websdr-20261013T101037Z-7066kHz.s16",
+      "sha256": "91abca35e0733eb87251c84b2e62d5efc66dc051a80aa9752c21088f88a8448c",
+      "bytes": 2856192,
+      "duration_s": 178.512,
+      "windows": [
+        {
+          "start_s": 0.0,
+          "end_s": 25.0,
+          "count": 0
+        },
+        {
+          "start_s": 20.0,
+          "end_s": 45.0,
+          "count": 0
+        },
+        {
+          "start_s": 40.0,
+          "end_s": 65.0,
+          "count": 0
+        },
+        {
+          "start_s": 60.0,
+          "end_s": 85.0,
+          "count": 0
+        },
+        {
+          "start_s": 80.0,
+          "end_s": 105.0,
+          "count": 0
+        },
+        {
+          "start_s": 100.0,
+          "end_s": 125.0,
+          "count": 0
+        },
+        {
+          "start_s": 120.0,
+          "end_s": 145.0,
+          "count": 0
+        },
+        {
+          "start_s": 140.0,
+          "end_s": 165.0,
+          "count": 0
+        },
+        {
+          "start_s": 153.512,
+          "end_s": 178.512,
+          "count": 0
+        }
+      ],
+      "headers": []
+    },
+    {
+      "file": "websdr-20261013T102554Z-7066kHz.s16",
+      "sha256": "40f3a606f4ea9509ba01c32f75047b1f5d2b473f5a6d55d5793302515b45484e",
+      "bytes": 2856192,
+      "duration_s": 178.512,
+      "windows": [
+        {
+          "start_s": 0.0,
+          "end_s": 25.0,
+          "count": 0
+        },
+        {
+          "start_s": 20.0,
+          "end_s": 45.0,
+          "count": 0
+        },
+        {
+          "start_s": 40.0,
+          "end_s": 65.0,
+          "count": 0
+        },
+        {
+          "start_s": 60.0,
+          "end_s": 85.0,
+          "count": 0
+        },
+        {
+          "start_s": 80.0,
+          "end_s": 105.0,
+          "count": 0
+        },
+        {
+          "start_s": 100.0,
+          "end_s": 125.0,
+          "count": 0
+        },
+        {
+          "start_s": 120.0,
+          "end_s": 145.0,
+          "count": 0
+        },
+        {
+          "start_s": 140.0,
+          "end_s": 165.0,
+          "count": 0
+        },
+        {
+          "start_s": 153.512,
+          "end_s": 178.512,
+          "count": 0
+        }
+      ],
+      "headers": []
+    },
+    {
+      "file": "websdr-20261013T103118Z-7066kHz.s16",
+      "sha256": "108182b0d8577a6f316c863d1476b1ae468447a4836b36bcde770b4cb250e441",
+      "bytes": 2855424,
+      "duration_s": 178.464,
+      "windows": [
+        {
+          "start_s": 0.0,
+          "end_s": 25.0,
+          "count": 0
+        },
+        {
+          "start_s": 20.0,
+          "end_s": 45.0,
+          "count": 0
+        },
+        {
+          "start_s": 40.0,
+          "end_s": 65.0,
+          "count": 0
+        },
+        {
+          "start_s": 60.0,
+          "end_s": 85.0,
+          "count": 0
+        },
+        {
+          "start_s": 80.0,
+          "end_s": 105.0,
+          "count": 0
+        },
+        {
+          "start_s": 100.0,
+          "end_s": 125.0,
+          "count": 0
+        },
+        {
+          "start_s": 120.0,
+          "end_s": 145.0,
+          "count": 0
+        },
+        {
+          "start_s": 140.0,
+          "end_s": 165.0,
+          "count": 0
+        },
+        {
+          "start_s": 153.464,
+          "end_s": 178.464,
+          "count": 0
+        }
+      ],
+      "headers": []
+    },
+    {
+      "file": "websdr-20261013T104134Z-7066kHz.s16",
+      "sha256": "f54e39fa0166365542f9b36901a33d5be4bfff8eb0851e412877e4973d76a284",
+      "bytes": 2856960,
+      "duration_s": 178.56,
+      "windows": [
+        {
+          "start_s": 0.0,
+          "end_s": 25.0,
+          "count": 0
+        },
+        {
+          "start_s": 20.0,
+          "end_s": 45.0,
+          "count": 0
+        },
+        {
+          "start_s": 40.0,
+          "end_s": 65.0,
+          "count": 0
+        },
+        {
+          "start_s": 60.0,
+          "end_s": 85.0,
+          "count": 0
+        },
+        {
+          "start_s": 80.0,
+          "end_s": 105.0,
+          "count": 0
+        },
+        {
+          "start_s": 100.0,
+          "end_s": 125.0,
+          "count": 0
+        },
+        {
+          "start_s": 120.0,
+          "end_s": 145.0,
+          "count": 0
+        },
+        {
+          "start_s": 140.0,
+          "end_s": 165.0,
+          "count": 0
+        },
+        {
+          "start_s": 153.56,
+          "end_s": 178.56,
+          "count": 0
+        }
+      ],
+      "headers": []
+    },
+    {
+      "file": "websdr-20261013T104758Z-7066kHz.s16",
+      "sha256": "8f192b15cdbdf352f440b3ca4c0fcc0813b404f71409ea0d94688dfeba795346",
+      "bytes": 2856192,
+      "duration_s": 178.512,
+      "windows": [
+        {
+          "start_s": 0.0,
+          "end_s": 25.0,
+          "count": 0
+        },
+        {
+          "start_s": 20.0,
+          "end_s": 45.0,
+          "count": 0
+        },
+        {
+          "start_s": 40.0,
+          "end_s": 65.0,
+          "count": 0
+        },
+        {
+          "start_s": 60.0,
+          "end_s": 85.0,
+          "count": 0
+        },
+        {
+          "start_s": 80.0,
+          "end_s": 105.0,
+          "count": 0
+        },
+        {
+          "start_s": 100.0,
+          "end_s": 125.0,
+          "count": 0
+        },
+        {
+          "start_s": 120.0,
+          "end_s": 145.0,
+          "count": 0
+        },
+        {
+          "start_s": 140.0,
+          "end_s": 165.0,
+          "count": 0
+        },
+        {
+          "start_s": 153.512,
+          "end_s": 178.512,
+          "count": 0
+        }
+      ],
+      "headers": []
+    }
+  ],
+  "interpretation": "Seven later bridge recordings omitted from the original scan were checked. No protected local-modem headers were found. This does not prove that a user transmission was present in any specific clip."
+}

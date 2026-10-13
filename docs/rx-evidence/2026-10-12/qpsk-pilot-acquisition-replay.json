@@ -1,0 +1,24 @@
+{
+  "metric": "distributed pilot coherence",
+  "candidate": [
+    0.8321037097603383,
+    2501,
+    4
+  ],
+  "search_s": 0.19007438400876708,
+  "diagnostics": {
+    "acquisition_score": 0.8321037097603383,
+    "carrier_offset_hz": 3.75,
+    "clock_ppm": 0.0,
+    "fractional_timing_samples": 0.0,
+    "start_seconds": 0.312625,
+    "estimated_snr_db_2500": 3.184093818788506,
+    "equalizer": "21-tap fractionally spaced training + pilot/DD NLMS",
+    "equalizer_tap_spacing_seconds": 0.00025,
+    "equalizer_pilot_mse": 0.8748226416481965
+  },
+  "exact": true,
+  "decoder": "adaptive",
+  "pixels": 1024,
+  "pixel_sha256": "18f470cca82e5ea59ed415c6e240af0391826a58047a29466e99c35e1ae76767"
+}

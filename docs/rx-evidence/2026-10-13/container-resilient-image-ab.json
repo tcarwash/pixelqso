@@ -1,0 +1,40 @@
+{
+  "date": "2026-10-13",
+  "purpose": "Compare the running image decoder source with the staged RX fix image on the same saved resilient-50 HF capture.",
+  "method": "One-shot Docker containers, network disabled, identical read-only audio/metadata mounts, existing container_resilient_replay.py diagnostic; no audio device, PTT, or live container interaction.",
+  "input": "work/rx-analysis-20261012/mode-scan-2080.0-2237.0.f16",
+  "expected_card": "docs/rx-evidence/2026-10-12/expected-card.json",
+  "images": [
+    {
+      "tag": "radio-stream:pixelqso",
+      "image_id": "sha256:b3b7d1b0cba870022edae71173d739ce7ba059ea017fce42f7c42a816f23c380",
+      "is_running_image": true,
+      "result": {
+        "elapsed_seconds": 11.09949396099546,
+        "callsign": "AG7SU",
+        "grid": "CN85",
+        "checked_blocks": 4,
+        "whole_raster_valid": false,
+        "content_tag_valid": false,
+        "pixel_sha256": "b157c214d0b2bb6b06e2d87c3c3098ebb8b788378f60ba4a744742847db222bb",
+        "matches_expected_pixels": false
+      }
+    },
+    {
+      "tag": "radio-stream:pixelqso-rxfix-20261013",
+      "image_id": "sha256:088e1f0759271a09074419082bca4f73588220a7867e53a2576a467906301247",
+      "is_running_image": false,
+      "result": {
+        "elapsed_seconds": 10.192423375992803,
+        "callsign": "AG7SU",
+        "grid": "CN85",
+        "checked_blocks": 10,
+        "whole_raster_valid": true,
+        "content_tag_valid": true,
+        "pixel_sha256": "18f470cca82e5ea59ed415c6e240af0391826a58047a29466e99c35e1ae76767",
+        "matches_expected_pixels": true
+      }
+    }
+  ],
+  "interpretation": "The candidate image fixes this saved resilient-50 capture: all 10 protected blocks and whole-card checks pass, with exact expected pixels. This does not establish on-air success. The running container remains on the older image until an approved recreate/cutover."
+}

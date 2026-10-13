@@ -1,0 +1,68 @@
+{
+  "session": {
+    "frequency_khz": 7066,
+    "mode": "USB",
+    "bridge_samples": 1428480,
+    "bridge_duration_seconds": 178.56,
+    "reported_wall_seconds": 178.5,
+    "reported_effective_samples_per_second": 8003.85,
+    "browser_queue_drops": 0,
+    "rtmp_youtube_encoder_started": false,
+    "user_transmission_confirmed": false
+  },
+  "capture": {
+    "duration_seconds": 120,
+    "bridge_capture_start_offset_seconds": 27.872,
+    "samples": {
+      "container_monitor": 5756451,
+      "dat2g_input": 5668864,
+      "pixelqso_input": 5668864
+    }
+  },
+  "bridge_to_stage_sequence_alignment": {
+    "container_monitor": {
+      "global_correlation": 0.78072,
+      "local_windows": 118,
+      "median_local_correlation": 0.7799,
+      "lag_start_ms": 0.125,
+      "lag_end_ms": 0.125,
+      "lag_range_ms": 0.125,
+      "drift_ms_per_second": -3.6e-05,
+      "max_linear_residual_ms": 0.066
+    },
+    "dat2g_input": {
+      "global_correlation": 0.03574,
+      "local_windows": 117,
+      "median_local_correlation": 0.86737,
+      "lag_start_ms": -2.0,
+      "lag_end_ms": -27.0,
+      "lag_range_ms": 27.0,
+      "drift_ms_per_second": -0.25776,
+      "max_linear_residual_ms": 3.228
+    },
+    "pixelqso_input": {
+      "global_correlation": 0.04082,
+      "local_windows": 117,
+      "median_local_correlation": 0.8712,
+      "lag_start_ms": -2.0,
+      "lag_end_ms": -26.875,
+      "lag_range_ms": 27.0,
+      "drift_ms_per_second": -0.25764,
+      "max_linear_residual_ms": 3.305
+    }
+  },
+  "alignment_correction": "An earlier quick comparison searched for the first second of source PCM, which was outside the later-starting capture. Its low score was invalid. The full-sequence alignment reported here supersedes that result.",
+  "pulse_sink_inputs": {
+    "default_sink": "rx_audio",
+    "ffmpeg_target_sink": "rx_audio",
+    "chromium_sink_input_seen": true,
+    "chromium_sink_input_mute_property": "no in one run; server-side mute no did not indicate audible output"
+  },
+  "controlled_mute_observation": {
+    "chromium_muted_ffmpeg_unmuted_segment_max_correlation": 0.9025,
+    "second_segment_max_correlation": 0.8995,
+    "chromium_unmuted_ffmpeg_muted_segment_rms": 0.0,
+    "interpretation": "The FFmpeg Pulse stream carries bridge audio. The Chromium sink input was silent when the FFmpeg stream was muted; Chromium is not established as a contaminating audio source."
+  },
+  "interpretation": "The ordinary receive session feeds matching bridge PCM into the container monitor. The shared host path has smooth relative drift of about 0.258 ms/s, roughly 27 ms over 117 seconds, with about 3.3 ms maximum residual. This supports the host tunnel/loopback as a common timing difference, but it is not proof that this drift caused any specific missing card."
+}

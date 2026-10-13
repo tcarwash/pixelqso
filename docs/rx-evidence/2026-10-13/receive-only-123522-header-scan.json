@@ -1,0 +1,185 @@
+{
+  "recording": "/home/tyler/dev/pixelqso_stream/recordings/websdr-20261013T123522Z-7066kHz.s16",
+  "sha256": "d419b240ffd7b66ddf5d6d44559ff02f13a2ce559d30ce7f1561821bf4d1231a",
+  "duration_s": 598.464,
+  "windows": 29,
+  "protected_headers": 0,
+  "elapsed_s": 39.46328124997672,
+  "method": "find_copies on 25-second windows, 20-second hop; overlapping detections may duplicate headers",
+  "results": [
+    {
+      "start_s": 0.0,
+      "end_s": 25.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 20.0,
+      "end_s": 45.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 40.0,
+      "end_s": 65.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 60.0,
+      "end_s": 85.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 80.0,
+      "end_s": 105.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 100.0,
+      "end_s": 125.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 120.0,
+      "end_s": 145.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 140.0,
+      "end_s": 165.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 160.0,
+      "end_s": 185.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 180.0,
+      "end_s": 205.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 200.0,
+      "end_s": 225.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 220.0,
+      "end_s": 245.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 240.0,
+      "end_s": 265.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 260.0,
+      "end_s": 285.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 280.0,
+      "end_s": 305.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 300.0,
+      "end_s": 325.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 320.0,
+      "end_s": 345.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 340.0,
+      "end_s": 365.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 360.0,
+      "end_s": 385.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 380.0,
+      "end_s": 405.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 400.0,
+      "end_s": 425.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 420.0,
+      "end_s": 445.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 440.0,
+      "end_s": 465.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 460.0,
+      "end_s": 485.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 480.0,
+      "end_s": 505.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 500.0,
+      "end_s": 525.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 520.0,
+      "end_s": 545.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 540.0,
+      "end_s": 565.0,
+      "count": 0,
+      "headers": []
+    },
+    {
+      "start_s": 560.0,
+      "end_s": 585.0,
+      "count": 0,
+      "headers": []
+    }
+  ]
+}

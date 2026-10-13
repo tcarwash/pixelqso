@@ -1,0 +1,34 @@
+{
+  "start_s": 2370.0,
+  "end_s": 2538.2,
+  "rms": 0.06482667512894802,
+  "copies": [
+    {
+      "mode": "standard",
+      "identity": "8da3968b44364073d287d0a46b417701",
+      "payload_start_s": 2520.94875,
+      "payload_end_s": 2538.2,
+      "diagnostics": {
+        "mode": "standard",
+        "trailer": false,
+        "payload_samples": 6455040,
+        "identity": "8da3968b44364073d287d0a46b417701",
+        "version": 1,
+        "corrected_symbols": 5,
+        "group_copies": 1,
+        "acquisition_score": 0.7028816684689057,
+        "carrier_offset_hz": -10
+      }
+    }
+  ],
+  "results": [
+    {
+      "mode": "standard",
+      "identity": "8da3968b44364073d287d0a46b417701",
+      "captured_copies": 1,
+      "audio_placement_hz": 300,
+      "error": "DecodeFailure(adapter_key='experimental_local', kind=<DecodeFailureKind.NO_MATCH: 'no_match'>, message='No legacy packet card data received yet', retryable=True)"
+    }
+  ],
+  "elapsed_s": 32.54124565399252
+}

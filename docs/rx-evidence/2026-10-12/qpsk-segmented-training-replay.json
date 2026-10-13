@@ -1,0 +1,22 @@
+{
+  "metric": "mean normalized 64-symbol training correlations",
+  "candidate": [
+    0.6385061341208083,
+    2629,
+    4.0
+  ],
+  "normal_candidate_start": 2629,
+  "measured_correct_start": 2501,
+  "diagnostics": {
+    "acquisition_score": 0.6385061341208083,
+    "carrier_offset_hz": 5.0,
+    "clock_ppm": -99.99999999998899,
+    "fractional_timing_samples": -1.0,
+    "start_seconds": 0.328625,
+    "estimated_snr_db_2500": -16.489886866178868,
+    "equalizer": "21-tap fractionally spaced training + pilot/DD NLMS",
+    "equalizer_tap_spacing_seconds": 0.00025,
+    "equalizer_pilot_mse": 13.51572889737656
+  },
+  "error": "Experimental LDPC parity checks did not converge"
+}

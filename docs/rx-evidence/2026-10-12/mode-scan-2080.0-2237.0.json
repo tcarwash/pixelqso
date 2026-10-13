@@ -1,0 +1,153 @@
+{
+  "start_s": 2080.0,
+  "end_s": 2237.0,
+  "rms": 0.06413373816715981,
+  "copies": [
+    {
+      "mode": "resilient_50",
+      "identity": "be5dafd34406bad77bc0b56e6478cad3",
+      "payload_start_s": 2095.8725,
+      "payload_end_s": 2124.4325,
+      "diagnostics": {
+        "mode": "resilient_50",
+        "trailer": true,
+        "payload_samples": 1370880,
+        "identity": "be5dafd34406bad77bc0b56e6478cad3",
+        "version": 1,
+        "corrected_symbols": 0,
+        "group_copies": 1,
+        "acquisition_score": 0.7581950907179283,
+        "carrier_offset_hz": 0
+      }
+    },
+    {
+      "mode": "resilient_50",
+      "identity": "be5dafd34406bad77bc0b56e6478cad3",
+      "payload_start_s": 2096.05,
+      "payload_end_s": 2124.61,
+      "diagnostics": {
+        "mode": "resilient_50",
+        "trailer": false,
+        "payload_samples": 1370880,
+        "identity": "be5dafd34406bad77bc0b56e6478cad3",
+        "version": 1,
+        "corrected_symbols": 4,
+        "group_copies": 1,
+        "acquisition_score": 0.8480877602040373,
+        "carrier_offset_hz": 0
+      }
+    },
+    {
+      "mode": "resilient_50",
+      "identity": "be5dafd34406bad77bc0b56e6478cad3",
+      "payload_start_s": 2159.1925,
+      "payload_end_s": 2187.7525,
+      "diagnostics": {
+        "mode": "resilient_50",
+        "trailer": false,
+        "payload_samples": 1370880,
+        "identity": "be5dafd34406bad77bc0b56e6478cad3",
+        "version": 1,
+        "corrected_symbols": 0,
+        "group_copies": 1,
+        "acquisition_score": 0.9048488063396454,
+        "carrier_offset_hz": 0
+      }
+    },
+    {
+      "mode": "resilient_50",
+      "identity": "be5dafd34406bad77bc0b56e6478cad3",
+      "payload_start_s": 2159.4575,
+      "payload_end_s": 2188.0175,
+      "diagnostics": {
+        "mode": "resilient_50",
+        "trailer": true,
+        "payload_samples": 1370880,
+        "identity": "be5dafd34406bad77bc0b56e6478cad3",
+        "version": 1,
+        "corrected_symbols": 2,
+        "group_copies": 1,
+        "acquisition_score": 0.6910025547607418,
+        "carrier_offset_hz": 0
+      }
+    },
+    {
+      "mode": "fast_avatar",
+      "identity": "ce0529ab9df2ac1937a38c131ff4019d",
+      "payload_start_s": 2205.4825,
+      "payload_end_s": 2208.3475,
+      "diagnostics": {
+        "mode": "fast_avatar",
+        "trailer": false,
+        "payload_samples": 137520,
+        "identity": "ce0529ab9df2ac1937a38c131ff4019d",
+        "version": 1,
+        "corrected_symbols": 10,
+        "group_copies": 1,
+        "acquisition_score": 0.9774703972776644,
+        "carrier_offset_hz": 0
+      }
+    },
+    {
+      "mode": "fast_avatar",
+      "identity": "ce0529ab9df2ac1937a38c131ff4019d",
+      "payload_start_s": 2211.53,
+      "payload_end_s": 2214.395,
+      "diagnostics": {
+        "mode": "fast_avatar",
+        "trailer": true,
+        "payload_samples": 137520,
+        "identity": "ce0529ab9df2ac1937a38c131ff4019d",
+        "version": 1,
+        "corrected_symbols": 9,
+        "group_copies": 1,
+        "acquisition_score": 0.9079858781248474,
+        "carrier_offset_hz": 0
+      }
+    },
+    {
+      "mode": "fast_avatar",
+      "identity": "ce0529ab9df2ac1937a38c131ff4019d",
+      "payload_start_s": 2217.59,
+      "payload_end_s": 2220.455,
+      "diagnostics": {
+        "mode": "fast_avatar",
+        "trailer": false,
+        "payload_samples": 137520,
+        "identity": "ce0529ab9df2ac1937a38c131ff4019d",
+        "version": 1,
+        "corrected_symbols": 0,
+        "group_copies": 1,
+        "acquisition_score": 0.9404093202703726,
+        "carrier_offset_hz": 0
+      }
+    }
+  ],
+  "results": [
+    {
+      "mode": "resilient_50",
+      "identity": "be5dafd34406bad77bc0b56e6478cad3",
+      "captured_copies": 4,
+      "error": "DecodeFailure(adapter_key='experimental_local', kind=<DecodeFailureKind.NO_MATCH: 'no_match'>, message='no CRC-valid avatar identity after soft recovery', retryable=True)"
+    },
+    {
+      "mode": "fast_avatar",
+      "identity": "ce0529ab9df2ac1937a38c131ff4019d",
+      "captured_copies": 3,
+      "callsign": "AG7SU",
+      "exact": false,
+      "pixels": 1024,
+      "coverage": 1024,
+      "pixel_sha256": "18f470cca82e5ea59ed415c6e240af0391826a58047a29466e99c35e1ae76767",
+      "crc32": null,
+      "color_stage": "1024/1024 pixels \u00b7 1 copies \u00b7 unverified",
+      "receive_profile": "minimal-avatar",
+      "received_copies": 3,
+      "checked_shards": null,
+      "corrected_rs_symbols": null,
+      "outer_recovered_shards": null,
+      "errors": []
+    }
+  ],
+  "elapsed_s": 33.76917784201214
+}

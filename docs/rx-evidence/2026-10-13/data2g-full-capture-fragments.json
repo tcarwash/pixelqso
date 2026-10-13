@@ -1,0 +1,195 @@
+{
+  "capture": "work/rx-analysis-20261012/websdr-audio.f16",
+  "duration_seconds": 873.4,
+  "chunk_seconds": 1.0,
+  "max_receive_seconds": null,
+  "headers": [
+    {
+      "kind": "header",
+      "mode": "polar-k192-f8",
+      "n_cw": 13,
+      "score": 0.3402961219960585,
+      "preamble_s": 19.293
+    },
+    {
+      "kind": "header",
+      "mode": "n4-qpsk-r1/5",
+      "n_cw": 13,
+      "score": 0.9035164816321484,
+      "preamble_s": 267.505
+    },
+    {
+      "kind": "header",
+      "mode": "n4-qpsk-r1/5",
+      "n_cw": 12,
+      "score": 0.8123633005610099,
+      "preamble_s": 313.824
+    },
+    {
+      "kind": "header",
+      "mode": "n4-qpsk-r1/5",
+      "n_cw": 13,
+      "score": 0.9062257350970464,
+      "preamble_s": 356.869
+    },
+    {
+      "kind": "header",
+      "mode": "n4-qpsk-r1/5",
+      "n_cw": 12,
+      "score": 0.8371217304155764,
+      "preamble_s": 403.077
+    },
+    {
+      "kind": "header",
+      "mode": "n4-qpsk-r1/5",
+      "n_cw": 13,
+      "score": 0.9009561581570231,
+      "preamble_s": 446.059
+    },
+    {
+      "kind": "header",
+      "mode": "n4-qpsk-r1/5",
+      "n_cw": 12,
+      "score": 0.6693962228175944,
+      "preamble_s": 492.652
+    },
+    {
+      "kind": "header",
+      "mode": "n10-ack-4f",
+      "n_cw": 56,
+      "score": 0.3026102837246305,
+      "preamble_s": 613.758
+    },
+    {
+      "kind": "header",
+      "mode": "n10-qpsk-r1/5",
+      "n_cw": 34,
+      "score": 0.32087481274670276,
+      "preamble_s": 650.281
+    },
+    {
+      "kind": "header",
+      "mode": "polar-k96-f8",
+      "n_cw": 61,
+      "score": 0.3401188804886033,
+      "preamble_s": 702.188
+    },
+    {
+      "kind": "header",
+      "mode": "16qam-r1/3",
+      "n_cw": 39,
+      "score": 0.33687116094947994,
+      "preamble_s": 842.276
+    }
+  ],
+  "bursts": [
+    {
+      "kind": "burst",
+      "mode": "polar-k192-f8",
+      "n_cw": 13,
+      "score": 0.3402961219960585,
+      "preamble_s": 19.293,
+      "received": false
+    },
+    {
+      "kind": "burst",
+      "mode": "n4-qpsk-r1/5",
+      "n_cw": 13,
+      "score": 0.9035164816321484,
+      "preamble_s": 267.505,
+      "received": true
+    },
+    {
+      "kind": "burst",
+      "mode": "n4-qpsk-r1/5",
+      "n_cw": 12,
+      "score": 0.8123633005610099,
+      "preamble_s": 313.824,
+      "received": true
+    },
+    {
+      "kind": "burst",
+      "mode": "n4-qpsk-r1/5",
+      "n_cw": 13,
+      "score": 0.9062257350970464,
+      "preamble_s": 356.869,
+      "received": true
+    },
+    {
+      "kind": "burst",
+      "mode": "n4-qpsk-r1/5",
+      "n_cw": 12,
+      "score": 0.8371217304155764,
+      "preamble_s": 403.077,
+      "received": true
+    },
+    {
+      "kind": "burst",
+      "mode": "n4-qpsk-r1/5",
+      "n_cw": 13,
+      "score": 0.9009561581570231,
+      "preamble_s": 446.059,
+      "received": true
+    },
+    {
+      "kind": "burst",
+      "mode": "n4-qpsk-r1/5",
+      "n_cw": 12,
+      "score": 0.6693962228175944,
+      "preamble_s": 492.652,
+      "received": true
+    },
+    {
+      "kind": "burst",
+      "mode": "n10-ack-4f",
+      "n_cw": 56,
+      "score": 0.3026102837246305,
+      "preamble_s": 613.758,
+      "received": false
+    },
+    {
+      "kind": "burst",
+      "mode": "n10-qpsk-r1/5",
+      "n_cw": 34,
+      "score": 0.32087481274670276,
+      "preamble_s": 650.281,
+      "received": false
+    },
+    {
+      "kind": "burst",
+      "mode": "polar-k96-f8",
+      "n_cw": 61,
+      "score": 0.3401188804886033,
+      "preamble_s": 702.188,
+      "received": false
+    },
+    {
+      "kind": "burst",
+      "mode": "16qam-r1/3",
+      "n_cw": 39,
+      "score": 0.33687116094947994,
+      "preamble_s": 842.276,
+      "received": false
+    }
+  ],
+  "frames": [
+    {
+      "port": 1,
+      "bytes": 234,
+      "fragment": {
+        "magic": "PQI2",
+        "card_id": 49374,
+        "callsign": "AG7SU",
+        "grid": "CN85",
+        "offset": 203,
+        "total_bytes": 384,
+        "image_id": "fb9bb1d5c3793ae2",
+        "chunk_bytes": 181
+      }
+    }
+  ],
+  "transport_status": [
+    "BCAST 1 HEARD AG7SU"
+  ],
+  "elapsed_seconds": 165.65
+}

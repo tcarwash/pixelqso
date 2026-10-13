@@ -329,23 +329,34 @@ def find_copies(audio, sample_rate, *, capture_start_utc=None, grid_window=.1):
     if capture_start_utc is not None:
         from grid_fsk_modem import near_grid
         near_grid(capture_start_utc, grid_window)  # Validate the hint.
-    t = np.arange(step) / RATE
+    # Header timing is inspected at four phases per 100-baud symbol. Compute
+    # correlations once for every possible carrier bin, rather than running
+    # duplicate FFTs for each carrier-offset/tone combination. The CFO grid
+    # and modem tones are all 20 Hz multiples.
+    phase_step=step//4
+    first_frequency=int(TONES.min()-120)
+    frequency_step=20
+    frequencies=np.arange(first_frequency,int(TONES.max()+120)+1,frequency_step)
     fft_length=next_fast_len(len(analytic)+step-1)
-    signal_spectrum=fft(analytic,n=fft_length)
+    signal_spectrum=fft(analytic,n=fft_length,workers=4)
     correlation_length=len(analytic)-step+1
-    tone_batch=max(1,min(len(TONES),8_000_000//fft_length))
+    tone_batch=max(1,min(len(frequencies),8_000_000//fft_length))
+    tone_energy=np.empty((len(frequencies),len(range(0,correlation_length,phase_step))),dtype=float)
+    t=np.arange(step)/RATE
+    for first in range(0,len(frequencies),tone_batch):
+        tones=frequencies[first:first+tone_batch]
+        templates=np.asarray([np.exp(-2j*np.pi*tone*t)[::-1] for tone in tones])
+        template_spectrum=fft(templates,n=fft_length,axis=1,workers=4)
+        template_spectrum*=signal_spectrum[None,:]
+        correlations=ifft(template_spectrum,axis=1,workers=4)
+        tone_energy[first:first+len(tones)]=abs(
+            correlations[:,step-1:len(analytic):phase_step])**2
     threshold = 1/8 + 2.75*math.sqrt(7/(64*9*TRAINING))
     for offset in range(-120, 121, 20):
-        bank=np.empty((len(TONES),correlation_length),dtype=float)
-        for first in range(0,len(TONES),tone_batch):
-            tones=TONES[first:first+tone_batch]
-            templates=np.asarray([np.exp(-2j*np.pi*(tone+offset)*t)[::-1] for tone in tones])
-            template_spectrum=fft(templates,n=fft_length,axis=1,workers=4)
-            template_spectrum*=signal_spectrum[None,:]
-            correlations=ifft(template_spectrum,axis=1,workers=4)
-            bank[first:first+len(tones)]=abs(correlations[:,step-1:len(analytic)])**2
-        for phase in range(0, step, step//4):
-            energies = bank[:, phase::step]
+        tone_indices=((TONES+offset-first_frequency)//frequency_step).astype(int)
+        bank=tone_energy[tone_indices,:]
+        for phase in range(0, step, phase_step):
+            energies = bank[:, phase//phase_step::4]
             count = energies.shape[1] - TRAINING + 1
             if count <= 0:
                 continue
@@ -397,7 +408,15 @@ def find_copies(audio, sample_rate, *, capture_start_utc=None, grid_window=.1):
             hypotheses += _refine_header(analytic,start,offset)
         header = None
         for refined_score,at,shift in hypotheses:
-            metrics = _header_metrics(analytic,at,shift)[TRAINING:]
+            full_metrics = _header_metrics(analytic,at,shift)
+            normalized = full_metrics / np.maximum(full_metrics.sum(axis=1,keepdims=True),1e-20)
+            # The preamble peaks alone produce many noise candidates. Check
+            # the dispersed, protocol-known magic symbols before invoking the
+            # Python RS decoder and its bounded soft-recovery attempts.
+            known_score=float(np.mean(normalized[known_positions,known_tones]))
+            if known_score < .20:
+                continue
+            metrics = full_metrics[TRAINING:]
             try:
                 header = decode_header(metrics, soft=rank < 24)
                 if grid_only and header['mode'] != 'experimental_16fsk_grid':
@@ -508,10 +527,80 @@ class CopyCaptureCache:
         from threading import RLock
         self.max_bytes=max_bytes; self.max_groups=max_groups
         self.lock=RLock(); self.entries={}; self.serial=0
+        self.header_scan_sample=None
 
     def clear(self):
         with self.lock:
             self.entries.clear()
+            self.header_scan_sample=None
+
+    def header_scan_ranges(self, capture_start_sample, sample_count, sample_rate,
+                           *, max_chunk_seconds=8.0):
+        """Return bounded overlapping ranges since the previous live scan."""
+        buffer_start=int(capture_start_sample)
+        buffer_end=buffer_start+int(sample_count)
+        rate=int(sample_rate)
+        overlap=round((HEADER_SECONDS+.2)*rate)
+        chunk=max(overlap+1,round(float(max_chunk_seconds)*rate))
+        min_header=round((TRAINING+CODE_SYMBOLS*2)*(RATE/BAUD)*rate/RATE)
+        with self.lock:
+            cursor=self.header_scan_sample
+            if cursor is None:
+                # If RX is enabled after audio has accumulated, begin with a
+                # recent tail instead of rescanning the entire rolling buffer.
+                cursor=max(buffer_start,buffer_end-round(16*rate))
+            cursor=max(buffer_start,min(cursor,buffer_end))
+            begin=max(buffer_start,cursor-overlap)
+            if buffer_end-begin<min_header:
+                return []
+            ranges=[]; position=begin
+            while position<buffer_end:
+                end=min(buffer_end,position+chunk)
+                ranges.append((position-buffer_start,end-buffer_start))
+                if end>=buffer_end:
+                    break
+                position=end-overlap
+            self.header_scan_sample=buffer_end
+            return ranges
+
+    @staticmethod
+    def _append_payload(frame, audio, sample_rate, capture_start_sample):
+        payload_samples=frame['diagnostics'].get('payload_samples')
+        if payload_samples is None:
+            return
+        samples=np.asarray(audio)
+        start_absolute=round(frame['start']*sample_rate)
+        start_index=start_absolute-int(capture_start_sample)
+        if start_index<0 or start_index>=len(samples):
+            return
+        expected_input=round(int(payload_samples)*sample_rate/48000)
+        available=min(expected_input,len(samples)-start_index)
+        divisor=math.gcd(int(sample_rate),RATE)
+        up,down=RATE//divisor,int(sample_rate)//divisor
+        seen=int(frame.get('source_samples_seen',0))
+        end_input=available if available>=expected_input else (available//down)*down
+        if end_input<=seen:
+            return
+        overlap=max(down,round(.02*sample_rate))
+        overlap=(overlap//down)*down
+        begin_input=max(0,((seen-overlap)//down)*down)
+        source=samples[start_index+begin_input:start_index+end_input]
+        converted=resample_poly(source,up,down).astype(np.float32)
+        begin_output=begin_input*up//down
+        old_output=round(seen*up/down)
+        shift=frame['diagnostics'].get('carrier_offset_hz',0)
+        if shift and len(converted):
+            indices=begin_output+np.arange(len(converted))
+            converted=(hilbert(converted)*np.exp(-2j*np.pi*shift*indices/RATE)).real.astype(np.float32)
+        discard=max(0,old_output-begin_output)
+        addition=converted[discard:]
+        expected_output=round(end_input*up/down)
+        target=max(0,expected_output-old_output)
+        if len(addition)>target:
+            addition=addition[:target]
+        if len(addition):
+            frame['audio']=np.concatenate((frame['audio'],addition))
+            frame['source_samples_seen']=end_input
 
     def update(self, audio, sample_rate, copies, capture_start_sample=0):
         with self.lock:
@@ -521,21 +610,44 @@ class CopyCaptureCache:
                 group=self.entries.setdefault(key,dict(frames=[],touched=self.serial))
                 group['touched']=self.serial
                 absolute=(capture_start_sample+copy.start)/sample_rate
-                old=next((f for f in group['frames'] if abs(f['start']-absolute)<1/BAUD),None)
-                signal=np.asarray(audio)[copy.start:copy.end]
-                if old is not None and len(signal)/sample_rate<=len(old['audio'])/RATE:
-                    continue
-                divisor=math.gcd(int(sample_rate),RATE)
-                payload=resample_poly(signal,RATE//divisor,int(sample_rate)//divisor).astype(np.float32)
-                shift=copy.diagnostics['carrier_offset_hz']
-                if shift and len(payload):
-                    payload=(hilbert(payload)*np.exp(-2j*np.pi*shift*np.arange(len(payload))/RATE)).real.astype(np.float32)
-                frame=dict(start=absolute,audio=payload,diagnostics=copy.diagnostics)
+                # The opening and closing protected markers describe the same
+                # payload, but weak marker timing can place their inferred
+                # starts a few hundred milliseconds apart. Keep one best
+                # capture per physical payload so duplicate markers do not get
+                # counted as independent soft evidence.
+                old=next((f for f in group['frames'] if abs(f['start']-absolute)<.5),None)
+                if old is not None:
+                    previous_score=float(old['diagnostics'].get('acquisition_score',0))
+                    new_score=float(copy.diagnostics.get('acquisition_score',0))
+                    if new_score>previous_score:
+                        old['start']=absolute
+                        old['diagnostics']=dict(copy.diagnostics)
+                        old['audio']=np.empty(0,dtype=np.float32)
+                        old['source_samples_seen']=0
                 if old is None:
+                    frame=dict(start=absolute,audio=np.empty(0,dtype=np.float32),
+                               diagnostics=dict(copy.diagnostics),source_samples_seen=0)
                     group['frames'].append(frame)
                 else:
-                    group['frames'][group['frames'].index(old)]=frame
+                    frame=old
+                    diagnostic=dict(copy.diagnostics)
+                    if len(frame['audio']):
+                        diagnostic['carrier_offset_hz']=frame['diagnostics'].get(
+                            'carrier_offset_hz',diagnostic.get('carrier_offset_hz',0))
+                    frame['diagnostics']=diagnostic
+                if 'payload_samples' not in copy.diagnostics:
+                    signal=np.asarray(audio)[copy.start:copy.end]
+                    if old is None or len(signal)/sample_rate>len(frame['audio'])/RATE:
+                        divisor=math.gcd(int(sample_rate),RATE)
+                        payload=resample_poly(signal,RATE//divisor,int(sample_rate)//divisor).astype(np.float32)
+                        shift=copy.diagnostics.get('carrier_offset_hz',0)
+                        if shift and len(payload):
+                            payload=(hilbert(payload)*np.exp(-2j*np.pi*shift*np.arange(len(payload))/RATE)).real.astype(np.float32)
+                        frame['audio']=payload
                 group['frames']=sorted(group['frames'],key=lambda f:f['start'])[-MAX_COPIES:]
+            for group in self.entries.values():
+                for frame in group['frames']:
+                    self._append_payload(frame,audio,sample_rate,capture_start_sample)
             while len(self.entries)>self.max_groups or sum(f['audio'].nbytes for g in self.entries.values() for f in g['frames'])>self.max_bytes:
                 key=min(self.entries,key=lambda k:self.entries[k]['touched'])
                 del self.entries[key]

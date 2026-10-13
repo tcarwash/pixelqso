@@ -1,0 +1,110 @@
+[
+  {
+    "burst": 1,
+    "template_samples": 3648,
+    "best": [
+      {
+        "mirrored": false,
+        "correlation": 0.8673724293965953,
+        "offset_hz": 5.0,
+        "preamble_s": 267.505125
+      },
+      {
+        "mirrored": true,
+        "correlation": 0.25793698002857435,
+        "offset_hz": 55.0,
+        "preamble_s": 267.471625
+      }
+    ]
+  },
+  {
+    "burst": 2,
+    "template_samples": 3648,
+    "best": [
+      {
+        "mirrored": false,
+        "correlation": 0.7195734586508771,
+        "offset_hz": 5.0,
+        "preamble_s": 313.8245
+      },
+      {
+        "mirrored": true,
+        "correlation": 0.26468715846958263,
+        "offset_hz": 55.0,
+        "preamble_s": 313.837625
+      }
+    ]
+  },
+  {
+    "burst": 3,
+    "template_samples": 3648,
+    "best": [
+      {
+        "mirrored": false,
+        "correlation": 0.8263489404072818,
+        "offset_hz": 5.0,
+        "preamble_s": 356.869375
+      },
+      {
+        "mirrored": true,
+        "correlation": 0.25924673894535294,
+        "offset_hz": 55.0,
+        "preamble_s": 356.836
+      }
+    ]
+  },
+  {
+    "burst": 4,
+    "template_samples": 3648,
+    "best": [
+      {
+        "mirrored": false,
+        "correlation": 0.7775449301355271,
+        "offset_hz": 5.0,
+        "preamble_s": 403.077125
+      },
+      {
+        "mirrored": true,
+        "correlation": 0.25645797120555514,
+        "offset_hz": 55.0,
+        "preamble_s": 403.06375
+      }
+    ]
+  },
+  {
+    "burst": 5,
+    "template_samples": 3648,
+    "best": [
+      {
+        "mirrored": false,
+        "correlation": 0.8646664457038487,
+        "offset_hz": 5.0,
+        "preamble_s": 446.058625
+      },
+      {
+        "mirrored": true,
+        "correlation": 0.25578139007344486,
+        "offset_hz": 115.0,
+        "preamble_s": 441.624125
+      }
+    ]
+  },
+  {
+    "burst": 6,
+    "template_samples": 3648,
+    "best": [
+      {
+        "mirrored": false,
+        "correlation": 0.5511943471212317,
+        "offset_hz": 5.0,
+        "preamble_s": 492.652625
+      },
+      {
+        "mirrored": true,
+        "correlation": 0.23619237845332086,
+        "offset_hz": -40.0,
+        "preamble_s": 486.533375
+      }
+    ]
+  }
+]

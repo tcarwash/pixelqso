@@ -1,14 +1,15 @@
 import unittest
 import os
+import json
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QDialog, QPushButton
 
 import cardmodem as pixel
-from app import (LiveDecodeWorker, MainWindow, decode_all_card_backends,
+from app import (STARTER_CARDS_PATH, LiveDecodeWorker, MainWindow, decode_all_card_backends,
                  local_adapter_for_mode)
 from backend_adapters import (ADAPTERS, AdapterCapabilities, AdapterKind,
                               DecodeFailure, DecodeFailureKind, EXPERIMENTAL_ADAPTER,
@@ -86,24 +87,95 @@ class LivePreviewTests(unittest.TestCase):
             window.auto_connect_cat.setChecked(False)
             window.open_station_settings()
 
+            self.assertEqual(
+                [window.station_settings_tabs.tabText(i)
+                 for i in range(window.station_settings_tabs.count())],
+                ["Station", "Audio & Radio", "Advanced"])
+            self.assertIn("assigned station call sign", window.station_identity_hint.text())
+            window.station_call.setText("W7XYZ")
+            window.station_grid.setText("ZZ99")
+            self.assertIn("valid Maidenhead locator", window.station_identity_hint.text())
+            window.station_grid.setText("FN42")
+            self.assertIn("Station details look valid", window.station_identity_hint.text())
+            window.open_station_settings(1)
+            self.assertEqual(window.station_settings_tabs.currentIndex(), 1)
             self.assertEqual(window.backend_combo.currentData(), "data2g")
             self.assertFalse(window.data2g_settings_group.isHidden())
             self.assertTrue(window.cat_settings_group.isHidden())
             self.assertTrue(window.experimental_audio_group.isHidden())
             self.assertTrue(window.receive_all_modes.isHidden())
             self.assertTrue(window.receive_all_modes_label.isHidden())
+            self.assertTrue(window.rx_visual_stack.isHidden())
 
             window.show_experimental_modes.setChecked(True)
             window.backend_combo.setCurrentIndex(window.backend_combo.findData("experimental"))
             self.assertTrue(window.data2g_settings_group.isHidden())
             self.assertFalse(window.cat_settings_group.isHidden())
             self.assertFalse(window.experimental_audio_group.isHidden())
+            self.assertTrue(window.receive_all_modes.isHidden())
+            window.advanced_controls_action.setChecked(True)
             self.assertFalse(window.receive_all_modes.isHidden())
+            self.assertFalse(window.rx_visual_stack.isHidden())
             self.assertIn("Used only by experimental local modems",
                           " ".join(label.text() for label in
                                    window.cat_settings_group.findChildren(QLabel)))
             window.close()
             self.app.processEvents()
+
+    def test_starter_card_loads_as_new_personalizable_card(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), \
+                patch("app.QTimer.singleShot"):
+            window = MainWindow()
+            try:
+                self.assertIs(window.library_stack.currentWidget(), window.library_empty_page)
+                self.assertFalse(window.library_empty_page.isHidden())
+                self.assertEqual(window.library_status.text(), "")
+                self.assertIn("Your cards will show up here",
+                              " ".join(label.text() for label in window.library_empty_page.findChildren(QLabel)))
+                self.assertIn("Use a starter card",
+                              " ".join(button.text() for button in window.library_empty_page.findChildren(QPushButton)))
+                self.assertTrue(window.create_library_button.isHidden())
+                self.assertTrue(window.starter_library_button.isHidden())
+                self.assertTrue(window.more_card_button.isHidden())
+                self.assertIn("No contacts yet", window.log_status.text())
+                self.assertGreaterEqual(len(list(STARTER_CARDS_PATH.glob("*.json"))), 1)
+                with patch("app.QDialog.exec", return_value=QDialog.DialogCode.Accepted):
+                    window.open_starter_card_picker()
+                self.assertIsNone(window.card_path)
+                self.assertEqual(window.card.callsign, window.station_call.text().upper())
+                self.assertEqual(window.card.grid, window.station_grid.text().upper())
+                self.assertIn("Starter card", window.status.text())
+            finally:
+                window.close()
+                self.app.processEvents()
+
+    def test_library_actions_follow_empty_and_selected_states(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), patch("app.QTimer.singleShot"):
+            window = MainWindow()
+            try:
+                card = pixel.example_card()
+                folder = Path(temp_dir) / "cards"
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / "saved.json").write_text(json.dumps({
+                    "callsign": card.callsign, "grid": card.grid,
+                    "palette": card.palette, "pixels": card.pixels,
+                    "card_id": card.card_id, "width": card.width, "height": card.height,
+                }))
+                window.refresh_card_library()
+                self.assertIs(window.library_stack.currentWidget(), window.library_stack.widget(0))
+                self.assertFalse(window.library_search.isHidden())
+                self.assertFalse(window.create_library_button.isHidden())
+                self.assertTrue(window.open_library_button.isHidden())
+                item = window.library_list.item(0)
+                window.library_list.setCurrentItem(item)
+                self.assertFalse(window.open_library_button.isHidden())
+                self.assertFalse(window.copy_card_button.isHidden())
+                self.assertFalse(window.more_card_button.isHidden())
+            finally:
+                window.close()
+                self.app.processEvents()
 
     def test_decode_failure_uses_shared_receive_status_for_data2g_mode_key(self):
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), \

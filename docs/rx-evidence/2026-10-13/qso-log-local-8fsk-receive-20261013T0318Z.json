@@ -1,0 +1,63 @@
+{
+  "source_log": "/home/tyler/dev/pixelqso_stream/state/pixelqso/qso-log/qso-20261013-022321-0500.json",
+  "source_sha256": "1b2c8a4a7a908c15d34ae4335e0596a9a3a54e75043c83f92e4ff2807b5e5706",
+  "source_mtime_utc": "2026-10-13T03:18:11.866055+00:00",
+  "qso_started_at_utc_assumed_from_runtime_clock": "2026-10-13 02:23:21",
+  "qso_updated_at_utc_assumed_from_runtime_clock": "2026-10-13 03:18:11",
+  "sent_cards": 0,
+  "received_cards": [
+    {
+      "order": 1,
+      "mode": "experimental_8fsk_grouped",
+      "message_type": "cq",
+      "callsign": "AG7SU",
+      "grid": "CN85",
+      "card_id": 49374,
+      "pixel_count": 1024,
+      "pixel_sha256": "18f470cca82e5ea59ed415c6e240af0391826a58047a29466e99c35e1ae76767",
+      "whole_raster_crc32_valid": true,
+      "image_crc32": 1491296454,
+      "verification_scope": "whole_raster_crc32",
+      "content_id": "2f4deca489a826b6bbda83db37df04f6",
+      "announced_mode": "experimental_8fsk_grouped",
+      "announced_copies": 3,
+      "acquired_copies": 3,
+      "combined_copies": 1,
+      "clock_ppm": 0,
+      "pilot_score": 0.428740933583897,
+      "checked_shards": null,
+      "corrected_rs_symbols": null,
+      "outer_recovered_shards": null
+    },
+    {
+      "order": 2,
+      "mode": "experimental_8fsk_outer_rs",
+      "message_type": "exchange",
+      "callsign": "AG7SU",
+      "grid": "CN85",
+      "card_id": 49374,
+      "pixel_count": 1024,
+      "pixel_sha256": "18f470cca82e5ea59ed415c6e240af0391826a58047a29466e99c35e1ae76767",
+      "whole_raster_crc32_valid": true,
+      "image_crc32": 1491296454,
+      "verification_scope": "whole_raster_crc32",
+      "content_id": "8e32bb585b08e91d562edb6cf7383d0b",
+      "announced_mode": "experimental_8fsk_outer_rs",
+      "announced_copies": 3,
+      "acquired_copies": 3,
+      "combined_copies": 1,
+      "clock_ppm": -80,
+      "pilot_score": 0.5043603268048962,
+      "checked_shards": 15,
+      "corrected_rs_symbols": 7,
+      "outer_recovered_shards": [
+        0
+      ]
+    }
+  ],
+  "user_message_timestamp_utc": "2026-10-13T03:18:09.704Z",
+  "message_text": "sending another 8fsk",
+  "qso_file_update_delta_seconds": 2.162055,
+  "active_container_created_utc": "2026-10-13T07:45:48.914122Z",
+  "interpretation": "The persisted PixelQSO QSO log records full-raster-CRC-verified receives for the AG7SU/CN85 card in experimental_8fsk_grouped (CQ) and experimental_8fsk_outer_rs (exchange), both matching the expected 1024-pixel raster hash. Its final update was 2.162 seconds after the user message announcing another 8FSK transmission. This is strong receiver-side evidence that local 8-FSK decoding completed around that transmission, but it is not definitive on-air attribution: the log has no per-card receive timestamp, captured audio, or source path, sent_cards is empty, and the current container instance was created later. Later 03:20 and 03:31 transmissions are not represented in this log."
+}

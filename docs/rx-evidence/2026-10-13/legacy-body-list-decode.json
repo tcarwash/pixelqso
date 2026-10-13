@@ -1,0 +1,52 @@
+{
+  "capture": "mode-scan-2220.0-2416.6.f16",
+  "packet_key": [
+    49374,
+    113,
+    0,
+    39
+  ],
+  "start_sample": 8,
+  "symbol_period_samples": 160.2,
+  "carrier_offset_hz": 4.75,
+  "alternate_paths_checked": 512,
+  "results": [
+    {
+      "list_size": 1,
+      "paths_returned": 1,
+      "base85_valid": 0,
+      "crc_valid": [],
+      "top_path_matches_standard_viterbi": true
+    },
+    {
+      "list_size": 8,
+      "paths_returned": 8,
+      "base85_valid": 0,
+      "crc_valid": [],
+      "top_path_matches_standard_viterbi": true
+    },
+    {
+      "list_size": 32,
+      "paths_returned": 32,
+      "base85_valid": 0,
+      "crc_valid": [],
+      "top_path_matches_standard_viterbi": true
+    },
+    {
+      "list_size": 128,
+      "paths_returned": 128,
+      "base85_valid": 0,
+      "crc_valid": [],
+      "top_path_matches_standard_viterbi": true
+    },
+    {
+      "list_size": 512,
+      "paths_returned": 512,
+      "base85_valid": 0,
+      "crc_valid": [],
+      "top_path_matches_standard_viterbi": true
+    }
+  ],
+  "elapsed_seconds": 1.56,
+  "interpretation": "The top 512 convolutional-code paths contain no base85-valid packet body, hence none can pass CRC16. The top path matches the existing Viterbi decoder. This is evidence against a small-distance alternate Viterbi path fixing this candidate, not proof of the underlying audio corruption mechanism."
+}

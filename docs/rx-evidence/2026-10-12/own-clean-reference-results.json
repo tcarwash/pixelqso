@@ -1,0 +1,29 @@
+[
+  {
+    "mode": "standard",
+    "elapsed_s": 11.738405860989587,
+    "callsign": "AG7SU",
+    "complete": true,
+    "valid_packets": 8,
+    "pixels": 32
+  },
+  {
+    "mode": "resilient_50",
+    "elapsed_s": 0.07821726001566276,
+    "callsign": "AG7SU",
+    "exact": true,
+    "received_blocks": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "pixels": 1024
+  }
+]

@@ -1,0 +1,7 @@
+{
+  "mode": "experimental_qpsk_equalized",
+  "diagnostic_search_radius_s": 0.08,
+  "elapsed_s": 18.451000608998584,
+  "normal_radius_s": 0.004,
+  "error": "DecodeFailure(adapter_key='experimental_local', kind=<DecodeFailureKind.NO_MATCH: 'no_match'>, message='Experimental LDPC parity checks did not converge', retryable=True)"
+}

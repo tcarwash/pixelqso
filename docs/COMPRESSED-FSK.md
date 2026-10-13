@@ -1,5 +1,10 @@
 # Lossless compressed FSK family
 
+> **Beta 1 status:** These modes are disabled for transmission because field
+> reliability is not sufficient. Their existing wire formats remain
+> receive-decodable for compatibility. The measurements below are historical
+> development evidence, not a recommendation to operate these modes.
+
 Enable Experimental modems, then choose **8-FSK · compressed LDPC copies** or **16-FSK · compressed LDPC copies**. Use the existing **Copies per card** setting (1–20). Compression is automatic and the displayed airtime depends on the selected card. These modes carry the same exact 32×32 eight-color on-air card as the grouped family.
 
 A transmission contains one protected 1.6-second version 3 group header, followed by independently synchronized copies of a shorter LDPC payload. There are no per-copy common headers or trailers. Existing v1 and v2 modes retain their wire formats and remain selectable. The new modes require updated receivers; the application card/message and verified-image APIs do not change.

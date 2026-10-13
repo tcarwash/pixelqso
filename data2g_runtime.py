@@ -80,6 +80,24 @@ def data2g_host_audio_devices(kind: str) -> list[tuple[str, str]]:
             pass
 
 
+def data2g_host_audio_selector_for_name(kind: str, description: str) -> str:
+    """Resolve a Qt audio description to the host's numeric PortAudio index."""
+    wanted = " ".join(str(description or "").casefold().split())
+    if not wanted:
+        return ""
+    devices = data2g_host_audio_devices(kind)
+    exact = [device_id for device_id, name in devices
+             if " ".join(name.casefold().split()) == wanted]
+    if len(exact) == 1:
+        return exact[0]
+    # Qt and PortAudio sometimes add different backend suffixes. Only use a
+    # partial match when it identifies one host device unambiguously.
+    matches = [device_id for device_id, name in devices
+               if wanted in " ".join(name.casefold().split()) or
+               " ".join(name.casefold().split()) in wanted]
+    return matches[0] if len(matches) == 1 else description
+
+
 def validate_data2g_ports(command_port: int, kiss_port: int) -> None:
     """Validate the host's command, next-port data, and KISS listener layout."""
     if not 1 <= command_port < 65535 or not 1 <= kiss_port <= 65535:

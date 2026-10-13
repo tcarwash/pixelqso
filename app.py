@@ -39,6 +39,7 @@ from backend_adapters import (AdapterKind, DATA2G_ADAPTER, DecodeFailure,
                               EXPERIMENTAL_ADAPTER, ReceiveStartError,
                               adapter_for_backend_selection)
 from card_backends import (BACKENDS, DEFAULT_MODE_KEY, LEGACY_MODE_KEY, MODE_REGISTRY, Data2GHostBackend,
+                           TX_DISABLED_MODE_KEYS,
                            available_modes, get_backend,
                            data2g_mode_name, host_mode_backends, is_card_backend, is_experimental_mode,
                            is_data2g_mode_key, mode_supports_audio_placement,
@@ -47,7 +48,8 @@ from card_backends import (BACKENDS, DEFAULT_MODE_KEY, LEGACY_MODE_KEY, MODE_REG
 from card_transfer import CardAssemblyService
 from data2g_transport import Data2GMode
 from data2g_runtime import (data2g_audio_device_selector,
-                            data2g_host_audio_devices, int_setting,
+                            data2g_host_audio_devices,
+                            data2g_host_audio_selector_for_name, int_setting,
                             local_host_arguments, local_host_command,
                             validate_data2g_ports)
 from on_air import SessionRecorder, card_reference, decoded_reference
@@ -142,10 +144,17 @@ def default_card(callsign="N0CALL", grid="AA00") -> modem.Card:
 
 def received_card_key(report):
     card = report.get("card") or {}
-    pixels = json.dumps(report.get("pixels"), separators=(",", ":"), ensure_ascii=True).encode("ascii")
-    fingerprint = hashlib.blake2s(pixels, digest_size=8).hexdigest()
+    # A retransmission remains the same card when its measured SNR or the
+    # currently reconstructed pixel coverage changes.
+    return (str(card.get("callsign", "")).upper(), card.get("card_id"),
+            card.get("message_type", "card"))
+
+
+def session_wall_card_key(report):
+    """Stable identity for one card while provisional snapshots improve."""
+    card = report.get("card") or {}
     return (str(card.get("callsign", "")).upper(), str(card.get("grid", "")).upper(),
-            card.get("card_id"), card.get("message_type", "card"), card.get("snr_db"), fingerprint)
+            card.get("card_id"), card.get("message_type", "card"), card.get("snr_db"))
 
 
 class RigctlClient(QObject):
@@ -1602,7 +1611,9 @@ class MainWindow(QMainWindow):
         self.auto_last_card_duration = 0.0
         self.auto_live_handled_cards = set()
         self.seen_received_cards = set()
+        self.session_duplicate_receipts = set()
         self.session_wall_keys = set()
+        self.session_wall_items = {}
         self.session_wall_count = 0
         self.duplicate_displayed_in_qso = False
         self.duplicate_preview_key = None
@@ -1708,25 +1719,16 @@ class MainWindow(QMainWindow):
         self.advanced_controls_action.toggled.connect(self._set_advanced_controls)
         view_menu.addAction(self.advanced_controls_action)
         settings_menu = self.menuBar().addMenu("Settings")
-        getting_started_action = QAction("Getting started…", self)
-        getting_started_action.triggered.connect(self.open_getting_started)
-        settings_menu.addAction(getting_started_action)
-        settings_menu.addSeparator()
         station_settings_action = QAction("Station settings…", self)
         station_settings_action.setShortcut(QKeySequence("Ctrl+,"))
         station_settings_action.triggered.connect(self.open_station_settings)
         settings_menu.addAction(station_settings_action)
         self.station_settings_action = station_settings_action
-        self.getting_started_action = getting_started_action
         help_menu = self.menuBar().addMenu("Help")
         about_action = QAction("About Pixel QSO", self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
         self.about_action = about_action
-        operate_menu = self.menuBar().addMenu("Operate")
-        beacon_action = QAction("Configure beacon…", self)
-        beacon_action.triggered.connect(self._show_beacon_controls)
-        operate_menu.addAction(beacon_action)
         self.refresh_card_library()
         self.refresh_qso_log()
         self._update_data2g_host_controls()
@@ -1740,93 +1742,9 @@ class MainWindow(QMainWindow):
     def _show_about(self):
         QMessageBox.about(
             self, "About Pixel QSO",
-            "<h3>Pixel QSO</h3>"
+            "<h3>Pixel QSO 0.4.0b1 · Beta 1</h3>"
             "<p>Exchange pixel art cards over digital radio.</p>"
             "<p>Set up your station, listen for cards, and create or share your own.</p>")
-
-    def open_getting_started(self):
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Getting started with Pixel QSO")
-        dialog.setMinimumWidth(520)
-        layout = QVBoxLayout(dialog)
-        title = QLabel("Get your station ready")
-        title.setObjectName("sectionTitle")
-        layout.addWidget(title)
-        intro = QLabel(
-            "Work through these steps in any order. You can close this guide and keep using Pixel QSO.")
-        intro.setWordWrap(True)
-        layout.addWidget(intro)
-
-        station_state = self._station_identity_feedback()
-        connected = (DATA2G_ADAPTER.is_connected(self.data2g_session)
-                     if self.backend_combo.currentData() == "data2g" else self.rig.connected())
-        if connected:
-            connection_state = ("Connected · host audio/PTT readiness unverified"
-                                if self.backend_combo.currentData() == "data2g" else "Radio control connected")
-        elif self.data2g_connecting or self.data2g_local_starting:
-            connection_state = "Connecting · waiting for the host"
-        else:
-            connection_state = "Connect your station to start receiving"
-        indicator = self.listen_indicator.text().replace("● ", "")
-        if indicator in {"RECEIVING SIGNAL", "RECEIVING CARD", "PROCESSING", "CARD VERIFIED"}:
-            receive_state = f"Activity detected · {indicator.lower()}"
-        elif indicator == "WAITING FOR FRAMES":
-            receive_state = "Connected · waiting for card frames; RF activity has not been confirmed"
-        elif indicator == "LISTENING":
-            receive_state = "Local audio receiver is listening"
-        elif not connected and not (self.data2g_connecting or self.data2g_local_starting):
-            receive_state = "Connect your station before reception can start"
-        else:
-            receive_state = f"Waiting for receive activity · {self.rx_status.text()}"
-        card_count = sum(1 for folder in (DATA / "cards", DATA / "sent-cards")
-                         for _path in folder.glob("*.json"))
-        card_state = f"{card_count} saved or sent card{'s' if card_count != 1 else ''}" if card_count else "Choose a starter card or create your own"
-
-        steps = QFormLayout()
-        steps.setVerticalSpacing(12)
-        for number, label, state in (
-                ("1", "Your station", station_state),
-                ("2", "Connect your station", connection_state),
-                ("3", "Check reception", receive_state),
-                ("4", "Choose a starter card", card_state)):
-            step_label = QLabel(f"{number}. {label}")
-            step_label.setObjectName("gettingStartedStep")
-            state_label = QLabel(state)
-            state_label.setWordWrap(True)
-            steps.addRow(step_label, state_label)
-        layout.addLayout(steps)
-        note = QLabel(
-            "Pixel QSO does not key the radio during setup. A host connection alone does not confirm audio, PTT, or on-air reception.")
-        note.setWordWrap(True)
-        note.setStyleSheet(semantic_text_style(padding="6px 0 0 0"))
-        layout.addWidget(note)
-
-        actions = QGridLayout()
-        station_button = QPushButton("Station details…")
-        connect_button = QPushButton("Connection settings…")
-        receive_button = QPushButton("Open Operate")
-        starter_button = QPushButton("Choose a starter card…")
-        actions.addWidget(station_button, 0, 0)
-        actions.addWidget(connect_button, 0, 1)
-        actions.addWidget(receive_button, 1, 0)
-        actions.addWidget(starter_button, 1, 1)
-        actions.setColumnStretch(0, 1)
-        actions.setColumnStretch(1, 1)
-        layout.addLayout(actions)
-        done = QPushButton("Done for now")
-        done.setObjectName("primaryAction")
-        done.clicked.connect(dialog.accept)
-        layout.addWidget(done, 0, Qt.AlignmentFlag.AlignRight)
-
-        def open_settings(page_index):
-            dialog.accept()
-            self.open_station_settings(page_index)
-
-        station_button.clicked.connect(lambda: open_settings(0))
-        connect_button.clicked.connect(lambda: open_settings(1))
-        receive_button.clicked.connect(lambda: (dialog.accept(), self.tabs.setCurrentIndex(0)))
-        starter_button.clicked.connect(lambda: (dialog.accept(), self.open_starter_card_picker()))
-        dialog.exec()
 
     def _station_identity_feedback(self):
         callsign = self.station_call.text().strip().upper()
@@ -1850,12 +1768,6 @@ class MainWindow(QMainWindow):
         self.station_identity_hint.setText(message)
         self.station_identity_hint.setStyleSheet(
             semantic_text_style("positive" if ready else "warning", padding="2px"))
-
-    def _maybe_show_getting_started(self):
-        if self.settings.value("setup/guide_seen", False, type=bool):
-            return
-        self.settings.setValue("setup/guide_seen", True)
-        self.open_getting_started()
 
     def make_library_tab(self):
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(SPACING["lg"])
@@ -3496,13 +3408,6 @@ class MainWindow(QMainWindow):
         self.exchange_mode.currentIndexChanged.connect(self._update_exchange_controls)
         self.exchange_mode.currentIndexChanged.connect(self._refresh_transfer_summary)
         self.exchange_role.currentIndexChanged.connect(self._refresh_transfer_summary)
-        self.profile_combo = QComboBox()
-        for profile in modem.PROFILES: self.profile_combo.addItem(profile.label, profile.key)
-        configured_profile = os.environ.get("PIXELQSO_PROFILE", modem.DEFAULT_PROFILE)
-        profile_index = self.profile_combo.findData(configured_profile)
-        self.profile_combo.setCurrentIndex(profile_index if profile_index >= 0 else self.profile_combo.findData(modem.DEFAULT_PROFILE))
-        self.profile_form_widget = QWidget(); profile_form = QFormLayout(self.profile_form_widget)
-        profile_form.setContentsMargins(0, 0, 0, 0); profile_form.addRow("Bandwidth", self.profile_combo)
         self.mode_combo = QComboBox()
         configured_mode = self.settings.value("transfer/mode", DEFAULT_MODE_KEY)
         preserved_legacy_mode = (
@@ -3548,28 +3453,9 @@ class MainWindow(QMainWindow):
             "Select the digital mode used to send and receive cards. "
             "This is separate from the radio control mode and frequency.")
         mode_form = QFormLayout()
-        mode_form.addRow("Modem backend", self.backend_combo)
         mode_form.addRow("Transfer mode", self.mode_combo)
         self.transfer_mode_label = mode_form.labelForField(self.mode_combo)
         self._update_transfer_mode_visibility()
-        self.advanced_backend_label = mode_form.labelForField(self.backend_combo)
-        self.grid_tx_latency = QSpinBox()
-        self.grid_tx_latency.setRange(0, 2000)
-        self.grid_tx_latency.setSuffix(" ms")
-        self.grid_tx_latency.setValue(self.settings.value("grid/tx_latency_ms", 0, type=int))
-        self.grid_tx_latency.setToolTip("UTC grid test modem only: measured output delay from queued audio to radio audio. Calibrate with a loopback capture.")
-        self.grid_tx_latency.valueChanged.connect(lambda value: self.settings.setValue("grid/tx_latency_ms", value))
-        mode_form.addRow("Grid TX audio delay", self.grid_tx_latency)
-        self.grid_tx_label = mode_form.labelForField(self.grid_tx_latency)
-        self._update_grid_tx_control_visibility()
-        self.grid_rx_latency = QSpinBox()
-        self.grid_rx_latency.setRange(0, 2000)
-        self.grid_rx_latency.setSuffix(" ms")
-        self.grid_rx_latency.setValue(self.settings.value("grid/rx_latency_ms", 0, type=int))
-        self.grid_rx_latency.setToolTip("UTC grid acquisition: measured input startup delay. Timing remains approximate; full acquisition is retained.")
-        self.grid_rx_latency.valueChanged.connect(lambda value: self.settings.setValue("grid/rx_latency_ms", value))
-        mode_form.addRow("Grid RX audio delay", self.grid_rx_latency)
-        self.grid_rx_label = mode_form.labelForField(self.grid_rx_latency)
         self.receive_all_modes = QCheckBox("Receive all local audio modem types")
         self.receive_all_modes.setChecked(self.settings.value("transfer/receive_all", True, type=bool))
         self.receive_all_modes.setToolTip(
@@ -3658,12 +3544,15 @@ class MainWindow(QMainWindow):
         self.role_widget = QWidget(); role_form = QFormLayout(self.role_widget); role_form.setContentsMargins(0, 0, 0, 0)
         role_form.addRow("Role", self.exchange_role)
         self.frequency = QSpinBox(); self.frequency.setRange(100_000, 1_300_000_000); self.frequency.setValue(14_074_000); self.frequency.setSuffix(" Hz")
+        self.frequency.setReadOnly(True)
+        self.frequency.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.frequency.setToolTip("Read-only frequency reported by the connected radio.")
         f = QFormLayout(); f.addRow("Rig frequency", self.frequency)
         self.frequency_controls = QWidget(); self.frequency_controls.setLayout(f)
         transfer_group = QGroupBox("Send a card")
         transfer_form = QFormLayout(transfer_group); transfer_form.addRow("Send type", self.exchange_mode)
         self.advanced_exchange_label = transfer_form.labelForField(self.exchange_mode)
-        transfer_form.addRow(mode_form); transfer_form.addRow(self.profile_form_widget)
+        transfer_form.addRow(mode_form)
         transfer_form.addRow(self.role_widget); transfer_form.addRow(self.auto_stage_group)
         transfer_form.addRow(self.frequency_controls)
         self.exchange_status = QLabel("CQ → Reply / Exchange → RR73 → 73\nCall CQ, or click Reply on a received CQ to start automatic sequencing.")
@@ -3804,10 +3693,12 @@ class MainWindow(QMainWindow):
         wall_layout = QHBoxLayout(self.session_wall_page); wall_layout.setContentsMargins(0, 0, 0, 0); wall_layout.setSpacing(SPACING["sm"])
         wall_list_panel = QWidget()
         wall_list_layout = QVBoxLayout(wall_list_panel); wall_list_layout.setContentsMargins(0, 0, 0, 0)
-        self.session_wall_empty = QLabel("Your session wall is empty.\nVerified cards received on this frequency will appear here.")
+        self.session_wall_empty = QLabel("Your session wall is empty.\nReceived cards appear here while they are still provisional and after verification.")
         self.session_wall_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.session_wall_empty.setObjectName("receiverEmpty")
-        self.session_wall_empty.setAccessibleName("No verified cards received this session")
+        self.session_wall_empty.setAccessibleName("No cards received this session yet")
+        self.session_wall_empty.setAccessibleDescription(
+            "Identified provisional cards appear here while integrity checks are still in progress.")
         wall_list_layout.addWidget(self.session_wall_empty, 1)
         self.session_wall = QListWidget()
         self.session_wall.setViewMode(QListWidget.ViewMode.IconMode)
@@ -3819,9 +3710,9 @@ class MainWindow(QMainWindow):
         self.session_wall.setGridSize(QSize(148, 148))
         self.session_wall.setSpacing(2)
         self.session_wall.setObjectName("sessionWall")
-        self.session_wall.setAccessibleName("Verified cards received this session")
+        self.session_wall.setAccessibleName("Received cards for this session")
         self.session_wall.setAccessibleDescription(
-            "Newest cards appear first. Each card has been integrity verified.")
+            "Newest cards appear first. A card may be provisional until whole-card integrity checks pass.")
         self.session_wall.hide()
         wall_list_layout.addWidget(self.session_wall, 1)
         wall_layout.addWidget(wall_list_panel, 1)
@@ -3917,13 +3808,7 @@ class MainWindow(QMainWindow):
         """Reveal technical controls while preserving their saved values."""
         enabled = bool(enabled)
         self.settings.setValue("ui/advanced_controls", enabled)
-        self.backend_combo.setVisible(enabled)
-        self.advanced_backend_label.setVisible(enabled)
         self.advanced_exchange_label.setVisible(enabled)
-        self.profile_form_widget.setVisible(enabled)
-        self._update_grid_tx_control_visibility()
-        self.grid_rx_latency.setVisible(enabled)
-        self.grid_rx_label.setVisible(enabled)
         receive_all_supported = self.selected_adapter().capabilities.receive_all_modes
         self.receive_all_modes.setVisible(enabled and receive_all_supported)
         self.receive_all_modes_label.setVisible(enabled and receive_all_supported)
@@ -3934,10 +3819,6 @@ class MainWindow(QMainWindow):
         self.auto_stage_group.setVisible(True)
         if hasattr(self, "rx_visual_stack"):
             self._update_backend_ui()
-
-    def _show_beacon_controls(self):
-        self.advanced_controls_action.setChecked(True)
-        self.exchange_mode.setCurrentIndex(2)
 
     def open_station_settings(self, page_index=None):
         if self._station_operation_active():
@@ -4033,7 +3914,6 @@ class MainWindow(QMainWindow):
         options = QGroupBox("Modem options")
         options_form = QFormLayout(options)
         options_form.addRow(self.audio_test_mode)
-        options_form.addRow(self.show_experimental_modes)
         options_form.addRow(self.cwid_enabled)
         options_form.addRow("CW ID message", self.cwid_message)
         options_form.addRow("Copies per card", self.repeat_count)
@@ -4048,6 +3928,17 @@ class MainWindow(QMainWindow):
         advanced_page.addStretch(1)
 
         audio_page = add_settings_page("Audio & Radio")
+
+        backend_group = QGroupBox("Transfer backend")
+        backend_form = QFormLayout(backend_group)
+        backend_form.addRow("Backend", self.backend_combo)
+        backend_form.addRow(self.show_experimental_modes)
+        backend_note = QLabel(
+            "Configure the selected Data2G host or Experimental audio/radio path below before switching. "
+            "A backend switch may interrupt reception.")
+        backend_note.setWordWrap(True)
+        backend_form.addRow(backend_note)
+        audio_page.addWidget(backend_group)
 
         self.data2g_settings_group = QGroupBox("Data2G host")
         data2g_form = QFormLayout(self.data2g_settings_group)
@@ -4118,7 +4009,12 @@ class MainWindow(QMainWindow):
         buttons.addWidget(self.station_settings_reconnect_button)
         layout.addLayout(buttons)
         self._connect_station_settings_change_signals()
-        dialog.resize(760, 680)
+        # Keep the action row on screen even on short displays. The page
+        # contents already scroll, so the dialog itself can fit the work area.
+        available = dialog.screen().availableGeometry()
+        width = min(900, max(560, int(available.width() * 0.92)))
+        height = min(760, max(440, int(available.height() * 0.90)))
+        dialog.resize(min(width, available.width()), min(height, available.height()))
         self._run_station_settings_dialog()
 
     def _station_operation_active(self):
@@ -4174,6 +4070,7 @@ class MainWindow(QMainWindow):
 
     def _station_settings_values(self):
         controls = {
+            "backend_combo": self.backend_combo,
             "station_call": self.station_call, "station_grid": self.station_grid,
             "cwid_enabled": self.cwid_enabled, "cwid_message": self.cwid_message,
             "interface_text_size": self.interface_text_size,
@@ -4207,12 +4104,11 @@ class MainWindow(QMainWindow):
         return {"values": values, "audio_errors": dict(self.data2g_audio_config_errors)}
 
     def _station_connection_keys(self):
-        if self.backend_combo.currentData() == "data2g":
-            return ("station_call", "data2g_host_source", "data2g_host_input",
-                    "data2g_command_port", "data2g_kiss_port", "data2g_host_bandwidth",
-                    "data2g_rig_host", "data2g_rig_port", "data2g_input_device",
-                    "data2g_output_device")
-        return ("rig_host", "rig_port", "input_device", "output_device")
+        return ("backend_combo", "station_call", "data2g_host_source", "data2g_host_input",
+                "data2g_command_port", "data2g_kiss_port", "data2g_host_bandwidth",
+                "data2g_rig_host", "data2g_rig_port", "data2g_input_device",
+                "data2g_output_device", "rig_host", "rig_port", "input_device",
+                "output_device")
 
     def _station_settings_connection_changed(self, before, after):
         keys = self._station_connection_keys()
@@ -4226,11 +4122,16 @@ class MainWindow(QMainWindow):
             self._station_settings_baseline, self._station_settings_values())
 
     def _station_connection_is_active(self):
+        backend = self.backend_combo.currentData()
+        if (getattr(self, "_station_settings_editing", False) and
+                getattr(self, "_station_settings_baseline", None) is not None):
+            old_index = self._station_settings_baseline["values"].get("backend_combo")
+            backend = self.backend_combo.itemData(old_index)
         return (DATA2G_ADAPTER.is_connected(self.data2g_session)
-                if self.backend_combo.currentData() == "data2g" else self.rig.connected())
+                if backend == "data2g" else self.rig.connected())
 
     def _connect_station_settings_change_signals(self):
-        controls = (self.station_call, self.station_grid, self.cwid_enabled,
+        controls = (self.backend_combo, self.station_call, self.station_grid, self.cwid_enabled,
                     self.cwid_message, self.data2g_host_source,
                     self.interface_text_size,
                     self.data2g_host_input, self.data2g_command_port,
@@ -4303,9 +4204,14 @@ class MainWindow(QMainWindow):
             self._restore_station_settings_connection_controls()
             return
         reconnect = self._station_settings_reconnect
+        backend_changed = (
+            self._station_settings_baseline["values"].get("backend_combo") !=
+            self.backend_combo.currentIndex())
         self._station_settings_baseline = None
         self._station_settings_reconnect = None
         self._restore_station_settings_connection_controls()
+        if backend_changed:
+            self._on_backend_selection_changed()
         if reconnect == "data2g":
             self._reconnect_data2g_after_settings()
         elif reconnect == "rig":
@@ -4326,6 +4232,7 @@ class MainWindow(QMainWindow):
 
     def _restore_station_settings(self, snapshot):
         controls = {
+            "backend_combo": self.backend_combo,
             "station_call": self.station_call, "station_grid": self.station_grid,
             "cwid_enabled": self.cwid_enabled, "cwid_message": self.cwid_message,
             "interface_text_size": self.interface_text_size,
@@ -4407,7 +4314,7 @@ class MainWindow(QMainWindow):
         if (not self.show_experimental_modes.isChecked() and
                 self.backend_combo.currentData() == "experimental"):
             self.station_settings_notice.setText(
-                "Select Data2G in Operate before hiding experimental modes; the active backend will be preserved.")
+                "Select Data2G in Audio & Radio before hiding experimental modes; the active backend will be preserved.")
             self.station_settings_notice.setStyleSheet(semantic_text_style("warning", padding="2px"))
             return
         self._station_settings_editing = False
@@ -4500,16 +4407,32 @@ class MainWindow(QMainWindow):
             self.data2g_host_status.setText("Local host unavailable · " + advice)
             return False
         try:
+            # The managed host has its own PortAudio catalog. When its
+            # dedicated selector is left at System default, pass the station
+            # audio selection through by name; an empty host selector used to
+            # silently omit both CLI options and ignore the selected devices.
+            input_selector = (
+                data2g_audio_device_selector(
+                    self.data2g_input_device.currentData(),
+                    self.data2g_input_device.currentText())
+                if self.data2g_input_device.count() else "")
+            output_selector = (
+                data2g_audio_device_selector(
+                    self.data2g_output_device.currentData(),
+                    self.data2g_output_device.currentText())
+                if self.data2g_output_device.count() else "")
+            if not input_selector and self.input_device.currentData():
+                input_selector = data2g_host_audio_selector_for_name(
+                    "input", self.input_device.currentData().description())
+            if not output_selector and self.output_device.currentData():
+                output_selector = data2g_host_audio_selector_for_name(
+                    "output", self.output_device.currentData().description())
             args = local_host_arguments(
                 command_port=self.data2g_command_port.value(),
                 kiss_port=self.data2g_kiss_port.value(),
                 callsign=self.station_call.text(),
-                input_device=(data2g_audio_device_selector(
-                    self.data2g_input_device.currentData(), self.data2g_input_device.currentText())
-                    if self.data2g_input_device.count() else ""),
-                output_device=(data2g_audio_device_selector(
-                    self.data2g_output_device.currentData(), self.data2g_output_device.currentText())
-                    if self.data2g_output_device.count() else ""),
+                input_device=input_selector,
+                output_device=output_selector,
                 rig_host=self.data2g_rig_host.text().strip(),
                 rig_port=self.data2g_rig_port.value(),
                 bandwidth_hz=int(self.data2g_host_bandwidth.currentData()),
@@ -4958,6 +4881,9 @@ class MainWindow(QMainWindow):
     def _on_backend_selection_changed(self, *_):
         if not hasattr(self, "mode_combo"):
             return
+        if getattr(self, "_station_settings_editing", False):
+            self._update_station_settings_actions()
+            return
         data2g = self.backend_combo.currentData() == "data2g"
         if not data2g and not self._confirm_data2g_ptt_recovery():
             with QSignalBlocker(self.backend_combo):
@@ -5276,7 +5202,8 @@ class MainWindow(QMainWindow):
                 image = self.card_image(report)
                 self._show_receive_preview(image, card=card, exact=bool(card.get("exact")),
                                            coverage=card.get("pixel_coverage"),
-                                           verified_coverage=card.get("verified_pixel_coverage"))
+                                           verified_coverage=card.get("verified_pixel_coverage"),
+                                           report=report)
             if verified_complete:
                 key = received_card_key(report)
                 if key not in self.seen_received_cards:
@@ -5606,7 +5533,7 @@ class MainWindow(QMainWindow):
         self.auto_stop_btn.setVisible(self.auto_armed)
 
     def selected_profile(self):
-        return self.profile_combo.currentData() or modem.DEFAULT_PROFILE
+        return modem.DEFAULT_PROFILE
 
     def selected_mode(self):
         return self.mode_combo.currentData() or "resilient_100"
@@ -5671,7 +5598,7 @@ class MainWindow(QMainWindow):
         self._update_data2g_host_controls()
 
     def _show_receive_preview(self, image, *, card=None, exact=False, coverage=None,
-                              verified_coverage=None, duplicate=False):
+                              verified_coverage=None, duplicate=False, report=None):
         if image is None:
             return
         self.receive_activity_timeout.stop()
@@ -5679,6 +5606,11 @@ class MainWindow(QMainWindow):
         self.receive_progress.setRange(0, 100)
         self.listen_indicator.setText("● LISTENING" if exact else "● RECEIVING CARD")
         card = card or {}
+        if (report is not None and not duplicate and card.get("callsign") and
+                card.get("card_id") is not None):
+            self._add_session_wall_card(report, image=image)
+            if not exact:
+                self._record_received_card(report)
         identity = " ".join(value for value in (
             str(card.get("callsign") or "station not identified"),
             str(card.get("grid") or "")) if value)
@@ -5753,7 +5685,9 @@ class MainWindow(QMainWindow):
             self._show_receive_preview(self.card_image(
                 {"card": dict(snapshot.card), "pixels": list(snapshot.pixels)}),
                 card=snapshot.card,
-                coverage=snapshot.coverage, verified_coverage=snapshot.verified_pixels)
+                coverage=snapshot.coverage, verified_coverage=snapshot.verified_pixels,
+                report={"card": dict(snapshot.card), "pixels": list(snapshot.pixels),
+                        "receive_profile": self.receive_mode()})
         elif snapshot and snapshot.card.get("exact") and self.current_preview_is_duplicate:
             self.receive_view.setAccessibleName(
                 f"Duplicate card preview from {snapshot.card.get('callsign') or 'station not identified'}")
@@ -5957,7 +5891,8 @@ class MainWindow(QMainWindow):
             entries = [(key, backend) for key, backend in
                        available_modes(include_experimental=True)
                        if MODE_REGISTRY[key].adapter != DATA2G_ADAPTER.key and
-                       MODE_REGISTRY[key].experimental]
+                       MODE_REGISTRY[key].experimental and
+                       key not in TX_DISABLED_MODE_KEYS]
             fallback = "resilient_100"
         else:
             entries = []
@@ -6011,7 +5946,6 @@ class MainWindow(QMainWindow):
         self.transfer_mode_label.setVisible(not unavailable)
 
     def _update_transfer_controls(self, *_):
-        self._update_grid_tx_control_visibility()
         if hasattr(self, "repeat_count"):
             backend = self.selected_backend()
             maximum = getattr(backend, "max_repeats", 20)
@@ -6033,25 +5967,11 @@ class MainWindow(QMainWindow):
             self.repeat_count.setToolTip(
                 "Send copies of the same card. RX combines soft evidence and checks integrity. " +
                 framing + compression)
-        if hasattr(self, "profile_combo"):
-            legacy = self.selected_mode() == "standard"
-            self.profile_combo.setEnabled(not self.auto_armed and legacy)
-            advanced = self.settings.value("ui/advanced_controls", False, type=bool)
-            self.profile_form_widget.setVisible(legacy and advanced)
-            if hasattr(self, "manual_card_widget"):
-                show_legacy_card = legacy and self.exchange_mode.currentIndex() != 2
-                self.manual_card_widget.setVisible(show_legacy_card and self.exchange_mode.currentIndex() != 1)
-                self.manual_card_label.setVisible(show_legacy_card and self.exchange_mode.currentIndex() != 1)
-
-    def _update_grid_tx_control_visibility(self):
-        """Show grid timing calibration only for the UTC-grid TX modem."""
-        if not hasattr(self, "grid_tx_latency"):
-            return
-        advanced = self.settings.value("ui/advanced_controls", False, type=bool)
-        is_grid_tx = bool(getattr(self.selected_backend(), "utc_grid", False))
-        visible = bool(advanced and is_grid_tx)
-        self.grid_tx_latency.setVisible(visible)
-        self.grid_tx_label.setVisible(visible)
+        legacy = self.selected_mode() == "standard"
+        if hasattr(self, "manual_card_widget"):
+            show_legacy_card = legacy and self.exchange_mode.currentIndex() != 2
+            self.manual_card_widget.setVisible(show_legacy_card and self.exchange_mode.currentIndex() != 1)
+            self.manual_card_label.setVisible(show_legacy_card and self.exchange_mode.currentIndex() != 1)
 
     def _refresh_transfer_summary(self, *_):
         if not hasattr(self, "transfer_summary"):
@@ -6921,7 +6841,7 @@ class MainWindow(QMainWindow):
         self.auto_start_btn.setEnabled(False)
         self.auto_stop_btn.setEnabled(True)
         self.auto_stop_btn.setVisible(True)
-        for widget in (self.exchange_mode, self.exchange_role, self.profile_combo, self.mode_combo, self.frequency,
+        for widget in (self.exchange_mode, self.exchange_role, self.mode_combo, self.frequency,
                        self.rig_host, self.rig_port, self.rig_button, self.rig_refresh, self.output_device,
                        self.input_device, self.station_call, self.station_grid, self.audio_test_mode):
             widget.setEnabled(False)
@@ -6960,7 +6880,7 @@ class MainWindow(QMainWindow):
         self.auto_start_btn.setEnabled(True)
         self.auto_stop_btn.setEnabled(False)
         self._update_exchange_controls()
-        for widget in (self.exchange_mode, self.exchange_role, self.profile_combo, self.mode_combo, self.frequency,
+        for widget in (self.exchange_mode, self.exchange_role, self.mode_combo, self.frequency,
                        self.rig_host, self.rig_port, self.rig_button, self.rig_refresh, self.output_device,
                        self.input_device, self.station_call, self.station_grid, self.audio_test_mode):
             widget.setEnabled(True)
@@ -7085,26 +7005,7 @@ class MainWindow(QMainWindow):
             self.beacon_pending = False
         QTimer.singleShot(350, self._start_tx_audio)
 
-    def _prepare_grid_audio(self):
-        backend = self.selected_backend()
-        if not getattr(backend, "utc_grid", False):
-            return
-        from grid_fsk_modem import plan_start
-        # Probe before the timestamp; a slow status command cannot shift the plan.
-        status = getattr(self, "grid_clock_status", "UTC clock quality unknown")
-        now = time.time()
-        latency = 0. if self.test_link_enabled and self.audio_test_mode.isChecked() else self.grid_tx_latency.value()/1000
-        target, samples = plan_start(now, modem.SAMPLE_RATE, latency)
-        self.tx_bytes = b"\0" * (samples*2) + self.tx_bytes
-        self.tx_deadline += samples/modem.SAMPLE_RATE
-        self.grid_tx_target_utc = target
-        self.grid_tx_padding_samples = samples
-        self.exchange_log.append(f"UTC grid target {target:.3f}; alignment silence {samples/modem.SAMPLE_RATE:.3f} s; {status}. Audio timing requires calibration.")
-
     def _start_tx_audio(self):
-        if getattr(self.selected_backend(), "utc_grid", False):
-            from grid_fsk_modem import clock_status
-            self.grid_clock_status = clock_status()
         if os.environ.get("PIXELQSO_AUDIO_ROLE") == "websdr-rx":
             self._finish_tx("Receive-only WebSDR window; transmission skipped.")
             return
@@ -7122,7 +7023,6 @@ class MainWindow(QMainWindow):
                     self._append_qso_card("sent_cards", self._local_card_snapshot(card, self.tx_message_type, self.tx_snr_db))
                 except Exception as exc:
                     self.exchange_log.append(f"Could not add transmitted card to QSO log: {exc}")
-            self._prepare_grid_audio()
             self.tx_started = time.monotonic()
             self.stop_tx_btn.setText("Stop audio")
             self.stop_tx_btn.setEnabled(True)
@@ -7130,8 +7030,6 @@ class MainWindow(QMainWindow):
             self._update_active_send_control(True)
             self._refresh_operate_primary_action()
             self.tx_timer.start()
-            if getattr(self.selected_backend(), "utc_grid", False):
-                self._pump_tx()
             self._record_on_air_tx()
             self.exchange_log.append(f"TX started: {self.tx_label}, local software audio link, {len(self.tx_bytes)//2} samples. CAT/PTT bypassed.")
             return
@@ -7151,15 +7049,12 @@ class MainWindow(QMainWindow):
         if self.tx_device is None:
             self._release_ptt()
             QMessageBox.warning(self, "Audio failed", "Could not open the selected audio output."); return
-        self._prepare_grid_audio()
         self.tx_started = time.monotonic()
         self.stop_tx_btn.setEnabled(True)
         self.stop_tx_btn.setVisible(True)
         self._update_active_send_control(True)
         self._refresh_operate_primary_action()
         self.tx_timer.start()
-        if getattr(self.selected_backend(), "utc_grid", False):
-            self._pump_tx()
         self._record_on_air_tx()
         self.stop_tx_btn.setText(
             "Stop audio" if self.audio_test_mode.isChecked() else "Stop transmission")
@@ -7473,7 +7368,8 @@ class MainWindow(QMainWindow):
             card = report.get("card") or {}
             self._show_receive_preview(image, card=card, exact=bool(card.get("exact")),
                                        coverage=card.get("pixel_coverage"),
-                                       verified_coverage=card.get("verified_pixel_coverage"))
+                                       verified_coverage=card.get("verified_pixel_coverage"),
+                                       report=report)
         card = report.get("card") or {}
         is_avatar = bool(card.get("raw_avatar") or card.get("avatar_burst"))
         verified_complete = self._assembly_verified(report)
@@ -7625,7 +7521,7 @@ class MainWindow(QMainWindow):
             return
         # This is a startup estimate, not a hardware ADC timestamp. UDP carries
         # no capture timestamps, so its receiver deliberately has no UTC prior.
-        capture_start_utc = None if test_mode else time.time() - self.grid_rx_latency.value()/1000
+        capture_start_utc = None if test_mode else time.time()
         self.local_receive_handle = handle
         self.local_receive_adapter = adapter
         self.rx_audio = handle.audio_source
@@ -7659,7 +7555,9 @@ class MainWindow(QMainWindow):
             image = self.card_image(preview)
             if image is not None:
                 self._show_receive_preview(image, card=snapshot.card, coverage=snapshot.coverage,
-                                           verified_coverage=snapshot.verified_pixels)
+                                           verified_coverage=snapshot.verified_pixels,
+                                           report={"card": dict(snapshot.card), "pixels": list(snapshot.pixels),
+                                                   "receive_profile": self.receive_mode()})
         elif not snapshot:
             self._hide_receive_preview()
         self.receive_stack.setCurrentWidget(self.session_wall_page)
@@ -7816,7 +7714,7 @@ class MainWindow(QMainWindow):
             self.active_receive_identity = self._report_receive_identity(report)
             self._show_receive_preview(self.card_image(report), card=card,
                 coverage=card.get("pixel_coverage"),
-                verified_coverage=card.get("verified_pixel_coverage"))
+                verified_coverage=card.get("verified_pixel_coverage"), report=report)
             self.rx_status.setText(
                 f"Receiving card from {card.get('callsign') or 'a station'} · "
                 f"{card.get('color_stage') or 'identity received'} · "
@@ -7929,7 +7827,8 @@ class MainWindow(QMainWindow):
             if image is not None and (card.get("preview_received") or card.get("avatar_burst") or card.get("raw_avatar")):
                 self._show_receive_preview(image, card=card, exact=bool(card.get("exact")),
                                            coverage=card.get("pixel_coverage"),
-                                           verified_coverage=card.get("verified_pixel_coverage"))
+                                           verified_coverage=card.get("verified_pixel_coverage"),
+                                           report=report)
             self.rx_status.setText(
                 f"Receiving card · {card.get('callsign') or 'station not identified'} · {live_status} · "
                 f"RX mode: {self._receive_mode_label(report.get('receive_profile'))}")
@@ -8049,41 +7948,40 @@ class MainWindow(QMainWindow):
         return image
 
     def _show_duplicate_card(self, report):
-        """Keep the first duplicate of a QSO visible and add one deck entry."""
+        """Keep one receipt for each retransmitted card during this app session."""
         card = report.get("card") or {}
         key = received_card_key(report)
-        if self.duplicate_displayed_in_qso:
-            if key != self.duplicate_preview_key:
-                return False
-        else:
+        first_receipt = key not in self.session_duplicate_receipts
+        if first_receipt:
+            self.session_duplicate_receipts.add(key)
             self.duplicate_displayed_in_qso = True
             self.duplicate_preview_key = key
-            self._add_session_wall_card(report, duplicate=True)
             self.exchange_log.append(
                 f"Duplicate card from {card.get('callsign') or 'this station'} received; "
-                "keeping one duplicate visible for this QSO.")
+                "keeping one duplicate receipt this session.")
+        self._add_session_wall_card(report, duplicate=True)
+        if first_receipt:
+            receipt = copy.deepcopy(report)
+            receipt["duplicate_receipt"] = True
+            self._record_received_card(receipt)
         image = self.card_image(report)
         self._show_receive_preview(image, card=card, exact=True, duplicate=True)
         self.rx_status.setText(
             f"DUPLICATE · {card.get('callsign') or 'this station'} card "
             f"{card.get('card_id', '')} · whole-card integrity verified")
-        return True
+        return first_receipt
 
-    def _add_session_wall_card(self, report, *, duplicate=False):
+    def _add_session_wall_card(self, report, *, image=None, duplicate=False):
         card = report.get("card") or {}
-        if not self._assembly_verified(report):
+        if not card.get("callsign") or card.get("card_id") is None:
             return
-        key = received_card_key(report)
+        image = image if image is not None else self.card_image(report)
+        if image is None or image.isNull():
+            return
+        key = session_wall_card_key(report)
         if duplicate:
-            qso_key = str(self._active_qso_path) if self._active_qso_path else "session"
-            key = ("duplicate", qso_key, key)
-        if key in self.session_wall_keys:
-            return
-        image = self.card_image(report)
-        if image is None:
-            return
-        self.session_wall_keys.add(key)
-        self.session_wall_count += 1
+            key = ("duplicate", *received_card_key(report))
+        existing = self.session_wall_items.get(key)
         callsign = str(card.get("callsign") or "Unknown station")
         grid = str(card.get("grid") or "")
         kind = {"cq": "CQ", "exchange": "Exchange", "report73": "RR73",
@@ -8092,8 +7990,15 @@ class MainWindow(QMainWindow):
         tile = image.scaled(QSize(144, 144), Qt.AspectRatioMode.KeepAspectRatio,
                             Qt.TransformationMode.FastTransformation)
         icon = QIcon(QPixmap.fromImage(tile))
+        exact = self._assembly_verified(report)
+        received_percent = self._coverage_percent(card.get("pixel_coverage"))
+        verified_percent = self._coverage_percent(card.get("verified_pixel_coverage"))
+        integrity_text = ("Integrity: whole card verified" if exact else
+                          f"Integrity: provisional · {received_percent}% received · "
+                          f"{verified_percent}% of image regions verified")
         accessible_label = " · ".join(value for value in (
             "DUPLICATE" if duplicate else "",
+            "VERIFIED" if exact else "PROVISIONAL",
             callsign, grid, kind, f"received {received_at}") if value)
         frequency_hz = report.get("frequency_hz")
         if frequency_hz is None:
@@ -8120,32 +8025,44 @@ class MainWindow(QMainWindow):
             f"Frequency: {frequency_text}", f"Mode: {mode_text}",
             f"Received: {received_at}",
             f"Image: {card.get('width', image.width())} × {card.get('height', image.height())}",
-            "Integrity: whole card verified",
+            integrity_text,
         ))
-        item = QListWidgetItem()
-        item.setSizeHint(QSize(148, 148))
+        if existing is None:
+            item = QListWidgetItem()
+            item.setSizeHint(QSize(148, 148))
+            self.session_wall.insertItem(0, item)
+            card_face = QPushButton()
+            card_face.setCheckable(True)
+            card_face.setFixedSize(144, 144)
+            card_face.setIconSize(QSize(132, 132))
+            card_face.setStyleSheet("QPushButton { background:#101a17; border:1px solid #43564d; border-radius:7px; padding:4px; } QPushButton:checked { background:#18251f; color:#e2eee6; border-color:#70927d; font-size:10px; font-weight:600; text-align:left; }")
+            def flip_card(show_back, button=card_face):
+                button.setIcon(QIcon() if show_back else button._front_icon)
+                button.setText(button._back_text if show_back else "")
+                button.setAccessibleName(button._accessible_label +
+                    (" · card back; receive details" if show_back else
+                     " · card front; activate to read receive details"))
+            card_face.toggled.connect(flip_card)
+            self.session_wall.setItemWidget(item, card_face)
+            self.session_wall_items[key] = (item, card_face)
+            self.session_wall_count += 1
+            self.session_wall_keys.add(key)
+        else:
+            item, card_face = existing
+        card_face._front_icon = icon
+        card_face._back_text = back_text
+        card_face._accessible_label = accessible_label
         item.setToolTip(accessible_label)
         item.setData(Qt.ItemDataRole.AccessibleTextRole, accessible_label)
-        self.session_wall.insertItem(0, item)
-        card_face = QPushButton()
-        card_face.setCheckable(True)
-        card_face.setFixedSize(144, 144)
-        card_face.setIcon(icon)
-        card_face.setIconSize(QSize(132, 132))
-        card_face.setToolTip(accessible_label + " · click to flip for transmission details")
-        card_face.setAccessibleName(accessible_label + " · card front; activate to read transmission details")
-        card_face.setStyleSheet("QPushButton { background:#101a17; border:1px solid #43564d; border-radius:7px; padding:4px; } QPushButton:checked { background:#18251f; color:#e2eee6; border-color:#70927d; font-size:10px; font-weight:600; text-align:left; }")
-        def flip_card(show_back, button=card_face, text=back_text, label=accessible_label, front=icon):
-            if show_back:
-                button.setIcon(QIcon())
-                button.setText(text)
-                button.setAccessibleName(label + " · card back; transmission details")
-            else:
-                button.setText("")
-                button.setIcon(front)
-                button.setAccessibleName(label + " · card front; activate to read transmission details")
-        card_face.toggled.connect(flip_card)
-        self.session_wall.setItemWidget(item, card_face)
+        card_face.setToolTip(accessible_label + " · click to flip for receive details")
+        if card_face.isChecked():
+            card_face.setIcon(QIcon())
+            card_face.setText(back_text)
+            card_face.setAccessibleName(accessible_label + " · card back; receive details")
+        else:
+            card_face.setText("")
+            card_face.setIcon(icon)
+            card_face.setAccessibleName(accessible_label + " · card front; activate to read receive details")
         self.session_wall_empty.hide()
         self.session_wall.show()
 
@@ -8198,11 +8115,18 @@ class MainWindow(QMainWindow):
                           and (item.get("card") or {}).get("callsign") == new_card.get("callsign")
                           and (item.get("card") or {}).get("message_type", "card") == new_card.get("message_type", "card")
                           and (item.get("card") or {}).get("snr_db") == new_card.get("snr_db")
+                          and bool(item.get("duplicate_receipt")) == bool(card_data.get("duplicate_receipt"))
                           and new_card.get("card_id") is not None), None)
         if duplicate is not None:
             attempts = int(duplicate.get(attempts_key, 1)) + 1
-            if bucket == "received_cards" and self._assembly_verified(card_data):
+            if (bucket == "received_cards" and
+                    _receive_report_rank(card_data) >= _receive_report_rank(duplicate)):
+                order, logged_at = duplicate.get("order"), duplicate.get("logged_at")
                 duplicate.update(card_data)
+                if order is not None:
+                    duplicate["order"] = order
+                if logged_at is not None:
+                    duplicate["logged_at"] = logged_at
             duplicate[attempts_key] = attempts
         else:
             card_data[attempts_key] = 1
@@ -8335,7 +8259,6 @@ def main():
     app.setOrganizationName("PixelQSO")
     app.setWindowIcon(QIcon(str(APP_ICON_PATH)))
     win = MainWindow(); win.show()
-    QTimer.singleShot(500, win._maybe_show_getting_started)
     stopping = [False]
     signal.signal(signal.SIGTERM, lambda *_: stopping.__setitem__(0, True))
     shutdown_timer = QTimer(win)

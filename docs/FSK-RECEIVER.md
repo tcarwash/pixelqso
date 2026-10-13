@@ -1,5 +1,9 @@
 # FSK receiver acquisition, timing retries and frequency tracking
 
+> This report records historical receiver development and benchmark results.
+> Compressed FSK transmission is disabled in Beta 1; those results do not
+> indicate that the mode is suitable for current operation.
+
 These receiver changes use the existing training, pilots and on-air formats. They add no transmission time, new mode IDs or wire versions. The shared common-header changes apply to all announced local experimental modes. Timing and frequency changes cover native experimental 8FSK LDPC, 16FSK LDPC and 8FSK outer RS, including the grouped and compressed LDPC families.
 
 ## Priority and implementation

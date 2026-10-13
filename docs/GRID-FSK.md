@@ -1,5 +1,9 @@
 # Experimental UTC-grid compressed 16-FSK
 
+> **Beta 1 status:** This mode is disabled for transmission with the compressed
+> FSK family. Its historical format remains documented for compatibility; it
+> is not selectable in the beta.
+
 Select **Experimental modems → 16-FSK · compressed · UTC start grid**.
 Enable experimental modes on both clients. Every message sent with this mode
 (card, CQ, exchange, or 73) uses the same 500 ms UTC start grid: .000 and .500.

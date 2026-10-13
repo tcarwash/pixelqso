@@ -1,5 +1,7 @@
 # Pixel QSO
 
+**Beta 1 · version 0.4.0b1**
+
 Pixel QSO sends small QSO/QSL image cards over digital radio. It handles card
 identity, fragment transfer, image assembly, previews, and QSO stages. Modems
 with the Data2G label run through Data2G's supported host command and KISS
@@ -206,11 +208,10 @@ is `dist/PixelQSO`; on Windows it is `dist/PixelQSO.exe`; on macOS it is
 
 Experimental [grouped FSK modes](docs/GROUPED-FSK.md) send one protected header for 1–20 LDPC payload copies, saving repeated framing airtime. The existing per-copy-framed modes remain available.
 
-The additional [compressed FSK family](docs/COMPRESSED-FSK.md) automatically selects lossless image compression and shorter LDPC payloads. The example card fits six copies into the older grouped modes’ three-copy airtime budget; random images use raw fallback with no airtime increase.
+Compressed FSK modes are disabled for transmission in Beta 1 because field reliability is not sufficient. Their existing wire formats remain available to the receive decoder for compatibility; existing saved selections fall back to the supported resilient 8-FSK mode.
 
 The [FSK receiver improvements](docs/FSK-RECEIVER.md) add distributed header acquisition, alternate timing retries and pilot-based frequency drift tracking while retaining the existing transmission formats and airtime.
 
-Experimental UTC scheduling: [compressed 16-FSK on a 500 ms start grid](docs/GRID-FSK.md).
 
 Receive-all acquisition profiling and measured decoder latency: [profiling report](docs/RECEIVE-ALL-PROFILING.md).
 

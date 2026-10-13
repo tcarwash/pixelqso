@@ -28,6 +28,9 @@ GROUPED_MODES = {
 }
 
 COMPRESSED_MODE_KEYS = ('experimental_8fsk_compressed', 'experimental_16fsk_compressed', 'experimental_16fsk_grid')
+# These formats remain decodable for compatibility, but are not reliable
+# enough for beta transmission. Keep their backend and wire IDs for receive.
+TX_DISABLED_MODE_KEYS = frozenset(COMPRESSED_MODE_KEYS)
 
 # Display names only; persistent IDs and on-air formats stay stable.
 EXPERIMENTAL_MODE_LABELS = {
@@ -539,6 +542,8 @@ class CompressedFSKBackend:
         return EXPERIMENTAL_MODE_LABELS[self.key]
 
     def encode(self, card, repeats, message_type, snr_db):
+        if self.key in TX_DISABLED_MODE_KEYS:
+            raise ValueError("Compressed FSK modes are disabled for transmission in this beta")
         import compressed_fsk_modem as compressed
         from modem_envelope import transmit_group
         repeat_waveform(np.empty(0),repeats)

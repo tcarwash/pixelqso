@@ -2,6 +2,8 @@
 
 Date: 2026-10-09. Scope: desktop application; coordinate shared terminology with mobile control. This is a proposal, not an implemented redesign.
 
+Beta 1 follow-up: the first-run Getting started guide and Operate → Configure beacon shortcut were removed. Backend switching is in Station settings → Audio & Radio. See the latest implementation status and validation boundary in [NEXT.md](../NEXT.md).
+
 ## Product direction
 
 Make Pixel QSO approachable to a radio operator who understands callsigns, audio devices, and CQ but does not understand modem framing, KISS ports, or decoder internals. The primary journey is: set up station → listen → call or reply → exchange cards → revisit/share a contact.

@@ -1,5 +1,23 @@
 # Next steps: Pixel QSO UI/UX
 
+## Beta 1 release checkpoint — 2026-10-13
+
+Package metadata is set to `0.4.0b1`. Compressed 8-FSK, compressed 16-FSK, and UTC-grid 16-FSK are excluded from selectable/transmittable modes; saved preferences fall back to `resilient_100`. Their protocol IDs and decoders remain for receive compatibility. Release notes are in [CHANGELOG.md](CHANGELOG.md). No package build, automated suite, fresh-profile packaged launch, or hardware/RF validation has been performed for this checkpoint. Continue with those release checks before describing the beta as validated.
+
+### Operate and QSO deck follow-up — 2026-10-13
+
+Removed grid TX/RX audio-delay controls and UTC-grid TX alignment, removed the unused transfer bandwidth selector, and made rig frequency a read-only CAT display. The Data2G/Experimental backend and experimental-mode opt-in now live under Station settings → Audio & Radio; backend changes are staged until Apply and restore on Cancel. Removed the Getting started guide and Operate → Configure beacon menu entry. Provisional identified cards now appear on the session wall and in the QSO log/deck, where the front/back view labels their integrity state; adding to My Cards remains limited to fully verified cards. Renamed “Hello Grid” to “Mountain Signal” and regenerated the starter preview. Source-level implementation is complete; GUI rendering, live receive-state updates, and backend handoff behavior still need confirmation.
+
+### Managed Data2G audio and settings dialog follow-up — 2026-10-13
+
+When the managed-host audio selectors are left on System default, local Data2G startup now forwards the selected Station input/output device descriptions as host CLI selectors. The Station settings dialog now sizes itself to the active display so its Apply / Apply and reconnect action row remains visible while settings pages scroll. Syntax compilation and `git diff --check` pass; live device matching and an interactive dialog run are still unverified.
+
+### Duplicate transmission receipts — 2026-10-13
+
+Duplicate recognition now uses station/card ID/message stage rather than measured SNR and reconstructed pixels. The app keeps one duplicate receipt per identity for its session, marks it on the session wall, and records a distinct duplicate event in the QSO deck. A later improved copy updates the wall receipt without adding another. Syntax compilation and diff checks pass; live duplicate receive behavior remains unverified.
+
+The `/home/tyler/dev/pixelqso_stream` overlay and active `radio-stream:pixelqso` container were synchronized to these Python modules and starter cards. Image version is `0.4.0b1`; the app restarted with its three existing bind mounts, and deployed source hashes match this checkout. Import smoke check passed; live RF receive behavior remains unverified.
+
 Status: the UI/UX effort is active. This file records the current implementation checkpoint and practical next steps. See [docs/UI-UX-PLAN.md](docs/UI-UX-PLAN.md) for the product direction and acceptance gates.
 
 ## HF receive investigation checkpoint — 2026-10-13
@@ -8,7 +26,7 @@ Receive logic review and implementation record: [RX-PROVISIONAL-REVIEW-2026-10-1
 
 The legacy **4-FSK · soft Viterbi** modem is no longer offered for transmission. An old saved selection falls back to `resilient_100`, and the transmit path rejects the legacy key defensively. Its decoder remains available for received legacy packets. Receive-all now remembers the last detected RX modem as its next preferred decoder without changing the TX mode; **Lock mode** disables that auto-follow and preserves the current RX preference. Focused GUI/policy tests cover both behaviors.
 
-The **Grid TX audio delay** calibration setting now appears only when Advanced controls are open and a UTC-grid transmit mode is selected. Its saved calibration remains available when switching back to that mode. A focused GUI regression check covers visibility for grid and non-grid selections.
+Historical checkpoint, superseded by Beta 1 follow-up above: the Grid TX audio delay calibration and UTC-grid transmit mode have since been removed from the app.
 
 2026-10-13 receive fixes: header-only protected activity now reaches the UI without a missing-card exception; same-identity activity retains provisional pixels and a new protected identity pivots the preview; placement results are ranked monotonically by integrity and evidence; completed cards no longer clear the rolling capture/cache; acquisition/copy revisions use absolute samples and a receive-session ID; aggregate provisional candidates replace prior estimates without counting repeated snapshots as votes; verified integrity fields persist across weaker reports; per-worker/session tokens reject stale decoder results; and receive-all falls back to native decoders when no protected header is found. Live worker wrappers are now retained until completion so queued signal objects cannot be garbage-collected during decode. A follow-up audit normalized activity/card identity to include the same receive-session key and fixed a Data2G duplicate-path startup crash by initializing the active QSO path. Conflicting verified evidence remains atomic, and provisional as well as final-result rejections are now surfaced with bounded deduplication. Deterministic regressions pass for these paths, including interleaved A/B/duplicate/C Data2G frames, Data2G checked pixels, and version-4 verification. The running WebSDR container has the updated app modules plus `ui_theme.py`; only its Pixel QSO child restarted, and the WebSDR recording continued. Local source is updated, but local app restart was deferred when CAT reported PTT keyed. Fresh RF behavior remains unverified.
 

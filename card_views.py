@@ -1,7 +1,7 @@
 """Trading-card presentation for the local contact collection."""
 from PySide6.QtCore import Qt, QSize, QRectF
 from PySide6.QtGui import QColor, QPainter, QPixmap, QIcon, QFont, QImage
-from PySide6.QtWidgets import QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget, QListWidgetItem, QSizePolicy
+from PySide6.QtWidgets import QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget, QListWidgetItem, QSizePolicy, QStackedWidget
 from ui_theme import COLORS, SPACING
 
 
@@ -47,8 +47,12 @@ def deck_image(entry, image_for_card):
         for index, (direction, card) in enumerate(events):
             x, y = 16 + (index % columns)*260, 96 + (index // columns)*350
             meta = card.get('card') or {}
+            provisional = direction == 'received_cards' and not bool(card.get('exact'))
+            duplicate = direction == 'received_cards' and bool(card.get('duplicate_receipt'))
             tile = card_art(image_for_card(card), str(meta.get('callsign', 'Unknown')),
-                            stage_label(card), QSize(240, 300))
+                            ('DUPLICATE · ' if duplicate else '') + stage_label(card) +
+                            (' · PROVISIONAL' if provisional else ''),
+                            QSize(240, 300))
             painter.drawPixmap(x+10, y, tile)
             direction_label = 'Sent' if direction == 'sent_cards' else 'Received'
             painter.drawText(QRectF(x, y+301, 260, 18), Qt.AlignmentFlag.AlignCenter,
@@ -129,11 +133,26 @@ class DeckDialog(QDialog):
             f"{entry.get('status', 'Saved')}")
         metadata.setObjectName("supportingText")
         layout.addWidget(metadata)
-        self.art = ArtworkView(); layout.addWidget(self.art, 1)
+        self.card_faces = QStackedWidget()
+        self.art = ArtworkView()
+        self.card_faces.addWidget(self.art)
+        self.card_back = QLabel()
+        self.card_back.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.card_back.setWordWrap(True)
+        self.card_back.setObjectName("supportingText")
+        self.card_back.setStyleSheet(
+            "background:#17231d; border:1px solid #52705a; border-radius:12px; padding:24px; "
+            "font-size:16px; color:#edf1e8;")
+        self.card_faces.addWidget(self.card_back)
+        layout.addWidget(self.card_faces, 1)
         self.details = QLabel(); self.details.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.details.setAccessibleDescription(
             "Direction, message stage, recorded time, and signal report for the selected card.")
         layout.addWidget(self.details)
+        self.flip_button = QPushButton("Flip card")
+        self.flip_button.setAccessibleName("Flip selected QSO card to its receive details")
+        self.flip_button.clicked.connect(self.flip_card)
+        layout.addWidget(self.flip_button, 0, Qt.AlignmentFlag.AlignCenter)
         row = QHBoxLayout(); self.previous = QPushButton('← Previous'); self.next = QPushButton('Next →')
         self.previous.clicked.connect(lambda: self.strip.setCurrentRow(self.strip.currentRow()-1))
         self.next.clicked.connect(lambda: self.strip.setCurrentRow(self.strip.currentRow()+1))
@@ -150,11 +169,15 @@ class DeckDialog(QDialog):
         for direction, card in self.events:
             label = stage_label(card)
             direction_label = 'Sent' if direction == 'sent_cards' else 'Received'
-            item = QListWidgetItem(direction_label)
-            item.setIcon(QIcon(card_art(image_for_card(card), label, size=QSize(80, 100))))
+            provisional = direction == 'received_cards' and not bool(card.get('exact'))
+            duplicate = direction == 'received_cards' and bool(card.get('duplicate_receipt'))
+            item = QListWidgetItem(direction_label + (' · Duplicate receipt' if duplicate else '') +
+                                   (' · Provisional' if provisional else ''))
+            subtitle = ('DUPLICATE · ' if duplicate else '') + label + (' · PROVISIONAL' if provisional else '')
+            item.setIcon(QIcon(card_art(image_for_card(card), label, subtitle, size=QSize(80, 100))))
             logged_at = card.get('logged_at')
             timestamp = f"Recorded {logged_at}" if logged_at else "Event time not recorded"
-            accessible_label = f"{direction_label} {label} · {timestamp}"
+            accessible_label = f"{direction_label} {label}" + (" · duplicate receipt" if duplicate else "") + (" · provisional" if provisional else "") + f" · {timestamp}"
             item.setToolTip(accessible_label)
             item.setData(Qt.ItemDataRole.AccessibleTextRole, accessible_label)
             self.strip.addItem(item)
@@ -186,6 +209,14 @@ class DeckDialog(QDialog):
         except Exception as exc:
             self.share_status.setText(f"Couldn't copy contact PNG: {exc}")
 
+    def flip_card(self):
+        show_back = self.card_faces.currentWidget() is self.art
+        self.card_faces.setCurrentWidget(self.card_back if show_back else self.art)
+        self.flip_button.setText("Show card front" if show_back else "Flip card")
+        self.flip_button.setAccessibleName(
+            "Show selected QSO card front" if show_back else
+            "Flip selected QSO card to its receive details")
+
     def _export_contact(self):
         if self.export_contact is None:
             return
@@ -198,7 +229,7 @@ class DeckDialog(QDialog):
         if self.add_received_card is None or not 0 <= index < len(self.events):
             return
         direction, card = self.events[index]
-        if direction != 'received_cards':
+        if direction != 'received_cards' or not bool(card.get('exact')):
             return
         result = self.add_received_card(card)
         if result:
@@ -209,7 +240,13 @@ class DeckDialog(QDialog):
         if not 0 <= index < len(self.events): return
         direction, card = self.events[index]; meta = card.get('card') or {}
         self.art.set_artwork(card_art(self.image_for_card(card), meta.get('callsign', 'Unknown'), stage_label(card), QSize(320, 400)))
+        self.card_faces.setCurrentWidget(self.art)
+        self.flip_button.setText("Flip card")
+        self.flip_button.setEnabled(True)
+        self.flip_button.setAccessibleName("Flip selected QSO card to its details")
         detail = ('Sent by you' if direction == 'sent_cards' else 'Received')
+        if direction == 'received_cards' and card.get('duplicate_receipt'):
+            detail += ' · Duplicate receipt'
         detail += f" · {stage_label(card)}"
         if card.get('logged_at'):
             detail += f" · Recorded {card['logged_at']}"
@@ -217,7 +254,30 @@ class DeckDialog(QDialog):
             detail += " · Event time not recorded in this log"
         if meta.get('snr_db') is not None: detail += f"  ·  Report {meta['snr_db']:+d} dB"
         self.details.setText(detail)
-        self.add_button.setVisible(direction == 'received_cards' and self.add_received_card is not None)
+        coverage = meta.get('pixel_coverage') or []
+        received = sum(bool(value) for value in coverage)
+        received_percent = round(received * 100 / len(coverage)) if coverage else 0
+        verified_coverage = meta.get('verified_pixel_coverage') or []
+        verified = sum(bool(value) for value in verified_coverage)
+        verified_percent = round(verified * 100 / len(verified_coverage)) if verified_coverage else 0
+        integrity = ("Sent by this station" if direction == 'sent_cards' else
+                     "WHOLE CARD VERIFIED" if card.get('exact') else
+                     f"PROVISIONAL · {received_percent}% received · {verified_percent}% of image regions verified")
+        direction_label = 'SENT BY YOU' if direction == 'sent_cards' else 'RECEIVED'
+        if direction == 'received_cards' and card.get('duplicate_receipt'):
+            direction_label = 'DUPLICATE RECEIPT'
+        self.card_back.setText("\n".join((
+            direction_label,
+            stage_label(card),
+            f"From: {meta.get('callsign') or 'Unknown station'}",
+            f"Grid: {meta.get('grid') or 'Not available'}",
+            f"Card ID: {meta.get('card_id') if meta.get('card_id') is not None else 'Not available'}",
+            integrity,
+            f"Received: {card.get('logged_at') or 'time not recorded'}",
+        )))
+        self.add_button.setVisible(
+            direction == 'received_cards' and bool(meta.get('exact')) and
+            self.add_received_card is not None)
         self.add_button.setText('Add received card to My Cards')
         self.add_button.setEnabled(True)
         self.counter.setText(f'{index+1} / {len(self.events)}')

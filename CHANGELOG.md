@@ -2,6 +2,8 @@
 
 ## 0.4.0b1 — Beta 1
 
+- Allocate unused library IDs for new cards, duplicates, starter cards, and received artwork copied into My Cards.
+
 - Include the shared `ui_theme` module in installed wheels to prevent startup import errors.
 
 - First public beta candidate for Pixel QSO's card exchange, station setup, and QSO history workflows.

@@ -31,6 +31,19 @@ class _HostSession:
 
 
 class BackendAdapterTests(unittest.TestCase):
+    def test_ack_radio_modes_are_not_probed_or_selected(self):
+        session = _HostSession()
+        normal_start = session.start
+        session.start = lambda timeout=None: normal_start(timeout) + [
+            type("Mode", (), {"name": "n4-ack-8f"})()]
+        modes, checks = DATA2G_ADAPTER.discover(session)
+        self.assertEqual([mode.name for mode in modes], ["n4-qpsk-r1/2"])
+        self.assertEqual(set(checks), {"n4-qpsk-r1/2"})
+        self.assertIn(("validate", ("n4-qpsk-r1/2",)), session.calls)
+        with self.assertRaisesRegex(ValueError, "ACK/reply"):
+            DATA2G_ADAPTER.select_mode(session, "n4-ack-8f")
+        self.assertNotIn(("mode", "n4-ack-8f"), session.calls)
+
     def test_product_selection_resolves_backend_independently_of_mode(self):
         self.assertIs(adapter_for_backend_selection("data2g"), DATA2G_ADAPTER)
         self.assertIs(adapter_for_backend_selection("experimental"), EXPERIMENTAL_ADAPTER)

@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QListWidget
     QStackedWidget, QProgressBar, QMenu)
 
 import cardmodem as modem
+from card_ids import allocate_card_id
 from backend_adapters import (AdapterKind, DATA2G_ADAPTER, DecodeFailure,
                               DecodeFailureKind, DecodeOutcome,
                               EXPERIMENTAL_ADAPTER, ReceiveStartError,
@@ -137,9 +138,10 @@ def pcm16_audio_bytes(audio):
     return np.rint(samples * 32767).clip(-32768, 32767).astype("<i2").tobytes()
 
 
-def default_card(callsign="N0CALL", grid="AA00") -> modem.Card:
+def default_card(callsign="N0CALL", grid="AA00", *, card_id=None) -> modem.Card:
     pixels = [0] * 1024
-    return modem.Card(callsign, grid, PALETTE.copy(), pixels)
+    return modem.Card(callsign, grid, PALETTE.copy(), pixels,
+                      allocate_card_id(DATA) if card_id is None else card_id)
 
 
 def received_card_key(report):
@@ -1591,7 +1593,8 @@ class MainWindow(QMainWindow):
         self.audio_test_mode = QCheckBox("Audio-only test mode (PTT disabled)")
         self.audio_test_mode.setChecked(test_mode)
         self.audio_test_mode.toggled.connect(self.audio_test_mode_changed)
-        self.card = default_card(self.station_call.text(), self.station_grid.text())
+        self.card = default_card(self.station_call.text(), self.station_grid.text(),
+                                 card_id=self._new_card_id())
         self.card_path = None
         self.rig = RigctlClient(self)
         self.rig_freq_read = False
@@ -2107,7 +2110,6 @@ class MainWindow(QMainWindow):
             return
         self.quick_draw_active = True
         self.new_card()
-        self.card.card_id = int(time.time_ns() & 0xFFFF)
         self.canvas.set_card(self.card)
         self._sync_editor_controls()
         self.card_path = None
@@ -2265,7 +2267,7 @@ class MainWindow(QMainWindow):
                 self.station_call.text().strip().upper() or "N0CALL",
                 self.station_grid.text().strip().upper() or "AA00",
                 [tuple(color) for color in data["palette"]], pixels,
-                int(time.time_ns() & 0xFFFF), int(data.get("width", 32)),
+                self._new_card_id(), int(data.get("width", 32)),
                 int(data.get("height", 32)))
             card.validate()
         except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -2343,7 +2345,7 @@ class MainWindow(QMainWindow):
             while target.exists():
                 target = source.with_name(f"{stem}-{suffix}{source.suffix}")
                 suffix += 1
-            data["card_id"] = (int(data.get("card_id", 0xC0DE)) + 1) & 0xFFFF
+            data["card_id"] = self._new_card_id()
             target.write_text(json.dumps(data, indent=2) + "\n")
             self.refresh_card_library()
             self.library_filter.setCurrentIndex(self.library_filter.findData(
@@ -2607,7 +2609,7 @@ class MainWindow(QMainWindow):
             return "already"
         callsign = self.station_call.text().strip().upper() or "N0CALL"
         grid = self.station_grid.text().strip().upper() or "AA00"
-        card = modem.Card(callsign, grid, palette, pixels, int(time.time_ns() & 0xFFFF), width, height)
+        card = modem.Card(callsign, grid, palette, pixels, self._new_card_id(), width, height)
         try:
             card.validate()
         except ValueError as exc:
@@ -3219,10 +3221,21 @@ class MainWindow(QMainWindow):
             self.editor_save_button.setEnabled(True)
             self.editor_save_button.setToolTip("Save this card.")
 
+    def _new_card_id(self):
+        reserved = getattr(self, "_allocated_card_ids", set())
+        current = getattr(self, "card", None)
+        if current is not None:
+            reserved.add(current.card_id)
+        card_id = allocate_card_id(DATA, reserved)
+        reserved.add(card_id)
+        self._allocated_card_ids = reserved
+        return card_id
+
     def new_card(self):
         if hasattr(self, "editor_dialog") and self.editor_dialog.isVisible() and not self.confirm_editor_close(): return
         self.card = default_card(self.station_call.text().strip().upper() or "N0CALL",
-                                 self.station_grid.text().strip().upper() or "AA00")
+                                 self.station_grid.text().strip().upper() or "AA00",
+                                 card_id=self._new_card_id())
         self.canvas.set_card(self.card)
         self.call.setText(self.card.callsign); self.grid.setText(self.card.grid)
         self._set_editor_format(self.card)
@@ -5004,6 +5017,8 @@ class MainWindow(QMainWindow):
                              name="data2g-experimental-handoff").start()
         self.refresh_tx_button()
         self._update_backend_ui()
+        if self.selected_adapter().capabilities.kind is not AdapterKind.FRAME_TRANSPORT:
+            QTimer.singleShot(0, self._ensure_session_receive)
 
     def _resume_experimental_backend(self):
         """Acquire local CAT/audio only after the Data2G owner has exited."""
@@ -6214,6 +6229,11 @@ class MainWindow(QMainWindow):
         elif self.rig_reconnect_after_settings and not self._closing:
             self.rig_reconnect_after_settings = False
             QTimer.singleShot(0, self.connect_rig)
+        # CAT owns transmit control and frequency readback, not audio capture.
+        # A failed connection or disconnect must still leave idle RX running.
+        if (not self._closing and
+                self.selected_adapter().capabilities.kind is not AdapterKind.FRAME_TRANSPORT):
+            QTimer.singleShot(0, self._ensure_session_receive)
         if getattr(self, "_station_settings_editing", False):
             self._update_station_settings_actions()
 

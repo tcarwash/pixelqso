@@ -31,6 +31,7 @@ hidden = [
     # Local modules are not reliably discovered by the frozen app analysis
     # when the spec is invoked from outside this folder.
     "cardmodem",
+    "card_ids",
     "card_backends",
     "data2g_transport",
     "data2g_runtime",

@@ -2,6 +2,10 @@
 
 ## Beta 1 release checkpoint — 2026-10-13
 
+Card ID follow-up: all creation/duplication paths now allocate IDs unused by cards, sent snapshots, and this window's unsaved creations. Four focused allocator checks pass, including repeated copies, legacy defaults, wraparound, and exhaustion. Reassigned seven saved library files with IDs shared by different artwork; originals and a change manifest are under each affected profile's `card-id-backup-20261013T205517Z`. Verified that artwork/metadata were preserved and no different-artwork ID collisions remain among the 20 checked library files. Container source updated; no build or redeployment. Reload already-open cards to use their new IDs.
+
+CAT-independent receive follow-up: local modem selection and CAT connection callbacks now resume idle audio reception independently of CAT status. Transmit interlocks remain in place. Updated the container source overlay only; no image build or deployment was requested for this checkpoint.
+
 Wall duplicate follow-up: original and duplicate receptions now share one wall tile per station/card ID/message stage. Signal metadata changes update that tile instead of creating another. Duplicate transmission receipts remain recorded in the QSO deck.
 
 Packaging follow-up: upstream main tracks `ui_theme.py`, but setuptools omitted it from `py-modules`. Added it to the package manifest. A rebuilt wheel contains the module, and an isolated Python process imports it directly from that wheel outside the checkout. This fix is local pending publication; desktop bundle and hardware checks remain separate.
@@ -167,3 +171,7 @@ RX status now names the active receive mode while listening and receiving signal
 Recent saved QSO logs reviewed: the 10:04 local session contains one fully verified AG7SU card (ID 40795, fast-avatar FEC, two copies); the 09:50 local session contains two fully verified, distinct AG7SU cards (IDs 16662 and 9722) decoded with experimental QPSK 5s and equalized QPSK. No raw WebSDR audio was recorded for those sessions, so their failures/stale previews cannot be replayed; available WebSDR PCM before this checkpoint ended earlier. Protected-header receive arbitration now retains only the newest announced content identity (while preserving its copies for combining), stores absolute acquisition time in the copy cache, and pivots the preview to “waiting for card data” when that newer acquisition is detected but not yet decodable. Receive-all status emits each modem as it is attempted. The `radio-stream:pixelqso` overlay image and running container now include these changes.
 
 Testing has resumed as WebSDR receive-only on 7066 kHz. It records raw PCM under `/recordings`; no YouTube publisher is running. Runtime process inspection confirmed PixelQSO, the WebSDR bridge, and Pulse input are active, with no RTMP publisher. The newly opened recording was growing at verification time. Syntax compilation and `git diff --check` passed; no tests or on-air decode result were run/claimed. Next, correlate a user transmission's key-up/unkey time with this PCM and inspect whether the protected header selects a new identity, the progress label cycles through modems, and the card preview pivots before whole-card verification.
+
+### 2026-10-13 — Exclude Data2G ACK/reply radio modes
+
+At KC2G's request, card-data discovery and the mode catalog exclude `ack-*` and band-prefixed ACK/reply modes. The adapter also rejects direct selection of those modes; saved selections fall through the existing unavailable-mode fallback. KISS ACKMODE remains the separate local-transmission completion/pacing mechanism. Mode policy and adapter checks passed (23 tests); rendered UI, live host, and RF behavior remain unverified for this change.

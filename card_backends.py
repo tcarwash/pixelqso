@@ -274,8 +274,13 @@ def data2g_max_frame_bytes(mode, preferred=DATA2G_PREFERRED_FRAME_BYTES):
         return None
 
 
+def is_data2g_ack_mode(mode_name):
+    """ACK/reply radio modes are reserved for modem control, not card data."""
+    return "ack" in str(mode_name).lower().split("-")
+
+
 def host_mode_backends(modes, supported_names=None):
-    """Build a backend entry for every mode the host advertises.
+    """Build card-data backends, excluding advertised ACK/reply modes.
 
     `supported_names` should come from BCAST MODE validation on the opened
     group, since MODES includes modes that may not fit that group's control.
@@ -284,6 +289,8 @@ def host_mode_backends(modes, supported_names=None):
     allowed = None if supported_names is None else set(supported_names)
     result = {}
     for mode in sorted(modes, key=lambda item: (item.bandwidth_hz, item.name)):
+        if is_data2g_ack_mode(mode.name):
+            continue
         frame_limit = data2g_max_frame_bytes(mode)
         if allowed is not None and mode.name not in allowed:
             reason = "The host refused BCAST MODE for this group's control fields."

@@ -8,6 +8,13 @@ import cardmodem
 
 
 class ModePolicyTests(unittest.TestCase):
+    def test_ack_radio_modes_are_excluded_even_with_card_capacity(self):
+        modes = [Data2GMode(name, 500, 116, 64, 1.0, 60.0)
+                 for name in ("ack-1f", "ack-4f", "n4-ack-8f",
+                              "n10-ack-4f", "n4-ack-2f", "n10-qpsk-r1/2")]
+        catalog = host_mode_backends(modes, {mode.name for mode in modes})
+        self.assertEqual(set(catalog), {data2g_mode_key("n10-qpsk-r1/2")})
+
     def test_recommended_modes_are_short_usable_and_ordered(self):
         modes = [Data2GMode(name, bandwidth, 116, 64, 1.0, 60.0)
                  for name, bandwidth in (("n4-qpsk-r1/2", 200),

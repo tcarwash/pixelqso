@@ -28,6 +28,10 @@ with `BCAST MODE`. Mode names, bandwidth, codeword capacity, and airtime are
 read from the host catalog. The host remains authoritative about its bandwidth
 cap and supported modes.
 
+ACK/reply radio modes (`ack-*`, including band-prefixed variants) are excluded
+from card mode discovery, validation, and selection at KC2G's request. KISS
+ACKMODE tags are a separate host-interface feature used for queue pacing.
+
 The command connection carries CR-terminated text commands and asynchronous
 host statuses. The KISS connection carries escaped frames and two-byte
 ACKMODE tags. Pixel QSO waits for the ACK associated with each application

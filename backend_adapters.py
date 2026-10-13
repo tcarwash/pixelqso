@@ -11,6 +11,7 @@ from enum import Enum
 from typing import Protocol
 
 import cardmodem as modem
+from card_backends import is_data2g_ack_mode
 from card_transfer import HEADER as CARD_TRANSFER_HEADER, fragment as card_fragment
 from data2g_transport import (Data2GError, Data2GSession,
                               normalize_data2g_callsign)
@@ -147,7 +148,8 @@ class Data2GFrameAdapter:
 
     @staticmethod
     def discover(session, timeout=None):
-        modes = session.start(timeout=timeout)
+        modes = [mode for mode in session.start(timeout=timeout)
+                 if not is_data2g_ack_mode(mode.name)]
         try:
             checks = session.check_broadcast_modes(mode.name for mode in modes)
             expected = {mode.name for mode in modes}
@@ -186,6 +188,8 @@ class Data2GFrameAdapter:
 
     @staticmethod
     def select_mode(session, mode_name):
+        if is_data2g_ack_mode(mode_name):
+            raise ValueError("Data2G ACK/reply modes cannot carry PixelQSO card data")
         session.set_mode(mode_name)
 
     @staticmethod

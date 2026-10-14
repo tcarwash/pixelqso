@@ -21,12 +21,9 @@ transfer. A clean synthetic encode/decode currently recovered the first 1,020
 of 1,024 raster symbols, with the last four falling at the frame edge. The
 protected common copy header remains outside the musical raster.
 
-In Operate, the ☆ beside **Transfer mode** marks a local modem for blind
-**Receive all** scans. The starred set is saved in settings, and receive-all
-tries only those modes during blind fallback. A protected header that identifies
-a specific mode still routes directly to that decoder, even when it is not
-starred. If the starred set is empty, the RX-preferred mode is used as the sole
-blind candidate.
+**Receive all** tries the RX-preferred local audio modem first, then the other
+available local decoders during blind fallback. A protected header that
+identifies a specific mode routes directly to that decoder.
 
 | Mode ID | Modulation and correction | Burst airtime |
 | --- | --- | --- |

@@ -1,9 +1,9 @@
 """Launch Data2G with TX-advertised burst lengths enabled on receive.
 
-Data2G advertises up to 64 codewords per header, but its default live Engine
-constructs an Accept table capped at 16 seconds. PixelQSO can transmit longer
-frames using those same advertised modes. Apply the compatibility override in
-this child process only, then hand control to Data2G's normal host CLI.
+Older Data2G engines cap receive admission at 16 seconds, even when a legal
+256-byte KISS frame needs longer. Keep the compatibility override for those
+hosts. Upstream PR #65 supplies receive_accept itself and needs no override.
+The wrapper also supplies PixelQSO's frame-associated receive-SNR metadata.
 """
 from __future__ import annotations
 
@@ -16,8 +16,12 @@ from snr import KISS_RX_SNR, encode_rx_snr
 
 
 def enable_advertised_receive_lengths() -> None:
-    """Make Engine's receive table honor its protocol codeword maximum."""
+    """Retain long-frame reception on old hosts; respect PR #65 on new ones."""
     from data2g import modem
+    from data2g.arq import engine
+
+    if callable(getattr(engine, "receive_accept", None)):
+        return
 
     original = modem.Accept.of.__func__
     if getattr(original, "_pixelqso_full_receive", False):

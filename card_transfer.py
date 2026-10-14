@@ -217,7 +217,7 @@ class CardPreviewAssembler:
         content_id = incoming_card.get("image_id", incoming_card.get("image_crc32"))
         key = (str(incoming_card.get("callsign", "")).upper(),
                str(incoming_card.get("grid", "")).upper(), protocol_version,
-               incoming_card.get("card_id") if content_id is None else None,
+               incoming_card.get("card_id"),
                width, height, palette, mode if content_id is None else None,
                content_id)
         state = self.states.get(key)
@@ -263,7 +263,11 @@ class CardPreviewAssembler:
                 incoming_verified[index] = bool(verified_coverage[index])
         blocks = incoming_card.get("received_blocks")
         if blocks is not None:
-            pixels_per_block = max(1, (61 * 6) // int(incoming_card.get("bits_per_pixel", 3)))
+            bits_per_pixel = max(1, int(incoming_card.get("bits_per_pixel", 3)))
+            data_symbols_per_block = cardmodem.AVATAR_RS_K
+            if int(incoming_card.get("header_version", 3)) == 4:
+                data_symbols_per_block -= cardmodem.AVATAR_V4_BLOCK_OVERHEAD
+            pixels_per_block = max(1, (data_symbols_per_block * 6) // bits_per_pixel)
             for block_index, verified in enumerate(blocks):
                 if verified:
                     begin = block_index * pixels_per_block

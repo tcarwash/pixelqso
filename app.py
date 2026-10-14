@@ -5756,9 +5756,9 @@ class MainWindow(QMainWindow):
                 report = {**report, "card": {**dict(snapshot.card),
                     **{key: value for key, value in incoming.items() if value is not None}}}
             self._update_receive_metadata(report)
-        elif not snapshot or snapshot.card.get("exact"):
+        elif not snapshot:
             self._update_receive_metadata({})
-        if (not snapshot or snapshot.card.get("exact")) and not self.current_preview_is_duplicate:
+        if not snapshot and not self.current_preview_is_duplicate:
             self.receive_view.clear()
             self.receive_view.setText("Receiving signal…\nWaiting for card data")
             self.receive_progress.setRange(0, 0)
@@ -5782,6 +5782,9 @@ class MainWindow(QMainWindow):
         elif snapshot and snapshot.card.get("exact") and self.current_preview_is_duplicate:
             self.receive_view.setAccessibleName(
                 f"Duplicate card preview from {snapshot.card.get('callsign') or 'station not identified'}")
+        elif snapshot and snapshot.card.get("exact"):
+            self.receive_view.setAccessibleName(
+                f"Card preview from {snapshot.card.get('callsign') or 'station not identified'} · verified")
         else:
             self._hide_receive_preview()
         self.rx_status.setText(

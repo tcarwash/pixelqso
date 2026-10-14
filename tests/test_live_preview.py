@@ -88,6 +88,29 @@ class LivePreviewTests(unittest.TestCase):
             window.rx_timer.stop()
             window.close()
 
+    def test_complete_image_stays_previewed_during_same_identity_activity(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), \
+                patch("app.QTimer.singleShot"):
+            window = MainWindow()
+            card = {"callsign": "W1ABC", "grid": "FN42", "card_id": 9,
+                    "image_id": "same-image", "width": 1, "height": 1,
+                    "palette": [[0, 0, 0], [15, 15, 15]], "avatar_burst": True,
+                    "header_version": 3, "received_blocks": [True],
+                    "pixel_coverage": [True], "exact": True}
+            report, _ = window.card_assembly.merge_preview({"card": card, "pixels": [1]})
+            self.assertTrue(report["card"]["exact"])
+            window._show_receive_preview(window.card_image(report), card=report["card"],
+                                         exact=True, coverage=[True], report=report)
+
+            window._show_receive_activity("Repeated image transmission", pivot=False,
+                report={"receive_profile": "test-mode", "card": {}})
+            window._receive_activity_expired()
+
+            self.assertFalse(window.receive_preview_box.isHidden())
+            self.assertIsNotNone(window.receive_view.pixmap())
+            window.close()
+
     def test_conflicting_provisional_evidence_is_reported_once_per_identity(self):
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
                 os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), \
@@ -285,11 +308,11 @@ class LivePreviewTests(unittest.TestCase):
                 self.assertTrue(window._show_duplicate_card(report))
                 self.assertEqual(window.session_wall_count, 1)
                 self.assertTrue(window.current_preview_is_duplicate)
-                self.assertTrue(window._show_duplicate_card(report))
+                self.assertFalse(window._show_duplicate_card(report))
                 second_duplicate = {**report, "card": {**report["card"], "card_id": 6}}
                 second_duplicate["assembly_event"] = dict(report["assembly_event"])
-                self.assertFalse(window._show_duplicate_card(second_duplicate))
-                self.assertEqual(window.session_wall_count, 1)
+                self.assertTrue(window._show_duplicate_card(second_duplicate))
+                self.assertEqual(window.session_wall_count, 2)
             finally:
                 window.close()
 
@@ -337,17 +360,17 @@ class LivePreviewTests(unittest.TestCase):
                     window._data2g_rx_frame(session, 2, fragment(
                         second, packed_second, 0, packed_second[:second_split]))
                     self.assertTrue(window.current_preview_is_duplicate)
-                    self.assertEqual(window.session_wall_count, 2)
+                    self.assertEqual(window.session_wall_count, 1)
                     window._data2g_rx_frame(session, 2, fragment(
                         second, packed_second, 0, packed_second[:second_split]))
-                    self.assertEqual(window.session_wall_count, 2)
+                    self.assertEqual(window.session_wall_count, 1)
 
                     window._data2g_rx_frame(session, 2, fragment(
                         third, packed_third, 0, packed_third[:third_split]))
                     third_partial = window.card_assembly.preview_snapshot()
                     self.assertNotEqual(third_partial.card["image_id"], second_image_id)
                     self.assertFalse(window.current_preview_is_duplicate)
-                    self.assertEqual(window.session_wall_count, 2)
+                    self.assertEqual(window.session_wall_count, 1)
             finally:
                 window.close()
 
@@ -420,17 +443,11 @@ class LivePreviewTests(unittest.TestCase):
                 patch("app.QTimer.singleShot"):
             window = MainWindow()
             try:
-                self.assertIs(window.library_stack.currentWidget(), window.library_empty_page)
-                self.assertFalse(window.library_empty_page.isHidden())
-                self.assertEqual(window.library_status.text(), "")
-                self.assertIn("Your cards will show up here",
-                              " ".join(label.text() for label in window.library_empty_page.findChildren(QLabel)))
-                self.assertIn("Use a starter card",
-                              " ".join(button.text() for button in window.library_empty_page.findChildren(QPushButton)))
-                self.assertTrue(window.create_library_button.isHidden())
-                self.assertTrue(window.starter_library_button.isHidden())
-                self.assertTrue(window.more_card_button.isHidden())
-                self.assertIn("No contacts yet", window.log_status.text())
+                # The unified gallery includes installed starter cards even
+                # when the personal collection is empty.
+                self.assertIsNot(window.library_stack.currentWidget(), window.library_empty_page)
+                self.assertGreater(window.library_list.count(), 0)
+                self.assertIn("cards", window.library_status.text())
                 self.assertGreaterEqual(len(list(STARTER_CARDS_PATH.glob("*.json"))), 1)
                 with patch("app.QDialog.exec", return_value=QDialog.DialogCode.Accepted):
                     window.open_starter_card_picker()
@@ -679,7 +696,7 @@ class LivePreviewTests(unittest.TestCase):
             def __init__(self, device, audio_format, parent):
                 self.started = 0
                 self.stopped = 0
-                self.stream = object()
+                self.stream = SimpleNamespace(bytesAvailable=lambda: 0)
                 self.instances.append(self)
 
             def start(self):
@@ -872,6 +889,19 @@ class LivePreviewTests(unittest.TestCase):
         self.assertEqual(merged[0], expected)
         self.assertTrue(merged[3]["whole_raster_valid"])
 
+    def test_new_native_identity_wins_even_when_older_card_is_complete(self):
+        import copy
+        older = pixel.example_card()
+        newer = copy.deepcopy(older)
+        newer.card_id += 1
+        first = pixel.minimal_avatar_resilient_cycle_symbols(older, wire_version=4)
+        second = pixel.minimal_avatar_resilient_cycle_symbols(newer, wire_version=4)
+        _, header_end = pixel._decode_avatar_metadata_after(second, len(pixel.FRAME_SYNC))
+        decoded = pixel.decode_minimal_avatar_resilient_symbols(first + second[:header_end])
+        self.assertEqual(decoded[3]["card_id"], newer.card_id)
+        self.assertFalse(any(decoded[1]))
+        self.assertFalse(decoded[3].get("whole_raster_valid", False))
+
     def test_v4_blocks_from_another_raster_fail_identity_binding(self):
         first_card = pixel.example_card()
         second_card = pixel.Card(first_card.callsign, first_card.grid,
@@ -988,7 +1018,7 @@ class LivePreviewTests(unittest.TestCase):
         state = preview_state()
         report, changed = state.merge(decoded)
         card = report["card"]
-        pixels_per_block = (61 * 6) // card["bits_per_pixel"]
+        pixels_per_block = pixel.AVATAR_V4_PIXELS_PER_BLOCK
 
         self.assertTrue(changed)
         self.assertFalse(card["received_blocks"][0], "CRC failure must not verify the block")
@@ -1002,6 +1032,58 @@ class LivePreviewTests(unittest.TestCase):
             expected = tuple(int(channel) * 17 for channel in rgb)
             actual = image.pixelColor(index % card["width"], index // card["width"])
             self.assertEqual((actual.red(), actual.green(), actual.blue()), expected)
+
+    def test_v4_checked_block_verifies_only_its_shortened_pixel_span(self):
+        count = 32 * 32
+        card = {"callsign": "AG7SU", "grid": "CN85", "card_id": 0x1234,
+                "width": 32, "height": 32, "palette": pixel.MINIMAL_AVATAR_PALETTE,
+                "bits_per_pixel": 3, "avatar_burst": True, "header_version": 4,
+                "image_id": "v4-image", "exact": False,
+                "pixel_coverage": [True] * count,
+                "verified_pixel_coverage": [False] * count,
+                "received_blocks": [True] + [False] * 9,
+                "block_checksums": [123] + [None] * 9}
+
+        state = preview_state()
+        state.merge({"card": card, "pixels": [0] * count})
+
+        verified = state.current_state["verified_pixels"]
+        block_span = pixel.AVATAR_V4_PIXELS_PER_BLOCK
+        self.assertEqual(sum(verified), block_span)
+        self.assertTrue(all(verified[:block_span]))
+        self.assertFalse(any(verified[block_span:]))
+
+    def test_v4_later_checked_block_can_correct_previously_tentative_pixels(self):
+        import copy
+        count = 1024
+        span = pixel.AVATAR_V4_PIXELS_PER_BLOCK
+        card = {"callsign": "AG7SU", "grid": "CN85", "card_id": 7,
+                "width": 32, "height": 32, "palette": pixel.MINIMAL_AVATAR_PALETTE,
+                "bits_per_pixel": 3, "avatar_burst": True, "header_version": 4,
+                "image_id": "checked-block-boundaries", "exact": False,
+                "pixel_coverage": [True] * count,
+                "received_blocks": [True] + [False] * 9}
+        state = preview_state()
+        state.merge({"card": card, "pixels": [0] * count})
+        refined = copy.deepcopy(card)
+        refined["received_blocks"][1] = True
+        pixels = [0] * count
+        pixels[span:span * 2] = [1] * span
+        report, _ = state.merge({"card": refined, "pixels": pixels})
+        self.assertEqual(report["pixels"][span:span * 2], [1] * span)
+        self.assertEqual(sum(state.current_state["verified_pixels"]), 2 * span)
+
+    def test_same_artwork_with_different_card_ids_has_separate_preview_state(self):
+        card = {"callsign": "AG7SU", "grid": "CN85", "card_id": 7,
+                "width": 2, "height": 1, "palette": pixel.MINIMAL_AVATAR_PALETTE,
+                "avatar_burst": True, "image_id": "same-artwork", "exact": False,
+                "pixel_coverage": [True, False]}
+        state = preview_state()
+        state.merge({"card": card, "pixels": [0, 0]})
+        state.merge({"card": {**card, "card_id": 8,
+                             "pixel_coverage": [False, True]}, "pixels": [0, 1]})
+        self.assertEqual(len(state.states), 2)
+        self.assertEqual(state.current_state["coverage"], [False, True])
 
     def test_unverified_whole_card_pixels_are_previewed_not_promoted(self):
         card = {"callsign": "AG7SU", "grid": "CN85", "card_id": 0x1234,

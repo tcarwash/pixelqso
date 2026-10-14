@@ -881,7 +881,7 @@ def decode_minimal_avatar_resilient_symbols(symbols: Iterable[int], *, require_s
         new_format = metadata.get("header_version") == 4
         content_id = metadata.get("image_id")
         key = ((metadata["callsign"].upper(), metadata["grid"].upper(),
-                width, height, metadata["palette_id"], content_id)
+                metadata["card_id"], width, height, metadata["palette_id"], content_id)
                if new_format else
                (metadata["callsign"].upper(), metadata["grid"].upper(), metadata["card_id"],
                 width, height, metadata["palette_id"], metadata.get("message_type", "card"),
@@ -895,6 +895,7 @@ def decode_minimal_avatar_resilient_symbols(symbols: Iterable[int], *, require_s
                                         "votes": [[0] * (1 << bpp) for _ in range(pixel_count)],
                                         "copies": 0, "corrected": 0, "metadata": metadata})
         group["copies"] += 1
+        group["last_frame_start"] = start
         block_start = meta_end
         for block_index in range(block_count):
             first_pixel = block_index * pixels_per_block
@@ -955,10 +956,14 @@ def decode_minimal_avatar_resilient_symbols(symbols: Iterable[int], *, require_s
         raise ValueError("fast-resilient avatar sync sequence not found")
     if not groups:
         raise ValueError("no valid avatar identity block received yet")
-    best = max(groups.values(), key=lambda item: sum(item["received"]))
+    # Identity recency wins over image coverage. A nearly finished older image
+    # must not mask a newly decoded native identity in the same audio window.
+    best = max(groups.values(), key=lambda item: (item["last_frame_start"],
+                                                  sum(item["received"])))
     # The checked identity header is itself receive progress. Return an empty
     # raster with zero coverage until systematic image symbols arrive.
     metadata = dict(best["metadata"])
+    metadata["native_frame_start_symbol"] = best["last_frame_start"]
     if metadata.get("header_version") == 4 and all(best["received"]):
         packed = _pack_indices(best["pixels"], metadata["bits_per_pixel"])
         crc_matches = zlib.crc32(packed) == metadata["image_crc32"]
@@ -1228,6 +1233,11 @@ def _avatar_metrics_report(symbols, metadata, combined_metrics, combined_copies,
                             fec_metadata["width"]*fec_metadata["height"]-index*pixels_per_block))]
             received_copies = max(combined_copies, int(fec_metadata.get("received_copies", 1)))
             checked = sum(blocks)
+            fec_metadata["native_frame_start_sample"] = int(round(
+                acquisition["start_sample"] +
+                fec_metadata.get("native_frame_start_symbol", 0) *
+                acquisition["symbol_period_samples"]))
+            fec_metadata["native_frame_sample_rate"] = acquisition["sample_rate"]
             return pixels, {**fec_metadata, "measured_snr_db": measured_snr_db,
                             "acquisition": acquisition,
                             "avatar_mode": "fast_avatar_fec",

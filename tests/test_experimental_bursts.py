@@ -15,7 +15,7 @@ import weak_signal_modem as weak
 from app import DecodeWorker, LiveDecodeWorker, MainWindow, decode_all_card_backends
 from backend_adapters import EXPERIMENTAL_ADAPTER, DecodeFailureKind
 from modem_envelope import HEADER_SECONDS
-from copy_combining import MAX_COPIES
+from copy_combining import MAX_COPIES, ADMITTED_IDENTITY
 from card_backends import MODE_REGISTRY, available_modes, get_backend
 from card_transfer import CardAssemblyService
 
@@ -110,6 +110,51 @@ class ExperimentalBurstTests(unittest.TestCase):
         report = get_backend(key).decode(audio, 48000)
         self.assert_verified(key, report)
         self.assertEqual(report["card"]["diagnostics"]["outer_recovered_shards"], list(missing))
+
+    def test_outer_rs_unions_complementary_checked_shards_across_physical_copies(self):
+        key = "experimental_8fsk_outer_rs"
+        fmt = burst.FORMATS[key]
+        shards = fec.outer_encode(weak.packet(self.card, "cq", -9))
+        def candidates(analytic, _fmt, **_kwargs):
+            copy = int(round(analytic.real[0]))
+            evidence = np.full((fmt.symbol_count, fmt.tones), copy, dtype=float)
+            yield evidence, {"copy": copy}
+        def checked(metrics, index, _labels):
+            copy = int(metrics[0, 0])
+            if index not in (set(range(8)) if copy == 1 else set(range(8, 16))):
+                raise ValueError("erased shard")
+            return shards[index], 0
+        token = ADMITTED_IDENTITY.set((key, "same checked image"))
+        try:
+            with patch.object(burst, "_resample", side_effect=lambda audio, *_: np.asarray(audio)), \
+                 patch.object(burst, "hilbert", side_effect=lambda audio: np.asarray(audio, complex)), \
+                 patch.object(burst, "announced_fsk_candidates", side_effect=candidates), \
+                 patch.object(burst, "_checked_shard", side_effect=checked):
+                report = burst.decode_copies(key, [np.ones(5000), np.full(5000, 2.)])
+        finally:
+            ADMITTED_IDENTITY.reset(token)
+        self.assert_verified(key, report)
+        self.assertEqual(report["card"]["diagnostics"]["checked_shards"], 16)
+
+    def test_outer_rs_reassembles_complementary_erased_shards_in_audio(self):
+        key = "experimental_8fsk_outer_rs"
+        fmt = burst.FORMATS[key]
+        copies = []
+        for erased in (range(8), range(8, 16)):
+            audio = self.audio[key].copy()
+            for index in erased:
+                start = round((burst.GUARD_SECONDS +
+                               (burst.TRAINING + index * 128 + 4) / fmt.baud) * 48000)
+                audio[start:start + round(124 / fmt.baud * 48000)] = 0
+            copies.append(audio)
+        identity = (key, "audio complementary image")
+        token = ADMITTED_IDENTITY.set(identity)
+        try:
+            report = burst.decode_copies(key, copies)
+        finally:
+            ADMITTED_IDENTITY.reset(token)
+        self.assert_verified(key, report)
+        self.assertEqual(report["card"]["diagnostics"]["checked_shards"], 16)
 
     def test_stronger_inner_rs_corrects_five_gf64_symbol_errors(self):
         rng = np.random.default_rng(81)

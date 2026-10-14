@@ -18,8 +18,8 @@ def local_host_command(arguments: list[str], *, frozen: bool | None = None,
     """Build argv for Data2G's server entry point in a child process.
 
     Source installs and frozen builds use PixelQSO's isolated host shim. It
-    removes Data2G's receiver-only duration cap so its accepted codeword range
-    matches the maximum already advertised by that host.
+    retains long-frame admission for older Data2G installations; hosts with
+    merged PR #65 keep their upstream receive policy.
     No modem classes or waveform functions are imported by this adapter.
     """
     if frozen is None:

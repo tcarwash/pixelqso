@@ -27,6 +27,7 @@ BODY = struct.Struct('>4sBBI16s')
 VERSION = 1
 GROUP_VERSION = 2
 COMPRESSED_VERSION = 3
+INTERLACED_VERSION = 4
 COMPRESSED_MODES = frozenset((
     'experimental_8fsk_compressed', 'experimental_16fsk_compressed', 'experimental_16fsk_grid'))
 GROUP_MODES = {
@@ -49,6 +50,7 @@ MODE_IDS = {
     'experimental_16fsk_ldpc': 13,
     'experimental_8fsk_grouped': 14, 'experimental_16fsk_grouped': 15,
     'experimental_8fsk_compressed': 16, 'experimental_16fsk_compressed': 17, 'experimental_16fsk_grid': 18,
+    'experimental_4fsk_orthogonal': 19, 'experimental_8fsk_orthogonal': 20,
 }
 ID_MODES = {v: k for k, v in MODE_IDS.items()}
 # Fixed native LDPC payload sizes are part of the grouped v2 specification.
@@ -126,7 +128,7 @@ def report_content_id(key, report):
     return digest
 
 
-def header_symbols(key, payload_samples, identity, *, trailer=False, copies=None):
+def header_symbols(key, payload_samples, identity, *, trailer=False, copies=None, copy_index=None):
     if key not in MODE_IDS or not 0 < payload_samples <= 48000 * 1800 or len(identity) != 16:
         raise ValueError('invalid copy header')
     if (key in GROUP_MODES or key in COMPRESSED_MODES) and copies is None:
@@ -138,6 +140,12 @@ def header_symbols(key, payload_samples, identity, *, trailer=False, copies=None
             raise ValueError('invalid grouped header')
         version = group_version(key)
         payload_samples |= (int(copies)-1) << 27
+    if copy_index is not None:
+        if (copies is not None or int(copy_index) != copy_index or
+                not 0 <= int(copy_index) < MAX_COPIES or payload_samples >= (1 << 27)):
+            raise ValueError('invalid interlaced copy header')
+        version = INTERLACED_VERSION
+        payload_samples |= int(copy_index) << 27
     body = BODY.pack(b'PQCH', version, mode, payload_samples, identity)
     wire = body + struct.pack('>I', zlib.crc32(body))
     coded = rs_encode(pixel._bytes_to_gf64(wire), PARITY)
@@ -146,8 +154,9 @@ def header_symbols(key, payload_samples, identity, *, trailer=False, copies=None
     return np.concatenate((training, tones[permutation]))
 
 
-def header_audio(key, payload_samples, identity, *, trailer=False, copies=None):
-    audio = pixel.synthesize(header_symbols(key, payload_samples, identity, trailer=trailer, copies=copies),
+def header_audio(key, payload_samples, identity, *, trailer=False, copies=None, copy_index=None):
+    audio = pixel.synthesize(header_symbols(key, payload_samples, identity, trailer=trailer,
+                                           copies=copies, copy_index=copy_index),
                              sample_rate=RATE, profile=PROFILE)
     return resample_poly(np.pad(audio, (round(GUARD*RATE),)*2), 6, 1).astype(np.float32)
 
@@ -163,6 +172,30 @@ def transmit(key, card, payload, copies, message_type='card', snr_db=None):
     for marker in (prefix, suffix):
         marker *= rms / max(np.sqrt(np.mean(marker.astype(float)**2)), 1e-12)
     return np.tile(np.concatenate((prefix, payload, suffix)), int(copies))
+
+
+def transmit_interlaced(key, card, copies, payload_for_copy, message_type='card', snr_db=None):
+    """Frame independently interlaced payload copies with protected sequence indices."""
+    if int(copies) != copies or not 1 <= copies <= MAX_COPIES:
+        raise ValueError(f'copy count must be between 1 and {MAX_COPIES}')
+    identity = content_id(key, card, message_type, snr_db)
+    frames = []
+    expected_samples = None
+    for index in range(int(copies)):
+        payload = np.asarray(payload_for_copy(index), dtype=np.float32)
+        if payload.ndim != 1 or not len(payload):
+            raise ValueError('interlaced payload must be a nonempty mono waveform')
+        if expected_samples is None:
+            expected_samples = len(payload)
+        elif len(payload) != expected_samples:
+            raise ValueError('interlaced payload copies must have equal duration')
+        prefix = header_audio(key, len(payload), identity, copy_index=index)
+        suffix = header_audio(key, len(payload), identity, trailer=True, copy_index=index)
+        rms = np.sqrt(np.mean(payload.astype(float)**2))
+        for marker in (prefix, suffix):
+            marker *= rms / max(np.sqrt(np.mean(marker.astype(float)**2)), 1e-12)
+        frames.append(np.concatenate((prefix, payload, suffix)))
+    return np.concatenate(frames)
 
 
 def transmit_group(key, card, payload, copies, message_type='card', snr_db=None):
@@ -234,6 +267,11 @@ def decode_header(metrics, *, soft=False):
         raise ValueError('copy header checksum failed')
     magic, version, mode, samples, identity = BODY.unpack(body)
     copies = 1
+    copy_index = None
+    if version == INTERLACED_VERSION:
+        copy_index, samples = samples >> 27, samples & ((1 << 27)-1)
+        if copy_index >= MAX_COPIES:
+            raise ValueError('unsupported interlaced copy index')
     if version in (GROUP_VERSION,COMPRESSED_VERSION):
         copies, samples = (samples >> 27) + 1, samples & ((1 << 27)-1)
         if copies > MAX_COPIES or not valid_group_length(ID_MODES.get(mode),samples) or version != group_version(ID_MODES.get(mode)):
@@ -242,11 +280,11 @@ def decode_header(metrics, *, soft=False):
             raise ValueError('group header cannot carry a trailer')
     if version == VERSION and (ID_MODES.get(mode & 127) in GROUP_MODES or ID_MODES.get(mode & 127) in COMPRESSED_MODES):
         raise ValueError('grouped modes require a supported group header')
-    if magic != b'PQCH' or version not in (VERSION, GROUP_VERSION, COMPRESSED_VERSION) or mode & 127 not in ID_MODES or not 0 < samples <= 48000*1800:
+    if magic != b'PQCH' or version not in (VERSION, GROUP_VERSION, COMPRESSED_VERSION, INTERLACED_VERSION) or mode & 127 not in ID_MODES or not 0 < samples <= 48000*1800:
         raise ValueError('unsupported copy header')
     return dict(mode=ID_MODES[mode & 127], trailer=bool(mode & 128),
                 payload_samples=samples, identity=identity.hex(), version=version,
-                corrected_symbols=corrected, group_copies=copies)
+                corrected_symbols=corrected, group_copies=copies, copy_index=copy_index)
 
 
 @lru_cache(None)

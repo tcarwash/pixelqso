@@ -40,6 +40,8 @@ EXPERIMENTAL_MODE_LABELS = {
     "experimental_qpsk_equalized": "QPSK · LDPC + adaptive equalizer",
     "experimental_8fsk_outer_rs": "8-FSK · strong RS + outer parity",
     "experimental_16fsk_ldpc": "16-FSK · soft LDPC · copy combining",
+    "experimental_4fsk_orthogonal": "4-FSK · orthogonal · soft LDPC",
+    "experimental_8fsk_orthogonal": "8-FSK · orthogonal · soft LDPC",
     **{f"resilient_{baud}": f"8-FSK · RS + soft Chase · {baud} baud · ≈{9 * baud} Hz"
        for baud in (100, 50, 25)},
     "fast_avatar_fec": "8-FSK · RS + soft Chase · 400 baud · block CRC",
@@ -72,6 +74,10 @@ EXPERIMENTAL_MODE_DESCRIPTIONS = {
     "experimental_16fsk_ldpc": "A 5.640-second, 32×32 eight-color payload per copy. "
         "400-baud Gray-labelled 16-FSK, interleaved rate-matched LDPC, pilot timing and whole-card CRC32. "
         "Fixed tones 375–2625 Hz; overlapping tones trade bandwidth for decoder difficulty. New experimental wire format.",
+    "experimental_4fsk_orthogonal": "Orthogonal 4-FSK at 300 baud with 300 Hz tone spacing, interleaved rate-matched LDPC, "
+        "pilot timing and whole-card CRC32. Fixed tones 1200–2100 Hz; new experimental wire format.",
+    "experimental_8fsk_orthogonal": "Orthogonal 8-FSK at 300 baud with 300 Hz tone spacing, interleaved rate-matched LDPC, "
+        "pilot timing and whole-card CRC32. Fixed tones 450–2550 Hz; new experimental wire format.",
     **{key: "8-tone FSK with shortened Reed–Solomon RS(63,61), bounded soft-decision "
        "Chase recovery, and per-block CRC16. Provisional pixels appear before block verification."
        for key in ("resilient_100", "resilient_50", "resilient_25", "fast_avatar_fec")},
@@ -431,12 +437,24 @@ class ExperimentalBurstBackend:
     max_repeats: int = MAX_COPIES
 
     @property
+    def supports_interlaced_copies(self):
+        import experimental_burst_modem as burst
+        return self.key in burst.FORMATS or self.key == burst.QPSK_KEY
+
+    @property
     def label(self):
         return EXPERIMENTAL_MODE_LABELS[self.key]
 
-    def encode(self, card, repeats, message_type, snr_db):
+    def encode(self, card, repeats, message_type, snr_db, *, interlaced=False):
         repeat_waveform(np.empty(0), repeats)
         import experimental_burst_modem as burst
+        if interlaced:
+            from modem_envelope import transmit_interlaced
+            return transmit_interlaced(
+                self.key, card, repeats,
+                lambda index: burst.encode(self.key, card, message_type, snr_db,
+                                           copy_index=index),
+                message_type, snr_db)
         return repeat_waveform(burst.encode(self.key, card, message_type, snr_db), repeats)
 
     def estimate_seconds(self, card, repeats):
@@ -449,6 +467,13 @@ class ExperimentalBurstBackend:
     def decode_payload_copies(self, captures, sample_rate):
         import experimental_burst_modem as burst
         return burst.decode_copies(self.key,captures,sample_rate)
+
+    def decode_announced_copies(self, captures, sample_rate, announcements):
+        import experimental_burst_modem as burst
+        indices = [item.diagnostics.get('copy_index') for item in announcements]
+        if any(index is not None for index in indices):
+            return burst.decode_copies(self.key, captures, sample_rate, copy_indices=indices)
+        return burst.decode_copies(self.key, captures, sample_rate)
 
     def minimum_audio_seconds(self):
         import experimental_burst_modem as burst
@@ -592,7 +617,8 @@ BACKENDS: dict[str, CardBackend] = {
     **{key: GroupedFSKBackend(key) for key in GROUPED_MODES},
     **{key: ExperimentalBurstBackend(key) for key in (
         "experimental_8fsk_ldpc", "experimental_qpsk_equalized",
-        "experimental_8fsk_outer_rs", "experimental_16fsk_ldpc")},
+        "experimental_8fsk_outer_rs", "experimental_16fsk_ldpc",
+        "experimental_4fsk_orthogonal", "experimental_8fsk_orthogonal")},
     "experimental_qpsk_5s": WeakSignalBackend(),
     "experimental_qpsk_combined": WeakSignalCombinedBackend(),
     "fast_avatar": AvatarBackend("fast_avatar", EXPERIMENTAL_MODE_LABELS["fast_avatar"], False),
@@ -643,7 +669,8 @@ MODE_REGISTRY: dict[str, ModeSpec] = {
        for key in GROUPED_MODES},
     **{key: ModeSpec(key, EXPERIMENTAL_MODE_LABELS[key], True, "pixelqso_audio", "scipy")
        for key in ("experimental_8fsk_ldpc", "experimental_qpsk_equalized",
-                   "experimental_8fsk_outer_rs", "experimental_16fsk_ldpc")},
+                   "experimental_8fsk_outer_rs", "experimental_16fsk_ldpc",
+                   "experimental_4fsk_orthogonal", "experimental_8fsk_orthogonal")},
     "resilient_100": ModeSpec("resilient_100", EXPERIMENTAL_MODE_LABELS["resilient_100"], True, "pixelqso_audio", supports_audio_placement=True),
     "resilient_50": ModeSpec("resilient_50", EXPERIMENTAL_MODE_LABELS["resilient_50"], True, "pixelqso_audio", supports_audio_placement=True),
     "resilient_25": ModeSpec("resilient_25", EXPERIMENTAL_MODE_LABELS["resilient_25"], True, "pixelqso_audio", supports_audio_placement=True),

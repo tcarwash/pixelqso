@@ -224,7 +224,9 @@ class ExperimentalLocalAdapter:
     )
 
     @staticmethod
-    def encode(backend, card, repeats, message_type, snr_db):
+    def encode(backend, card, repeats, message_type, snr_db, *, interlaced=False):
+        if interlaced and getattr(backend, 'supports_interlaced_copies', False):
+            return backend.encode(card, repeats, message_type, snr_db, interlaced=True)
         return backend.encode(card, repeats, message_type, snr_db)
 
     @staticmethod

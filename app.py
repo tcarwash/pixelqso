@@ -3514,6 +3514,14 @@ class MainWindow(QMainWindow):
             lambda value: self.settings.setValue("transfer/repeats", value)
             if not getattr(self, "_station_settings_editing", False) else None)
         self.repeat_count.valueChanged.connect(self._refresh_transfer_summary)
+        self.interlaced_copies = QCheckBox("Interlace repeated copies")
+        self.interlaced_copies.setChecked(self.settings.value("transfer/interlaced_copies", False, type=bool))
+        self.interlaced_copies.setToolTip(
+            "Stagger FEC block order across copies so fades are less likely to damage the same blocks. "
+            "Available for local modem modes that support interlaced decoding.")
+        self.interlaced_copies.toggled.connect(
+            lambda value: self.settings.setValue("transfer/interlaced_copies", value)
+            if not getattr(self, "_station_settings_editing", False) else None)
         self.card_combo = QComboBox()
         self.card_combo.setIconSize(QSize(42, 42))
         self.card_combo.currentIndexChanged.connect(self._refresh_transfer_summary)
@@ -3772,6 +3780,14 @@ class MainWindow(QMainWindow):
         self.receive_progress.setAccessibleName("Card receive progress")
         self.receive_progress.setObjectName("receiveProgress")
         preview_layout.addWidget(self.receive_progress, 0, Qt.AlignmentFlag.AlignCenter)
+        self.discard_preview_button = QPushButton("Discard preview")
+        self.discard_preview_button.setObjectName("discardPreviewButton")
+        self.discard_preview_button.setToolTip(
+            "Forget this in-progress card. The next transmission will start a new preview.")
+        self.discard_preview_button.setAccessibleDescription(
+            "Discard the current preview and treat the next transmission as a new card.")
+        self.discard_preview_button.clicked.connect(self._discard_receive_preview)
+        preview_layout.addWidget(self.discard_preview_button, 0, Qt.AlignmentFlag.AlignCenter)
         self.receive_preview_box.hide()
         wall_layout.addWidget(self.receive_preview_box, 0)
         self.receive_stack.setCurrentWidget(self.session_wall_page)
@@ -3942,9 +3958,16 @@ class MainWindow(QMainWindow):
         options_form.addRow(self.audio_test_mode)
         options_form.addRow(self.cwid_enabled)
         options_form.addRow("CW ID message", self.cwid_message)
-        options_form.addRow("Copies per card", self.repeat_count)
+        copy_options = QWidget()
+        copy_options_layout = QHBoxLayout(copy_options)
+        copy_options_layout.setContentsMargins(0, 0, 0, 0)
+        copy_options_layout.setSpacing(SPACING["sm"])
+        copy_options_layout.addWidget(self.repeat_count)
+        copy_options_layout.addWidget(self.interlaced_copies)
+        copy_options_layout.addStretch(1)
+        options_form.addRow("Copies per card", copy_options)
         self.repeat_count.show()
-        self.repeat_count_label = options_form.labelForField(self.repeat_count)
+        self.repeat_count_label = options_form.labelForField(copy_options)
         advanced_page.addWidget(options)
         mobile_options = QGroupBox("Mobile control")
         mobile_form = QFormLayout(mobile_options)
@@ -4111,6 +4134,7 @@ class MainWindow(QMainWindow):
             "data2g_output_device": self.data2g_output_device,
             "output_device": self.output_device, "input_device": self.input_device,
             "repeat_count": self.repeat_count,
+            "interlaced_copies": self.interlaced_copies,
             "rig_host": self.rig_host, "rig_port": self.rig_port,
             "auto_connect_cat": self.auto_connect_cat,
             "audio_test_mode": self.audio_test_mode,
@@ -4164,7 +4188,7 @@ class MainWindow(QMainWindow):
                     self.data2g_kiss_port, self.data2g_host_bandwidth,
                     self.data2g_rig_host, self.data2g_rig_port,
                     self.data2g_input_device, self.data2g_output_device,
-                    self.output_device, self.input_device, self.repeat_count, self.rig_host,
+                    self.output_device, self.input_device, self.repeat_count, self.interlaced_copies, self.rig_host,
                     self.rig_port, self.auto_connect_cat, self.audio_test_mode,
                     self.show_experimental_modes, self.web_enabled, self.web_port)
         for widget in controls:
@@ -4273,6 +4297,7 @@ class MainWindow(QMainWindow):
             "data2g_output_device": self.data2g_output_device,
             "output_device": self.output_device, "input_device": self.input_device,
             "repeat_count": self.repeat_count,
+            "interlaced_copies": self.interlaced_copies,
             "rig_host": self.rig_host, "rig_port": self.rig_port,
             "auto_connect_cat": self.auto_connect_cat,
             "audio_test_mode": self.audio_test_mode,
@@ -5353,6 +5378,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("station/audio_test_mode", self.audio_test_mode.isChecked())
         self.settings.setValue("options/show_experimental_modes", self.show_experimental_modes.isChecked())
         self.settings.setValue("transfer/repeats", self.repeat_count.value())
+        self.settings.setValue("transfer/interlaced_copies", self.interlaced_copies.isChecked())
         self.settings.setValue("options/backend", self.backend_combo.currentData())
         self.settings.setValue("options/web_enabled", self.web_enabled.isChecked())
         self.settings.setValue("options/web_port", self.web_port.value())
@@ -5713,6 +5739,7 @@ class MainWindow(QMainWindow):
                 f"{verified_percent} percent of image regions verified. "
                 "The preview is provisional until whole-card integrity verification completes.")
         self.receive_preview_box.show()
+        self.discard_preview_button.setEnabled(True)
         if exact and not duplicate:
             self.live_preview_timeout.start(5000)
         else:
@@ -5725,6 +5752,35 @@ class MainWindow(QMainWindow):
         self.receive_duplicate_label.hide()
         self.current_preview_is_duplicate = False
         self.receive_preview_box.hide()
+
+    def _discard_receive_preview(self):
+        """Drop only the active card's receive evidence and await a fresh copy."""
+        self.receive_activity_timeout.stop()
+        self.receive_activity_pending = False
+        self.live_preview_timeout.stop()
+        self.card_assembly.discard_current_preview()
+        self.copy_capture_cache.clear()
+        self._clear_rx_bytes()
+        self.live_decode_token += 1
+        self.active_live_decode_token = None
+        self.live_decode_inflight = False
+        self.active_receive_identity = None
+        self.current_preview_is_duplicate = False
+        self.receive_duplicate_label.hide()
+        self.receive_view.clear()
+        self.receive_view.setText("Listening for a card")
+        self.receive_view.setAccessibleName("Waiting for a new card preview")
+        self.receive_progress.setRange(0, 100)
+        self.receive_progress.setValue(0)
+        self.receive_progress.setFormat("Waiting for a new card")
+        self.receive_progress.setAccessibleDescription(
+            "The previous preview was discarded. The next transmission starts a new card.")
+        self.receive_progress.show()
+        self.discard_preview_button.setEnabled(False)
+        self._update_receive_metadata({})
+        self.receive_preview_box.show()
+        self.listen_indicator.setText("● LISTENING")
+        self.rx_status.setText("Preview discarded · the next transmission starts a new card")
 
     def _update_receive_metadata(self, report):
         if not hasattr(self, "incoming_card_details"):
@@ -5746,6 +5802,7 @@ class MainWindow(QMainWindow):
             self.receive_view.setAccessibleName(message)
         self.live_preview_timeout.stop()
         snapshot = None if pivot else self.card_assembly.preview_snapshot()
+        self.discard_preview_button.setEnabled(snapshot is not None)
         if report is not None:
             incoming = report.get("card") or {}
             if (snapshot and not snapshot.card.get("exact") and
@@ -6061,6 +6118,13 @@ class MainWindow(QMainWindow):
             self.repeat_count.setToolTip(
                 "Send copies of the same card. RX combines soft evidence and checks integrity. " +
                 framing + compression)
+            if hasattr(self, "interlaced_copies"):
+                supported = bool(getattr(backend, "supports_interlaced_copies", False))
+                self.interlaced_copies.setEnabled(supported and maximum > 1)
+                self.interlaced_copies.setToolTip(
+                    "Stagger LDPC/RS block order across protected copies; the receiver restores each block before combining."
+                    if supported else
+                    "This local modem format does not yet support interlaced copies.")
         legacy = self.selected_mode() == "standard"
         if hasattr(self, "manual_card_widget"):
             show_legacy_card = legacy and self.exchange_mode.currentIndex() != 2
@@ -6139,7 +6203,8 @@ class MainWindow(QMainWindow):
         if backend is not None:
             if adapter.capabilities.kind is not AdapterKind.LOCAL_IMAGE_MODEM:
                 raise ValueError(f"Selected modem adapter {adapter.key!r} cannot encode local audio")
-            return adapter.encode(backend, card, self.repeat_count.value(), wire_type, snr_db)
+            return adapter.encode(backend, card, self.repeat_count.value(), wire_type, snr_db,
+                                  interlaced=self.interlaced_copies.isChecked())
         encode_legacy = getattr(adapter, "encode_legacy", None)
         if not callable(encode_legacy):
             raise ValueError(f"Selected modem adapter {adapter.key!r} does not support legacy packet encoding")

@@ -448,6 +448,26 @@ class CardAssemblyService:
     def clear_current_preview(self):
         self.previews.clear_current()
 
+    def discard_current_preview(self):
+        """Forget the active provisional card so its next copy starts clean."""
+        snapshot = self.previews.snapshot()
+        if snapshot is not None:
+            card = snapshot.card
+            call = str(card.get("callsign", "")).upper().encode("ascii", "ignore")
+            grid = str(card.get("grid", "")).upper().encode("ascii", "ignore")
+            image_id = card.get("image_id")
+            try:
+                image_id = bytes.fromhex(image_id) if isinstance(image_id, str) else image_id
+            except ValueError:
+                image_id = None
+            for key in list(self.transport.assemblies):
+                if (len(key) >= 8 and (not call or key[5] == call.ljust(12, b"\0")) and
+                        (not grid or key[6] == grid.ljust(8, b"\0")) and
+                        (image_id is None or key[7] == image_id)):
+                    del self.transport.assemblies[key]
+            self.previews.states.pop(snapshot.key, None)
+        self.previews.clear_current()
+
     def preview_snapshot(self):
         snapshot = self.previews.snapshot()
         if snapshot is None:

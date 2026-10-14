@@ -47,6 +47,15 @@ def constants():
     return training, pilots, permutation, whitening, h
 
 
+def copy_permutation(copy_index=None):
+    permutation = constants()[2]
+    if copy_index is None or int(copy_index) == 0:
+        return permutation
+    # Rotate the seeded code-bit permutation by a distinct region on each copy.
+    shift = (int(copy_index) * (N // 20)) % N
+    return np.roll(permutation, shift)
+
+
 def packet(card, message_type='card', snr_db=None):
     card.validate()
     if (card.width, card.height, len(card.palette)) != (32, 32, 8):
@@ -62,12 +71,12 @@ def packet(card, message_type='card', snr_db=None):
     return body + struct.pack('>I', zlib.crc32(body))
 
 
-def encode(card, repeats=1, message_type='card', snr_db=None):
+def encode(card, repeats=1, message_type='card', snr_db=None, *, copy_index=None):
     if repeats != 1:
         raise ValueError('Experimental five-second mode supports one burst')
-    training, pilots, permutation, whitening, h = constants()
+    training, pilots, _permutation, whitening, h = constants()
     bits = np.unpackbits(np.frombuffer(packet(card, message_type, snr_db), np.uint8)) ^ whitening
-    coded = code().encode(bits[None, :])[0][permutation].astype(float)
+    coded = code().encode(bits[None, :])[0][copy_permutation(copy_index)].astype(float)
     symbols = ((1 - 2*coded[0::2]) + 1j*(1 - 2*coded[1::2])) / math.sqrt(2)
     blocks = np.concatenate((pilots, symbols.reshape(BLOCKS, DATA)), axis=1)
     stream = np.concatenate((training, blocks.ravel()))
@@ -163,9 +172,9 @@ def acquire(source):
     return sorted(selected, key=lambda item: item[1])
 
 
-def soft_frame(source, candidate):
+def soft_frame(source, candidate, *, copy_index=None):
     """Return noise-weighted bit evidence; never release unchecked pixels."""
-    training, pilots, permutation, _, h = constants()
+    training, pilots, _permutation, _, h = constants()
     score, start, offset = candidate
     capture_start = start
     first = max(0, start - len(h)*2)
@@ -215,7 +224,7 @@ def soft_frame(source, candidate):
     llr[0::2] = 2*math.sqrt(2)*values.real.ravel()/max(variance,1e-10)
     llr[1::2] = 2*math.sqrt(2)*values.imag.ravel()/max(variance,1e-10)
     ordered = np.empty(N)
-    ordered[permutation] = llr
+    ordered[copy_permutation(copy_index)] = llr
     estimated_snr = 10*np.log10(max(float(np.mean(abs(smooth)**2)), 1e-20)/max(variance,1e-20)*2000/2500)
     return ordered, dict(acquisition_score=float(score), carrier_offset_hz=float(offset),
                          clock_ppm=(step/SPS-1)*1e6,

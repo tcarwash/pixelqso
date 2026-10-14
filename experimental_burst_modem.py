@@ -66,6 +66,8 @@ FORMATS = {
     "experimental_8fsk_ldpc": FSKFormat("experimental_8fsk_ldpc", 8, 600, 300, 450, 0x8F51),
     "experimental_16fsk_ldpc": FSKFormat("experimental_16fsk_ldpc", 16, 400, 150, 375, 0x16F51),
     "experimental_8fsk_outer_rs": FSKFormat("experimental_8fsk_outer_rs", 8, 400, 200, 800, 0x8F52, True),
+    "experimental_4fsk_orthogonal": FSKFormat("experimental_4fsk_orthogonal", 4, 300, 300, 1200, 0x4F53),
+    "experimental_8fsk_orthogonal": FSKFormat("experimental_8fsk_orthogonal", 8, 300, 300, 450, 0x8F53),
 }
 QPSK_KEY = "experimental_qpsk_equalized"
 MODE_KEYS = (*FORMATS, QPSK_KEY)
@@ -84,6 +86,18 @@ def format_constants_for(fmt):
     permutation = rng.permutation(fmt.code_bits)
     labels = np.arange(fmt.tones) ^ (np.arange(fmt.tones) >> 1)
     return training, pilots, permutation, labels, np.argsort(labels)
+
+
+def _block_order(fmt, copy_index):
+    count = len(fmt.block_lengths)
+    movable = count if fmt.outer else sum(length == 128 for length in fmt.block_lengths)
+    if copy_index is None or int(copy_index) == 0 or movable < 2:
+        return np.arange(count)
+    strides = [value for value in range(1, movable) if math.gcd(value, movable) == 1]
+    stride = strides[(int(copy_index)-1) % len(strides)]
+    offset = int(copy_index) % movable
+    leading = (offset + stride * np.arange(movable)) % movable
+    return np.concatenate((leading, np.arange(movable, count)))
 
 
 def _complex_wave(symbols, fmt):
@@ -122,10 +136,10 @@ def _ldpc_symbols(packet, fmt):
     return inverse[values]
 
 
-def encode(key, card, message_type="card", snr_db=None):
+def encode(key, card, message_type="card", snr_db=None, *, copy_index=None):
     packet = weak.packet(card, message_type, snr_db)
     if key == QPSK_KEY:
-        return weak.encode(card, 1, message_type, snr_db)
+        return weak.encode(card, 1, message_type, snr_db, copy_index=copy_index)
     fmt = FORMATS[key]
     training, pilots, _permutation, _labels, inverse = format_constants(key)
     if fmt.outer:
@@ -137,8 +151,8 @@ def encode(key, card, message_type="card", snr_db=None):
             blocks.append(symbols[offset:offset + length])
             offset += length
     stream = [training]
-    for pilot, block in zip(pilots, blocks):
-        stream.extend((pilot, block))
+    for slot, source_index in enumerate(_block_order(fmt, copy_index)):
+        stream.extend((pilots[slot], blocks[int(source_index)]))
     waveform = .75 * _complex_wave(np.concatenate(stream), fmt).real
     waveform = np.pad(waveform, (int(GUARD_SECONDS * FS),) * 2)
     return resample_poly(waveform, 4, 1).astype(np.float32)
@@ -479,8 +493,31 @@ def _whole_report(key, packet, diagnostics):
             "sample_rate": FS, "valid_packet_count": 1, "errors": []}
 
 
-def _ldpc_evidence(key, evidence):
+def _restore_block_order(key, evidence, copy_index):
     fmt = FORMATS[key]
+    order = _block_order(fmt, copy_index)
+    if np.array_equal(order, np.arange(len(order))):
+        return evidence
+    restored = np.asarray(evidence).copy()
+    cursor = TRAINING
+    ranges = []
+    for length in fmt.block_lengths:
+        ranges.append((cursor + 4, cursor + 4 + length))
+        cursor += 4 + length
+    observed = np.asarray(evidence)
+    for slot, source_index in enumerate(order):
+        start, end = ranges[slot]
+        target_start, target_end = ranges[int(source_index)]
+        available_end = min(end, len(observed))
+        if available_end > start:
+            length = min(available_end - start, target_end - target_start)
+            restored[target_start:target_start + length] = observed[start:start + length]
+    return restored
+
+
+def _ldpc_evidence(key, evidence, copy_index=None):
+    fmt = FORMATS[key]
+    evidence = _restore_block_order(key, evidence, copy_index)
     _training, _pilots, permutation, labels, _inverse = format_constants(key)
     cursor, data = TRAINING, []
     for length in fmt.block_lengths:
@@ -664,9 +701,9 @@ def decode(key, audio, sample_rate=48000):
     raise error
 
 
-def _adaptive_soft_frame(source, candidate):
-    baseline, diagnostic = weak.soft_frame(source, candidate)
-    training, pilots, permutation, _whitening, h = weak.constants()
+def _adaptive_soft_frame(source, candidate, copy_index=None):
+    baseline, diagnostic = weak.soft_frame(source, candidate, copy_index=copy_index)
+    training, pilots, _permutation, _whitening, h = weak.constants()
     start = candidate[1]
     step = weak.SPS * (1 + diagnostic["clock_ppm"] / 1e6)
     fraction = diagnostic.get("fractional_timing_samples", 0)
@@ -716,7 +753,7 @@ def _adaptive_soft_frame(source, candidate):
     llrs[0::2] = 2 * math.sqrt(2) * values.real / variance
     llrs[1::2] = 2 * math.sqrt(2) * values.imag / variance
     ordered = np.empty(weak.N)
-    ordered[permutation] = llrs
+    ordered[weak.copy_permutation(copy_index)] = llrs
     return ordered, {**diagnostic, "equalizer": "21-tap fractionally spaced training + pilot/DD NLMS",
                      "equalizer_tap_spacing_seconds": 1 / 4000,
                      "equalizer_pilot_mse": variance}, baseline
@@ -791,14 +828,17 @@ def decode_equalized(audio, sample_rate=48000):
     raise error
 
 
-def decode_copies(key, captures, sample_rate=48000, *, grouped=False):
+def decode_copies(key, captures, sample_rate=48000, *, grouped=False, copy_indices=None):
     """Use protected payload boundaries for independent copy acquisition."""
     frames, partial = [], None
     checked_by_copy = []
     error=ValueError('no CRC-valid announced experimental card')
     if key == QPSK_KEY:
         hypotheses=[]
-        for audio in captures:
+        indices = list(copy_indices) if copy_indices is not None else [None] * len(captures)
+        if len(indices) != len(captures):
+            raise ValueError('copy indices do not match captures')
+        for audio, copy_index in zip(captures, indices):
             source=_resample(audio,sample_rate,weak.FS)
             try:
                 candidate=weak.announced_candidate(source)
@@ -808,7 +848,7 @@ def decode_copies(key, captures, sample_rate=48000, *, grouped=False):
             lanes={'adaptive_equalizer':[], 'pilot_receiver_fallback':[]}
             primary_failed=False
             try:
-                evidence,diagnostic,baseline=_adaptive_soft_frame(source,candidate)
+                evidence,diagnostic,baseline=_adaptive_soft_frame(source,candidate,copy_index)
                 lanes['adaptive_equalizer'].append(SoftCopy(evidence,diagnostic))
                 lanes['pilot_receiver_fallback'].append(SoftCopy(baseline,diagnostic))
                 for receiver,values in (("adaptive_equalizer",evidence),
@@ -830,7 +870,7 @@ def decode_copies(key, captures, sample_rate=48000, *, grouped=False):
                 try:
                     pilot=weak.pilot_candidate(source,candidate[1])
                     if abs(pilot[1]-candidate[1])>2:
-                        evidence,diagnostic,baseline=_adaptive_soft_frame(source,pilot)
+                        evidence,diagnostic,baseline=_adaptive_soft_frame(source,pilot,copy_index)
                         diagnostic.update(acquisition_method='distributed QPSK pilot coherence',
                                           pilot_coherence=pilot[0],pilot_start_sample=pilot[1])
                         lanes['adaptive_equalizer'].append(SoftCopy(evidence,diagnostic))
@@ -866,18 +906,23 @@ def decode_copies(key, captures, sample_rate=48000, *, grouped=False):
             return activity(key,{'announced_copies':len(captures)})
         raise error
     fmt=FORMATS[key]
-    for copy_index, audio in enumerate(captures):
+    indices = list(copy_indices) if copy_indices is not None else [None] * len(captures)
+    if len(indices) != len(captures):
+        raise ValueError('copy indices do not match captures')
+    for capture_index, audio in enumerate(captures):
+        copy_index = 0 if indices[capture_index] is None else indices[capture_index]
         source=_resample(audio,sample_rate,FS)
         if len(source)<(GUARD_SECONDS+.05+(TRAINING+4)/fmt.baud)*FS:
             partial=partial or activity(key,{'announced_copies':len(captures)})
             continue
         analytic=hilbert(source)
-        radius = max(2, (.002 + copy_index*fmt.seconds*.0002)*fmt.baud) if grouped else 2
+        radius = max(2, (.002 + capture_index*fmt.seconds*.0002)*fmt.baud) if grouped else 2
         variants = []
         best_checked = ({}, 0)
         for evidence,timing in announced_fsk_candidates(analytic,fmt,radius=radius):
             diagnostic = timing
             try:
+                evidence = _restore_block_order(key, evidence, copy_index)
                 if len(evidence)<fmt.symbol_count:
                     partial=partial or (_decode_outer(key,evidence,diagnostic) if fmt.outer else activity(key,diagnostic))
                     continue

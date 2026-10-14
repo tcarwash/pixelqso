@@ -1,0 +1,242 @@
+[
+  {
+    "stream": "1292ea030e6f4a6d89c08686f8db651c",
+    "start": 508240,
+    "end": 544000,
+    "mode": "experimental_8fsk_musical_25",
+    "identity": "7bea033c775437e68966489d215c88f0",
+    "diagnostics": {
+      "mode": "experimental_8fsk_musical_25",
+      "trailer": false,
+      "payload_samples": 2200320,
+      "identity": "7bea033c775437e68966489d215c88f0",
+      "version": 1,
+      "corrected_symbols": 6,
+      "group_copies": 1,
+      "copy_index": null,
+      "estimated_snr_db_2500": -3.6256399386089355,
+      "acquisition_score": 0.6292898194771439,
+      "carrier_offset_hz": 0
+    }
+  },
+  {
+    "stream": "1292ea030e6f4a6d89c08686f8db651c",
+    "start": 1414680,
+    "end": 1456000,
+    "mode": "experimental_8fsk_musical_25",
+    "identity": "7bea033c775437e68966489d215c88f0",
+    "diagnostics": {
+      "mode": "experimental_8fsk_musical_25",
+      "trailer": false,
+      "payload_samples": 2200320,
+      "identity": "7bea033c775437e68966489d215c88f0",
+      "version": 1,
+      "corrected_symbols": 7,
+      "group_copies": 1,
+      "copy_index": null,
+      "estimated_snr_db_2500": 4.397684556242126,
+      "acquisition_score": 0.7799267692806059,
+      "carrier_offset_hz": 0
+    }
+  },
+  {
+    "stream": "1292ea030e6f4a6d89c08686f8db651c",
+    "start": 2098520,
+    "end": 2128000,
+    "mode": "experimental_8fsk_musical_25",
+    "identity": "cbf6043295eaa2c1b3a28cce36f675ee",
+    "diagnostics": {
+      "mode": "experimental_8fsk_musical_25",
+      "trailer": false,
+      "payload_samples": 2200320,
+      "identity": "cbf6043295eaa2c1b3a28cce36f675ee",
+      "version": 1,
+      "corrected_symbols": 0,
+      "group_copies": 1,
+      "copy_index": null,
+      "estimated_snr_db_2500": 7.179895993008404,
+      "acquisition_score": 0.9259196102248366,
+      "carrier_offset_hz": 0
+    }
+  },
+  {
+    "stream": "1292ea030e6f4a6d89c08686f8db651c",
+    "start": 2600860,
+    "end": 2608000,
+    "mode": "experimental_8fsk_musical_25",
+    "identity": "cbf6043295eaa2c1b3a28cce36f675ee",
+    "diagnostics": {
+      "mode": "experimental_8fsk_musical_25",
+      "trailer": false,
+      "payload_samples": 2200320,
+      "identity": "cbf6043295eaa2c1b3a28cce36f675ee",
+      "version": 1,
+      "corrected_symbols": 0,
+      "group_copies": 1,
+      "copy_index": null,
+      "estimated_snr_db_2500": 8.696784279083893,
+      "acquisition_score": 0.8739423922974532,
+      "carrier_offset_hz": 0
+    }
+  },
+  {
+    "stream": "1292ea030e6f4a6d89c08686f8db651c",
+    "start": 3113340,
+    "end": 3136000,
+    "mode": "experimental_8fsk_musical_25",
+    "identity": "cbf6043295eaa2c1b3a28cce36f675ee",
+    "diagnostics": {
+      "mode": "experimental_8fsk_musical_25",
+      "trailer": false,
+      "payload_samples": 2200320,
+      "identity": "cbf6043295eaa2c1b3a28cce36f675ee",
+      "version": 1,
+      "corrected_symbols": 3,
+      "group_copies": 1,
+      "copy_index": null,
+      "estimated_snr_db_2500": 8.222120613813194,
+      "acquisition_score": 0.9402108004938559,
+      "carrier_offset_hz": 0
+    }
+  },
+  {
+    "stream": "1292ea030e6f4a6d89c08686f8db651c",
+    "start": 3786840,
+    "end": 3808000,
+    "mode": "experimental_8fsk_outer_rs",
+    "identity": "f8def09691cb60648303d43e15277993",
+    "diagnostics": {
+      "mode": "experimental_8fsk_outer_rs",
+      "trailer": false,
+      "payload_samples": 263040,
+      "identity": "f8def09691cb60648303d43e15277993",
+      "version": 4,
+      "corrected_symbols": 1,
+      "group_copies": 1,
+      "copy_index": 0,
+      "estimated_snr_db_2500": 6.242190644100589,
+      "acquisition_score": 0.8062358262816192,
+      "carrier_offset_hz": 0
+    }
+  },
+  {
+    "stream": "1292ea030e6f4a6d89c08686f8db651c",
+    "start": 3953680,
+    "end": 3997520,
+    "mode": "experimental_8fsk_outer_rs",
+    "identity": "f8def09691cb60648303d43e15277993",
+    "diagnostics": {
+      "mode": "experimental_8fsk_outer_rs",
+      "trailer": false,
+      "payload_samples": 263040,
+      "identity": "f8def09691cb60648303d43e15277993",
+      "version": 4,
+      "corrected_symbols": 1,
+      "group_copies": 1,
+      "copy_index": 0,
+      "estimated_snr_db_2500": 2.861734250352695,
+      "acquisition_score": 0.8607582517015621,
+      "carrier_offset_hz": 0
+    }
+  },
+  {
+    "stream": "4c16b976325f440f8e9897284d2f06d8",
+    "start": 85020,
+    "end": 112000,
+    "mode": "experimental_8fsk_outer_rs",
+    "identity": "f8def09691cb60648303d43e15277993",
+    "diagnostics": {
+      "mode": "experimental_8fsk_outer_rs",
+      "trailer": false,
+      "payload_samples": 263040,
+      "identity": "f8def09691cb60648303d43e15277993",
+      "version": 4,
+      "corrected_symbols": 0,
+      "group_copies": 1,
+      "copy_index": 0,
+      "estimated_snr_db_2500": 2.182713865114824,
+      "acquisition_score": 0.8535623592170952,
+      "carrier_offset_hz": 0
+    }
+  },
+  {
+    "stream": "8bae8f68d0dc4674a96360e9e6fc137d",
+    "start": 1995120,
+    "end": 2032000,
+    "mode": "experimental_8fsk_musical_25",
+    "identity": "7bea033c775437e68966489d215c88f0",
+    "diagnostics": {
+      "mode": "experimental_8fsk_musical_25",
+      "trailer": false,
+      "payload_samples": 2200320,
+      "identity": "7bea033c775437e68966489d215c88f0",
+      "version": 1,
+      "corrected_symbols": 0,
+      "group_copies": 1,
+      "copy_index": null,
+      "estimated_snr_db_2500": 9.963741624143818,
+      "acquisition_score": 0.9643823620562207,
+      "carrier_offset_hz": 0
+    }
+  },
+  {
+    "stream": "8bae8f68d0dc4674a96360e9e6fc137d",
+    "start": 2634040,
+    "end": 2656000,
+    "mode": "experimental_8fsk_musical_25",
+    "identity": "7bea033c775437e68966489d215c88f0",
+    "diagnostics": {
+      "mode": "experimental_8fsk_musical_25",
+      "trailer": false,
+      "payload_samples": 2200320,
+      "identity": "7bea033c775437e68966489d215c88f0",
+      "version": 1,
+      "corrected_symbols": 0,
+      "group_copies": 1,
+      "copy_index": null,
+      "estimated_snr_db_2500": 8.811104761606702,
+      "acquisition_score": 0.9153700806367971,
+      "carrier_offset_hz": 0
+    }
+  },
+  {
+    "stream": "8bae8f68d0dc4674a96360e9e6fc137d",
+    "start": 3305540,
+    "end": 3328000,
+    "mode": "experimental_qpsk_5s",
+    "identity": "e901bc8b950a5364611efa39f3cc691c",
+    "diagnostics": {
+      "mode": "experimental_qpsk_5s",
+      "trailer": false,
+      "payload_samples": 221856,
+      "identity": "e901bc8b950a5364611efa39f3cc691c",
+      "version": 1,
+      "corrected_symbols": 0,
+      "group_copies": 1,
+      "copy_index": null,
+      "estimated_snr_db_2500": 8.855654891669623,
+      "acquisition_score": 0.9395606636875643,
+      "carrier_offset_hz": 0
+    }
+  },
+  {
+    "stream": "8bae8f68d0dc4674a96360e9e6fc137d",
+    "start": 3525640,
+    "end": 3568000,
+    "mode": "resilient_100",
+    "identity": "f84f9602d956ce991c3c7e16fbc41178",
+    "diagnostics": {
+      "mode": "resilient_100",
+      "trailer": false,
+      "payload_samples": 685440,
+      "identity": "f84f9602d956ce991c3c7e16fbc41178",
+      "version": 1,
+      "corrected_symbols": 0,
+      "group_copies": 1,
+      "copy_index": null,
+      "estimated_snr_db_2500": 3.565712568415518,
+      "acquisition_score": 0.8596194755130031,
+      "carrier_offset_hz": 0
+    }
+  }
+]

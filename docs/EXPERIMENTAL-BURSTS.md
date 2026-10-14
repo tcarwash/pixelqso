@@ -15,11 +15,14 @@ Existing modem IDs and formats remain available.
 The **8-FSK · E-major scale · 25 baud** experimental mode maps palette indices
 0–7 to E4, F♯4, G♯4, A4, B4, C♯5, D♯5, and E5 (about 330–659 Hz). Each image
 symbol lasts 40 ms, so the raster can be heard as a sequence of scale tones.
-This mode sends the palette symbols directly and has no whole-card error
-correction or checksum; use it as a musical experiment, not for reliable card
-transfer. A clean synthetic encode/decode currently recovered the first 1,020
-of 1,024 raster symbols, with the last four falling at the frame edge. The
-protected common copy header remains outside the musical raster.
+This mode sends the palette symbols directly, with no pixel error correction.
+The protected common copy headers before and after the raster carry a digest of
+the expected whole card. The receiver compares the full-length reconstructed
+raster with that digest. A match can also verify missing symbols when their
+placeholder values match the transmitted card; the digest detects corruption
+but does not recover unknown values. A clean synthetic encode/decode currently
+recovers the first 1,020 of 1,024 raster symbols, with the last four falling at
+the frame edge.
 
 **Receive all** tries the RX-preferred local audio modem first, then the other
 available local decoders during blind fallback. A protected header that
@@ -101,3 +104,12 @@ The local comparison artifacts are in `work/four-experimental-bursts-20261005/`:
 More tones increase bits per symbol, but closer spacing, timing sensitivity,
 bandwidth, and channel impairments constrain useful parity gains. These modes
 are experiments rather than recommendations for field operation.
+
+## 2026-10-14 RF receive follow-up
+
+E-major retains complete symbol evidence per timing hypothesis and tests the protected
+content digest before accepting a combined-copy candidate. Unverified pooled evidence
+does not replace a single-copy preview. Live native probing without a common header is
+bounded to the selected mode; protected headers still discover all current modes.
+See [the receive investigation](rx-evidence/2026-10-14/README.md) for RF replay results,
+discard/reacquisition fixes, and remaining validation limits.

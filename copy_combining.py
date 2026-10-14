@@ -68,7 +68,7 @@ def diagnostics_for(used, acquired):
             'copy_diagnostics': [c.diagnostics for c in used]}
 
 
-def hypothesis_attempts(candidates, max_extra=12):
+def hypothesis_attempts(candidates, max_extra=12, *, include_primary=True):
     """Retry alternate receiver hypotheses without counting a copy twice.
 
     Each inner list describes ONE physical transmission. First retain the
@@ -79,7 +79,8 @@ def hypothesis_attempts(candidates, max_extra=12):
     if not candidates:
         return
     primary = [values[0] for values in candidates]
-    yield from recovery_attempts(primary)
+    if include_primary:
+        yield from recovery_attempts(primary)
     retries = 0
     # Retry each alternative receiver lane as a complete copy combination.
     for rank in range(1,max(map(len,candidates))):

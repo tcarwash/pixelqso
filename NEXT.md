@@ -1,5 +1,14 @@
 # Next steps: Pixel QSO UI/UX
 
+## Receive recovery — 2026-10-14
+
+Discard preview now replaces the worker cache and resets the decode sample watermark.
+A stale worker cannot restore a discarded acquisition; reception remains active.
+Regression coverage passes. Recorded RF replays verify the first E-major card, QPSK,
+and three pooled outer-RS copies. Later E-major payloads remain unverified. Bounded live
+probing and digest-based raw-copy selection are implemented; fresh on-air reacquisition
+after discard remains to be validated. Evidence: `docs/rx-evidence/2026-10-14/README.md`.
+
 ## Data2G recovery — 2026-10-13
 
 Recovery work is on `fix/data2g-recovery`, based on `dd76bbf`, with selective fixes from `origin/main` and `broken`. Used the old dependency only for the rollback baseline, then switched the final manifest to upstream's default branch and refreshed/synced `uv.lock` to merged revision `27236ec`. Preserved 256-byte framing and added PR #65 capability detection to the managed wrapper. Recovered v4 checked-block boundary correction (106 rather than 122 pixels at 3 bpp), card-ID isolation, newest-native-identity selection, completed-preview retention, and complementary outer-RS shard recovery. Narrow HF maps to `n10-qpsk-r1/2`; its frame size is unchanged across the regression window. Current revision/dependency mismatches were verified, but the operator's earlier matched-source RF regression is not yet attributed. See [the recovery audit](docs/DATA2G-RECOVERY-2026-10-13.md) for branch decisions and reproduction. Initial full-suite failures include obsolete disabled-mode/UI expectations; keep those separate from recovery regressions. Final verification: 154 recovery tests passed, plus 11 checks inside the rebuilt image and a full two-host virtual-audio card transfer in Narrow HF. The stream container was recreated with matching source hashes and Data2G `27236ec`, retaining its three mounts. Fresh RF recovery remains unverified; the historical regression has not been reproduced from an attributable failed recording.

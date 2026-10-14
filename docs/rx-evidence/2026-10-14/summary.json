@@ -1,0 +1,42 @@
+[
+  {
+    "mode": "experimental_8fsk_musical_25",
+    "identity": "7bea033c775437e68966489d215c88f0",
+    "copies": 4,
+    "exact": true,
+    "coverage": 1024,
+    "report": "experimental_8fsk_musical_25-7bea033c775437e68966489d215c88f0.json"
+  },
+  {
+    "mode": "experimental_qpsk_5s",
+    "identity": "e901bc8b950a5364611efa39f3cc691c",
+    "copies": 1,
+    "exact": true,
+    "coverage": 1024,
+    "report": "experimental_qpsk_5s-e901bc8b950a5364611efa39f3cc691c.json"
+  },
+  {
+    "mode": "resilient_100",
+    "identity": "f84f9602d956ce991c3c7e16fbc41178",
+    "copies": 1,
+    "exact": false,
+    "coverage": 1024,
+    "report": "resilient_100-f84f9602d956ce991c3c7e16fbc41178.json"
+  },
+  {
+    "mode": "experimental_8fsk_musical_25",
+    "identity": "cbf6043295eaa2c1b3a28cce36f675ee",
+    "copies": 3,
+    "exact": false,
+    "coverage": 1024,
+    "report": "experimental_8fsk_musical_25-cbf6043295eaa2c1b3a28cce36f675ee.json"
+  },
+  {
+    "mode": "experimental_8fsk_outer_rs",
+    "identity": "f8def09691cb60648303d43e15277993",
+    "copies": 3,
+    "exact": true,
+    "coverage": 1024,
+    "report": "experimental_8fsk_outer_rs-f8def09691cb60648303d43e15277993.json"
+  }
+]

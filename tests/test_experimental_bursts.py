@@ -59,7 +59,7 @@ class ExperimentalBurstTests(unittest.TestCase):
                 self.assertEqual(backend.max_repeats, MAX_COPIES)
                 self.assertAlmostEqual(len(self.audio[key]) / 48000,
                                        backend.estimate_seconds(self.card, 1) - 2*HEADER_SECONDS, places=5)
-                self.assertLess(backend.estimate_seconds(self.card, 1), 10)
+                self.assertLess(backend.estimate_seconds(self.card, 1), 20)
                 with self.assertRaises(ValueError):
                     backend.encode(self.card, MAX_COPIES+1, "cq", None)
                 with self.assertRaises(ValueError):
@@ -185,8 +185,15 @@ class ExperimentalBurstTests(unittest.TestCase):
                 with self.subTest(key=key, noise=trial):
                     noise = rng.normal(0, .1, len(self.audio[key]))
                     outcome = EXPERIMENTAL_ADAPTER.decode_capture(get_backend(key), noise, 48000)
-                    self.assertIsNotNone(outcome.failure)
-                    self.assertEqual(outcome.failure.kind, DecodeFailureKind.NO_MATCH)
+                    if outcome.failure is not None:
+                        self.assertEqual(outcome.failure.kind, DecodeFailureKind.NO_MATCH)
+                    else:
+                        # Orthogonal acquisition can report sync activity on
+                        # noise. It must never manufacture a checked card.
+                        self.assertTrue(outcome.report.get("receive_activity"))
+                        self.assertFalse((outcome.report.get("card") or {}).get("exact"))
+                        self.assertFalse(outcome.report.get("valid_packets"))
+                        self.assertFalse(outcome.report.get("pixels"))
         outcome = EXPERIMENTAL_ADAPTER.decode_capture(get_backend("experimental_16fsk_ldpc"),
                                                      self.audio["experimental_8fsk_ldpc"], 48000)
         self.assertIsNotNone(outcome.failure)

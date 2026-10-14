@@ -535,6 +535,14 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
                      "experimental_qpsk_combined": "experimental_qpsk_5s"}.get(
                          preferred_mode, preferred_mode)
     backends = order_receive_candidates(backends, preferred_key)
+    if live_snapshot and any(key == preferred_key for key, _ in backends):
+        # Protected headers above still discover every current modem. Without
+        # one, keep legacy/native probing to the selected mode and a bounded
+        # recent window so blind searches cannot stall the next header scan.
+        backends = [(key, backend) for key, backend in backends if key == preferred_key]
+        backend = backends[0][1]
+        lookback = max(12.0, min(60.0, backend.estimate_seconds(modem.example_card(), 1) + 4.0))
+        audio = audio[-round(lookback * sample_rate):]
     for key, backend in backends:
         if getattr(backend, "requires_common_header", False):
             continue  # Header-routed group decoders have no blind native format.
@@ -5914,8 +5922,13 @@ class MainWindow(QMainWindow):
         self.receive_activity_pending = False
         self.live_preview_timeout.stop()
         self.card_assembly.discard_current_preview()
-        self.copy_capture_cache.clear()
+        # In-flight workers own the old cache. A fresh instance prevents a
+        # discarded acquisition or scan cursor from leaking into new RX.
+        self.copy_capture_cache = self.copy_capture_cache.__class__()
         self._clear_rx_bytes()
+        self.live_decode_samples = 0
+        self.live_decode_final = False
+        self.test_rx_final_pending = False
         self.live_decode_token += 1
         self.active_live_decode_token = None
         self.live_decode_inflight = False

@@ -555,8 +555,13 @@ def decode_capture(key, audio, sample_rate, decoder, copies=None, copy_decoder=N
             'acquisition_start_sample', round(copy.start * RATE / sample_rate)))
             for copy in group)
         payloads = []
+        complete_payload = False
         for copy in group:
             signal = np.asarray(audio)[copy.start:copy.end]
+            expected_samples = math.ceil(
+                int(copy.diagnostics.get('payload_samples', 0)) * sample_rate / 48000)
+            if expected_samples > 0 and len(signal) >= expected_samples:
+                complete_payload = True
             shift = copy.diagnostics['carrier_offset_hz']
             if shift and len(signal):
                 signal = (hilbert(signal) * np.exp(-2j*np.pi*shift*np.arange(len(signal))/sample_rate)).real
@@ -567,8 +572,39 @@ def decode_capture(key, audio, sample_rate, decoder, copies=None, copy_decoder=N
             report = (announced_decoder(payloads,sample_rate,group) if announced_decoder is not None else
                       copy_decoder(payloads, sample_rate) if copy_decoder is not None else
                       decoder(pooled, sample_rate))
-            if report.get('card',{}).get('exact') and report_content_id(key, report).hex() != group[0].identity:
+            card = report.get('card', {})
+            if card.get('exact') and report_content_id(key, report).hex() != group[0].identity:
                 raise ValueError('decoded card does not match the protected copy identity')
+            if key == 'experimental_8fsk_musical_25':
+                coverage = card.get('pixel_coverage') or []
+                pixels = report.get('pixels') or []
+                expected_pixels = int(card.get('width', 32)) * int(card.get('height', 32))
+                if complete_payload and len(pixels) == expected_pixels:
+                    matches_identity = report_content_id(key, report).hex() == group[0].identity
+                    if matches_identity:
+                        received_coverage = list(coverage) if coverage else [True] * expected_pixels
+                        recovered_count = sum(bool(value) for value in received_coverage)
+                        card['received_pixel_coverage'] = received_coverage
+                        card['pixel_coverage'] = [True] * expected_pixels
+                        card['verified_pixel_coverage'] = [True] * expected_pixels
+                        card['content_checksum_valid'] = True
+                        card['exact'] = True
+                        card['verification_scope'] = 'whole_card_content_digest'
+                        card['color_stage'] = (
+                            'whole-card checksum verified' if recovered_count == expected_pixels else
+                            f'whole-card checksum verified · {recovered_count}/{expected_pixels} pixels decoded directly')
+                    elif coverage and all(coverage):
+                        card['content_checksum_valid'] = False
+                        card['exact'] = False
+                        card['color_stage'] = f'{expected_pixels}/{expected_pixels} pixels · whole-card checksum failed · unverified'
+                    else:
+                        card['content_checksum_valid'] = None
+                        card['exact'] = False
+                        card['color_stage'] = (
+                            f'{sum(bool(value) for value in coverage)}/{expected_pixels} pixels · '
+                            'checksum inconclusive with missing pixels · unverified')
+                else:
+                    card['content_checksum_valid'] = None
         except ValueError as exc:
             error = exc
             continue

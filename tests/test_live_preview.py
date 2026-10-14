@@ -196,6 +196,35 @@ class LivePreviewTests(unittest.TestCase):
         self.assertEqual(mode, "m")
         self.assertEqual([copy.identity for copy in selected], ["b"])
 
+    def test_discard_preview_restarts_sample_schedule_and_isolates_old_worker_cache(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), patch("app.QTimer.singleShot"):
+            window = MainWindow()
+            try:
+                window.rx_timer.start()
+                window.rx_session_id = 4
+                window.active_live_decode_token = 9
+                window.live_decode_inflight = True
+                window.live_decode_samples = 48000 * 60
+                window.rx_bytes.extend(bytes(48000 * 60 * 2))
+                old_cache = window.copy_capture_cache
+                generation = (window.auto_generation, 4, 9)
+                window._discard_receive_preview()
+                self.assertEqual(window.live_decode_samples, 0)
+                self.assertEqual(len(window.rx_bytes), 0)
+                self.assertFalse(window.live_decode_inflight)
+                self.assertTrue(window.rx_timer.isActive())
+                self.assertFalse(window._live_decode_generation_current(generation))
+                self.assertIsNot(window.copy_capture_cache, old_cache)
+                # Simulate a discarded worker finishing its scan after reset.
+                old_cache.header_scan_sample = 60 * 48000
+                old_cache.entries[("old-mode", "old-card")] = {"frames": [], "touched": 1}
+                self.assertFalse(window.copy_capture_cache.entries)
+                ranges = window.copy_capture_cache.header_scan_ranges(0, 5 * 48000, 48000)
+                self.assertEqual(ranges, [(0, 5 * 48000)])
+            finally:
+                window.close()
+
     def test_complete_card_keeps_rolling_capture_and_copy_cache(self):
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
                 os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), \
@@ -376,6 +405,23 @@ class LivePreviewTests(unittest.TestCase):
                     self.assertEqual(window.session_wall_count, 1)
             finally:
                 window.close()
+
+    def test_live_native_fallback_is_selected_and_bounded(self):
+        from backend_adapters import DecodeOutcome
+        backend = SimpleNamespace(minimum_audio_seconds=lambda: 0,
+                                  estimate_seconds=lambda card, copies: 5)
+        adapter = Mock()
+        adapter.decode_capture.return_value = DecodeOutcome(report={"card": {"exact": False}, "pixels": []})
+        with patch("app.available_modes", return_value=[("experimental_8fsk_outer_rs", backend),
+                                                       ("experimental_qpsk_5s", backend)]), \
+                patch("app.get_backend", return_value=backend), \
+                patch("app.local_adapter_for_mode", return_value=adapter):
+            result = decode_all_card_backends([0.0] * 100000, 1000,
+                preferred_mode="experimental_8fsk_outer_rs", include_experimental=True,
+                announced_copies=[], live_snapshot=True)
+        self.assertIsNone(result.failure)
+        self.assertEqual(adapter.decode_capture.call_count, 1)
+        self.assertEqual(len(adapter.decode_capture.call_args.args[1]), 12000)
 
     def test_receive_all_publishes_preview_before_next_decoder(self):
         report = {"card": {"exact": False}, "pixels": []}

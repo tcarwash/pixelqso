@@ -1105,18 +1105,26 @@ def decode_minimal_avatar_symbols_progress(symbols: Iterable[int], *, require_sy
     else:
         starts = [0]
     candidates: dict[tuple, dict] = {}
+    # A pixel raster is itself an arbitrary stream of 8-FSK symbols. It can
+    # contain the same 24-symbol pattern used to find a frame, so do not let a
+    # sync-looking sequence inside a validated frame's header or raster start
+    # a second, misaligned decode of that same frame.
+    frame_end = 0
     for start in starts:
+        if start < frame_end:
+            continue
         meta_start = start
         try:
             metadata, meta_end = _decode_avatar_metadata_after(tones, meta_start)
         except (ValueError, UnicodeDecodeError, ZeroDivisionError):
             continue
-        key = (metadata["callsign"].upper(), metadata["grid"].upper(), metadata["card_id"],
-               metadata["width"], metadata["height"], metadata["palette_id"],
-               metadata.get("message_type", "card"), metadata.get("snr_db"))
         pixel_count = metadata["width"] * metadata["height"]
         bpp = metadata["bits_per_pixel"]
         tone_count = (pixel_count * bpp + 2) // 3
+        frame_end = meta_end + tone_count
+        key = (metadata["callsign"].upper(), metadata["grid"].upper(), metadata["card_id"],
+               metadata["width"], metadata["height"], metadata["palette_id"],
+               metadata.get("message_type", "card"), metadata.get("snr_db"))
         candidate = candidates.setdefault(key, {"metadata": metadata,
             "votes": [[0] * (1 << bpp) for _ in range(pixel_count)], "copies": 0})
         frame = tones[meta_end:meta_end + tone_count]
@@ -1469,7 +1477,9 @@ def decode_avatar_copies(copies, sample_rate, profile, *, checked=True, wire_ver
     Header and image likelihoods are combined before RS/CRC, including when
     none of the native identity headers could be decoded on its own.
     """
-    from copy_combining import SoftCopy, recovery_attempts, hypothesis_attempts, diagnostics_for
+    from copy_combining import SoftCopy, recovery_attempts, hypothesis_attempts, diagnostics_for, ADMITTED_IDENTITY
+    admitted = ADMITTED_IDENTITY.get()
+    verify_raw = not checked and admitted is not None and admitted[0] == 'experimental_8fsk_musical_25'
     copies = list(copies)
     selected = resolve_profile(profile)
     cache_key = None
@@ -1482,6 +1492,7 @@ def decode_avatar_copies(copies, sample_rate, profile, *, checked=True, wire_ver
                 return copy.deepcopy(cached)
     header_count = AVATAR_META_V4_TONE_COUNT if checked and wire_version == 4 else AVATAR_META_TONE_COUNT
     frames, timing_hypotheses, best, best_metrics = [], [], None, None
+    best_raw_quality = None
     error = ValueError("no valid avatar identity header received yet")
     for audio in copies:
         start, offset, period = _announced_avatar_acquisition(audio, sample_rate, selected)
@@ -1520,12 +1531,11 @@ def decode_avatar_copies(copies, sample_rate, profile, *, checked=True, wire_ver
             timing_hypotheses.append(alternatives)
     if not frames:
         raise error
-    # Different capture lengths can include trailing guards; pool only the
-    # common complete symbol extent, never pad missing evidence with guesses.
-    all_frames = [frame for group in timing_hypotheses for frame in group]
-    count = min(len(c.evidence) for c in all_frames)
-    for frame in all_frames:
-        frame.evidence = frame.evidence[:count]
+    # Keep each hypothesis's complete extent. Trimming every copy to the
+    # shortest clock hypothesis discards valid raster tail symbols, and an
+    # incoming partial copy must not truncate an earlier complete copy.
+    # recovery_attempts combines only equal-shaped evidence; unequal lengths
+    # remain independent candidates.
     if selected.baud <= 50:
         def low_rate_attempts():
             primary = [group[0] for group in timing_hypotheses if group]
@@ -1536,7 +1546,7 @@ def decode_avatar_copies(copies, sample_rate, profile, *, checked=True, wire_ver
             for group in timing_hypotheses:
                 for alternative in group[1:]:
                     yield alternative.evidence, [alternative]
-            yield from hypothesis_attempts(timing_hypotheses, max_extra=32)
+            yield from hypothesis_attempts(timing_hypotheses, max_extra=32, include_primary=False)
         attempts = low_rate_attempts()
     else:
         attempts = recovery_attempts(frames)
@@ -1552,8 +1562,28 @@ def decode_avatar_copies(copies, sample_rate, profile, *, checked=True, wire_ver
             symbols[header_start:header_start+header_count] = header_tones
             diagnostic = diagnostics_for(used, len(frames))
             report = _avatar_metrics_report(symbols, metadata, metrics, len(used), diagnostic, None)
+            # A raw raster has no native CRC. Use the protected envelope's
+            # identity to select among timing/copy candidates before ranking
+            # provisional images by coverage or copy count.
+            if verify_raw:
+                from modem_envelope import report_content_id
+                candidate = {'pixels': report[0], 'card': report[1]}
+                if report_content_id(admitted[0], candidate).hex() == admitted[1]:
+                    return report
             if report[1].get('exact'):
                 return report
+            if verify_raw:
+                # Unverified pooling can scramble a good preview when a copy
+                # contains sample slips. Preserve a single-copy preview until
+                # a combination passes the protected digest. Prefer nominal
+                # timing; retain alternative singles if its header is damaged.
+                if len(used) != 1:
+                    continue
+                raw_quality = (any(used[0] is frame for frame in frames),
+                               sum(report[1].get('pixel_coverage') or []))
+                if best_raw_quality is None or raw_quality > best_raw_quality:
+                    best, best_metrics, best_raw_quality = report, metrics, raw_quality
+                continue
             quality=(sum(report[1].get('received_blocks') or []),
                      sum(report[1].get('pixel_coverage') or []), len(used))
             previous_quality=(-1,-1,-1) if best is None else (

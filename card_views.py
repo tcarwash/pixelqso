@@ -84,6 +84,31 @@ def stage_label(card):
     }.get(kind, 'IMAGE CARD')
 
 
+def format_card_id(card):
+    value = (card.get('card') or card).get('card_id')
+    if value is None:
+        return 'Not available'
+    try:
+        return f"0x{int(value) & 0xFFFF:04X}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def card_export_metadata(direction, report):
+    """Compact identity and both measured/reported SNR for PNG captions."""
+    card = report.get('card') or {}
+    parts = [f"Card ID {format_card_id(card)}"]
+    measured = card.get('measured_snr_db')
+    reported = card.get('snr_db')
+    if measured is not None:
+        parts.append(f"Measured {float(measured):+g} dB")
+    if reported is not None:
+        parts.append(f"Reported {float(reported):+g} dB")
+    if measured is None and reported is None:
+        parts.append('SNR unavailable')
+    return ' · '.join(parts)
+
+
 def deck_image(entry, image_for_card):
     """Render every stage in order as a shareable contact sheet."""
     events = deck_events(entry)
@@ -91,7 +116,7 @@ def deck_image(entry, image_for_card):
         raise ValueError('This contact has no saved cards to export.')
     columns = min(4, len(events))
     rows = (len(events) + columns - 1) // columns
-    image = QImage(columns * 260 + 32, rows * 350 + 116, QImage.Format.Format_RGB32)
+    image = QImage(columns * 260 + 32, rows * 380 + 116, QImage.Format.Format_RGB32)
     if image.isNull():
         raise ValueError('This contact is too large to render as one PNG.')
     image.fill(QColor(COLORS['card_art_background']))
@@ -105,7 +130,7 @@ def deck_image(entry, image_for_card):
         painter.drawText(QRectF(24, 54, image.width()-48, 30), Qt.AlignmentFlag.AlignLeft,
                          f"{entry.get('peer_grid', '')} · {entry.get('started_at', '')} · {entry.get('status', 'Saved')}")
         for index, (direction, card) in enumerate(events):
-            x, y = 16 + (index % columns)*260, 96 + (index // columns)*350
+            x, y = 16 + (index % columns)*260, 96 + (index // columns)*380
             meta = card.get('card') or {}
             provisional = direction == 'received_cards' and not bool(card.get('exact'))
             duplicate = direction == 'received_cards' and bool(card.get('duplicate_receipt'))
@@ -117,11 +142,49 @@ def deck_image(entry, image_for_card):
             direction_label = 'Sent' if direction == 'sent_cards' else 'Received'
             painter.drawText(QRectF(x, y+301, 260, 18), Qt.AlignmentFlag.AlignCenter,
                              f"{index+1} · {direction_label} · {stage_label(card)}")
-            font.setPixelSize(11); painter.setFont(font)
-            timestamp = card.get('logged_at') or 'Event time not recorded'
+            font.setPixelSize(10); painter.setFont(font)
             painter.drawText(QRectF(x, y+319, 260, 18), Qt.AlignmentFlag.AlignCenter,
+                             card_export_metadata(direction, card))
+            font.setPixelSize(10); painter.setFont(font)
+            timestamp = card.get('logged_at') or 'Event time not recorded'
+            painter.drawText(QRectF(x, y+338, 260, 18), Qt.AlignmentFlag.AlignCenter,
                              timestamp)
             font.setPixelSize(14); painter.setFont(font)
+    finally:
+        painter.end()
+    return image
+
+
+def single_card_image(direction, report, image_for_card):
+    """Render one deck card as a PNG with its identity and signal metadata."""
+    meta = report.get('card') or {}
+    art = image_for_card(report)
+    if art is None or art.isNull():
+        raise ValueError('This card has no usable image data.')
+    width, card_height, footer = 680, 800, 112
+    image = QImage(width, card_height + footer, QImage.Format.Format_RGB32)
+    if image.isNull():
+        raise ValueError('This card is too large to export.')
+    image.fill(QColor(COLORS['card_art_background']))
+    painter = QPainter(image)
+    try:
+        pixmap = card_art(art, str(meta.get('callsign') or 'Unknown station'),
+                          stage_label(report), QSize(640, card_height))
+        painter.drawPixmap(20, 0, pixmap)
+        painter.setPen(QColor(COLORS['card_title']))
+        font = QFont(); font.setPixelSize(18); font.setBold(True); painter.setFont(font)
+        direction_label = 'SENT' if direction == 'sent_cards' else 'RECEIVED'
+        painter.drawText(QRectF(24, card_height+6, width-48, 24),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         f"{direction_label} · {stage_label(report)}")
+        font.setPixelSize(14); font.setBold(False); painter.setFont(font)
+        painter.drawText(QRectF(24, card_height+32, width-48, 22),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         card_export_metadata(direction, report))
+        painter.drawText(QRectF(24, card_height+58, width-48, 22),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         f"{'Sent' if direction == 'sent_cards' else 'Received'} · "
+                         f"{report.get('logged_at') or 'time not recorded'}")
     finally:
         painter.end()
     return image
@@ -176,11 +239,12 @@ class ArtworkView(QLabel):
 class DeckDialog(QDialog):
     """Open a contact as a large card with a browsable chronological hand."""
     def __init__(self, entry, image_for_card, add_received_card=None, parent=None,
-                 export_contact=None):
+                 export_contact=None, export_card=None):
         super().__init__(parent)
         self.events = deck_events(entry); self.image_for_card = image_for_card
         self.add_received_card = add_received_card
         self.export_contact = export_contact
+        self.export_card = export_card
         self.entry = entry
         received_archive = entry.get('deck_type') == 'received_archive'
         callsign = entry.get('peer_callsign', 'Unknown')
@@ -261,6 +325,10 @@ class DeckDialog(QDialog):
         self.export_contact_button.clicked.connect(self._export_contact)
         self.export_contact_button.setVisible(self.export_contact is not None)
         actions.addWidget(self.export_contact_button)
+        self.export_card_button = QPushButton('Export selected card PNG…')
+        self.export_card_button.clicked.connect(self._export_selected_card)
+        self.export_card_button.setVisible(self.export_card is not None)
+        actions.addWidget(self.export_card_button)
         self.add_button = QPushButton('Add received card to My Cards')
         self.add_button.clicked.connect(self._add_current_received)
         actions.addWidget(self.add_button)
@@ -294,6 +362,15 @@ class DeckDialog(QDialog):
         target = self.export_contact()
         if target:
             self.share_status.setText(f"Contact exported to {target}")
+
+    def _export_selected_card(self):
+        index = self.strip.currentRow()
+        if self.export_card is None or not 0 <= index < len(self.events):
+            return
+        direction, card = self.events[index]
+        target = self.export_card(direction, card)
+        if target:
+            self.share_status.setText(f"Card exported to {target}")
 
     def _add_current_received(self):
         index = self.strip.currentRow()
@@ -342,7 +419,7 @@ class DeckDialog(QDialog):
             stage_label(card),
             f"From: {meta.get('callsign') or 'Unknown station'}",
             f"Grid: {meta.get('grid') or 'Not available'}",
-            f"Card ID: {meta.get('card_id') if meta.get('card_id') is not None else 'Not available'}",
+            f"Card ID: {format_card_id(meta)}",
             integrity,
             *snr_lines(meta, sent=direction == 'sent_cards'),
             f"Received: {card.get('logged_at') or 'time not recorded'}",

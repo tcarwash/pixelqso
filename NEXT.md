@@ -71,6 +71,8 @@ Before resuming modem/RX work, read [HF receive findings and resume notes](docs/
 
 ## Complete so far
 
+2026-10-13 deck export checkpoint: the contact-card flip includes the card ID; deck-page PNG exports for both the full deck and a selected single card include card ID plus measured and reported SNR when available. Missing SNR is labeled explicitly. The export artwork and captions are implemented and covered by focused tests; visual inspection in the running desktop UI and exported PNG viewer remains pending.
+
 The following work is implemented in the current worktree; it is not yet a distribution-ready redesign:
 
 - Navigation now uses **Operate**, **My Cards**, and **Contacts**. Settings, getting-started help, and About are reachable from the application menu; Station Settings has the `Ctrl+,` shortcut.

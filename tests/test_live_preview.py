@@ -17,7 +17,8 @@ from backend_adapters import (ADAPTERS, AdapterCapabilities, AdapterKind,
                               ExperimentalLocalAdapter, IntegrityScope,
                               register_adapter)
 from card_backends import get_backend
-from card_views import DeckDialog
+from card_views import (DeckDialog, card_export_metadata, deck_image,
+                        single_card_image)
 from card_transfer import CardAssemblyService, CardPreviewAssembler, fragment
 
 
@@ -1176,6 +1177,35 @@ class LivePreviewTests(unittest.TestCase):
                 self.assertLessEqual(pixmap.height(), window.receive_view.contentsRect().height())
             finally:
                 window.close()
+
+    def test_deck_flip_and_png_exports_include_card_id_and_snr(self):
+        from PySide6.QtGui import QImage
+        report = {
+            "card": {"callsign": "W1ABC", "card_id": 0x2A7C,
+                     "message_type": "exchange", "measured_snr_db": -12.5,
+                     "snr_db": -10},
+            "pixels": [0], "logged_at": "2026-03-01 12:00:00",
+        }
+        entry = {"peer_callsign": "W1ABC", "received_cards": [report], "sent_cards": []}
+        art = QImage(2, 2, QImage.Format.Format_RGB32)
+        art.fill(QColor("white"))
+        deck = DeckDialog(entry, lambda _report: art)
+        try:
+            deck.show_card(0)
+            deck.flip_card()
+            self.assertIn("Card ID: 0x2A7C", deck.card_back.text())
+            self.assertIn("-12.5 dB", deck.card_back.text())
+            self.assertIn("-10 dB", deck.card_back.text())
+
+            caption = card_export_metadata("received_cards", report)
+            self.assertIn("Card ID 0x2A7C", caption)
+            self.assertIn("Measured -12.5 dB", caption)
+            self.assertIn("Reported -10 dB", caption)
+            self.assertFalse(deck_image(entry, lambda _report: art).isNull())
+            self.assertFalse(single_card_image(
+                "received_cards", report, lambda _report: art).isNull())
+        finally:
+            deck.close()
 
     def test_callsign_archive_aggregates_received_cards_only_across_sessions(self):
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(

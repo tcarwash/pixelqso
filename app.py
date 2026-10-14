@@ -55,7 +55,8 @@ from data2g_runtime import (data2g_audio_device_selector,
                             local_host_arguments, local_host_command,
                             validate_data2g_ports)
 from on_air import SessionRecorder, card_reference, decoded_reference
-from card_views import DeckDialog, card_art, deck_events, deck_image, incoming_card_text
+from card_views import (DeckDialog, card_art, deck_events, deck_image,
+                        incoming_card_text, single_card_image)
 from webserver import CompanionServer
 from ui_theme import (COLORS, SPACING, build_app_stylesheet, palette_swatch_style,
                       semantic_text_style, status_label_style)
@@ -2699,8 +2700,37 @@ class MainWindow(QMainWindow):
             entry, self.card_image, add_received, self,
             export_contact=lambda: self._export_qso_archive(
                 str(path) if path is not None else
-                f"received-callsign:{entry.get('peer_callsign', '')}", deck))
+                f"received-callsign:{entry.get('peer_callsign', '')}", deck),
+            export_card=lambda direction, report: self._export_deck_card_png(
+                direction, report, deck))
         deck.exec()
+
+    def _export_deck_card_png(self, direction, report, dialog_parent=None):
+        dialog_parent = dialog_parent or self
+        card = report.get("card") or {}
+        callsign = "".join(ch if ch.isalnum() or ch in "-_" else "_"
+                           for ch in str(card.get("callsign", "Unknown")))
+        card_id = card.get("card_id")
+        id_label = f"{int(card_id) & 0xffff:04X}" if card_id is not None else "unknown-id"
+        stage = "".join(ch if ch.isalnum() or ch in "-_" else "_"
+                        for ch in str(card.get("message_type", "card")))
+        name, _ = QFileDialog.getSaveFileName(
+            dialog_parent, "Export selected card PNG",
+            str(DATA / "exports" / f"card-{callsign}-{id_label}-{stage}.png"),
+            "PNG image (*.png)")
+        if not name:
+            return None
+        target = Path(name).with_suffix(".png")
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            image = single_card_image(direction, report, self.card_image)
+            if not image.save(str(target), "PNG"):
+                raise OSError("Qt could not write the card PNG")
+            self.log_status.setText(f"Exported card to {target.name}")
+            return target
+        except Exception as exc:
+            QMessageBox.warning(dialog_parent, "Couldn't export card", str(exc))
+            return None
 
     def add_received_card_to_library(self, report, qso_path):
         source = report.get("card") or {}

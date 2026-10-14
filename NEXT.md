@@ -232,3 +232,41 @@ Testing has resumed as WebSDR receive-only on 7066 kHz. It records raw PCM under
 ### 2026-10-13 — Exclude Data2G ACK/reply radio modes
 
 At KC2G's request, card-data discovery and the mode catalog exclude `ack-*` and band-prefixed ACK/reply modes. The adapter also rejects direct selection of those modes; saved selections fall through the existing unavailable-mode fallback. KISS ACKMODE remains the separate local-transmission completion/pacing mechanism. Mode policy and adapter checks passed (23 tests); rendered UI, live host, and RF behavior remain unverified for this change.
+
+## 2026-10-14 — Hide standalone automatic exchange; stop responding
+
+The unfinished Automatic exchange choice is hidden from the send-type popup and disabled for keyboard selection; existing internal indices and CQ/Reply sequencing remain intact. A visible **Stop responding to CALL** action beside received-card reply controls cancels the current peer exchange, invalidates pending delayed sends, stops local TX or cancels queued Data2G transmissions through the existing stop path, clears reply/quick-draw context, and resumes listening. Cards from that peer no longer recreate a reply prompt during this session; other peers remain available. A host frame already in flight retains the existing cancellation limitation.
+
+Two focused UI tests pass: cancellation prevents a scheduled transmit, clears timers/state, suppresses the stopped peer prompt, and allows a new peer; existing reply-sequence coverage still passes. An offscreen render confirmed the full Stop responding to K1ABC label is readable; live window placement remains unverified. Running instances/container have not been restarted; physical audio/PTT and host-frame cancellation are unverified.
+
+## 2026-10-14 — Retain quick-draw resend buffer
+
+Completed transmissions still archive the quick-draw card in My Cards/Sent Cards, and now retain its in-memory send buffer. Stop responding also preserves that drawing while clearing peer/reply state. The Send quick draw action remains available for resending; Clear quick draw explicitly discards the buffer and a new drawing replaces it. This buffer is session-local, with the sent-library archive remaining persistent. An offscreen smoke check covers completion, two sends using the same buffered card, preservation after Stop responding, and explicit clearing. Running windows/container still require restart; live playback/resend has not been exercised.
+
+## 2026-10-14 — Beacon selector and stable receiver status
+
+Beacon now hides the four contact-stage rows and shows one Card selector, with Current drawing as its default. Both local modem and Data2G beacon sends use that selector. Returning to Manual send restores the stage rows. Receive status reserves three lines, wraps within its allocated width, and provides the full message as a tooltip; its size hints no longer depend on modem-name length. The status height updates with interface text scaling.
+
+Two focused tests pass: single-selector beacon routing and stable control geometry while switching short/long receive status at 100% and 115% text sizes, plus existing periodic-beacon checks. The offscreen Beacon render confirms a single readable selector and an unclipped receiver-status area. Running desktop/container instances have not been restarted; live beacon transmission and live receive-all behavior remain unverified.
+
+## 2026-10-14 — Remove rapid modem-attempt status
+
+The live worker's per-modem progress signal no longer updates the receiver status; the unused UI handler was removed. Signal/card reception, verification, final decoded mode, and completion/error messages remain. The stable status-area geometry check now uses ordinary reception messages. Syntax compilation and diff checks passed; running instances still need restart.
+
+## 2026-10-14 — Settings Apply and CAT connection clarity
+
+Apply remains enabled whenever the station is idle, including after a live CAT connection with no pending settings edits. Applying an unchanged snapshot closes the dialog without rewriting preferences or reconnecting. The dismiss button says Close when unchanged and Cancel when edits are pending; its tooltip distinguishes live connection actions from staged preferences. Cancellation restores controls while the settings-editing guard is still active and then clears the baseline, avoiding persistence callbacks during rollback. Existing CAT connection-state callbacks already refresh the Apply/reconnect choice and are retained.
+
+Four focused offscreen tests passed: audio-device edits remain unpersisted until Apply, Cancel restores the selected device and stored preference, connected audio edits dispatch Apply and reconnect, and CAT connection without edits can close via Apply without saving. Existing settings rollback, persistence, and reconnect coverage also passed. No running app was restarted; real CAT/audio reconnection remains unverified.
+
+## 2026-10-14 — Move file decode under Advanced controls
+
+The Receive box, including Decode audio file, now follows the existing persisted Advanced controls toggle. It remains available when advanced controls are enabled. Static diff check only; no runtime or UI test was run for this small visibility change.
+
+## 2026-10-14 — Keep RX mode status aligned with selection
+
+RX-only receive-all and preferred-decoder controls stay behind Advanced. When receive-all is off, the listening/activity status now reports the selected transfer mode instead of a stale previously detected decoder; explicit per-card decoder reports still show the actual mode that decoded that card. Static diff check only; no tests or runtime UI check were run.
+
+## 2026-10-14 — Keep the audio waterfall in the standard receiver view
+
+The receive progress/status line above Quick Draw now follows the Advanced controls toggle. The audio waterfall stays visible for local audio modem modes in the standard view; Data2G continues to omit it because that backend receives decoded frames from its host. Static diff check only; no tests or runtime UI check were run.

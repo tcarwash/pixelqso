@@ -167,6 +167,57 @@ class TransferControlTests(unittest.TestCase):
             finally:
                 window.close()
 
+    def test_audio_settings_apply_cancel_and_unchanged_cat_connection(self):
+        with tempfile.TemporaryDirectory() as folder, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": folder}), patch("app.QTimer.singleShot"):
+            Path(folder, 'settings.ini').write_text(
+                '[options]\nbackend=experimental\nshow_experimental_modes=true\n'
+                '[radio]\nauto_connect_cat=false\n')
+            window = pixelqso.MainWindow()
+            try:
+                original = window.input_device.currentIndex()
+                window.input_device.addItem('Alternate test input', pixelqso.QMediaDevices.defaultAudioInput())
+                alternate = window.input_device.count() - 1
+                saved_name = window.settings.value('audio/input_device/name')
+                def cancel_audio(dialog):
+                    self.assertTrue(window.station_settings_apply_button.isEnabled())
+                    self.assertEqual(window.station_settings_cancel_button.text(), 'Close')
+                    window.input_device.setCurrentIndex(alternate)
+                    self.assertTrue(window.station_settings_apply_button.isEnabled())
+                    self.assertEqual(window.station_settings_cancel_button.text(), 'Cancel')
+                    self.assertEqual(window.settings.value('audio/input_device/name'), saved_name)
+                    return pixelqso.QDialog.DialogCode.Rejected
+                with patch('app.QDialog.exec', new=cancel_audio):
+                    window.open_station_settings()
+                self.assertEqual(window.input_device.currentIndex(), original)
+                self.assertEqual(window.settings.value('audio/input_device/name'), saved_name)
+                def apply_audio(dialog):
+                    window.input_device.setCurrentIndex(alternate)
+                    self.assertFalse(window.station_settings_reconnect_button.isHidden())
+                    self.assertTrue(window.station_settings_reconnect_button.isEnabled())
+                    window._apply_station_settings(reconnect=True)
+                    return dialog.result()
+                with patch.object(window.rig, 'connected', return_value=True), \
+                        patch.object(window, '_reconnect_rig_after_settings') as reconnect, \
+                        patch('app.QDialog.exec', new=apply_audio):
+                    window.open_station_settings()
+                    reconnect.assert_called_once()
+                self.assertEqual(window.settings.value('audio/input_device/name'), 'Alternate test input')
+                def connected_without_edits(dialog):
+                    with patch.object(window, 'read_rig'):
+                        window.rig_changed(True, 'CAT connected')
+                    self.assertTrue(window.station_settings_apply_button.isEnabled())
+                    self.assertEqual(window.station_settings_cancel_button.text(), 'Close')
+                    window._apply_station_settings()
+                    return dialog.result()
+                with patch.object(window.rig, 'connected', return_value=True), \
+                        patch.object(window, 'save_station_settings') as save, \
+                        patch('app.QDialog.exec', new=connected_without_edits):
+                    window.open_station_settings()
+                    save.assert_not_called()
+            finally:
+                window.close()
+
     def test_station_settings_apply_persists_changes(self):
         with tempfile.TemporaryDirectory() as folder, patch.dict(
                 os.environ, {"PIXELQSO_DATA_DIR": folder}), patch("app.QTimer.singleShot"), \
@@ -219,6 +270,94 @@ class TransferControlTests(unittest.TestCase):
                 reconnect.assert_called_once()
             finally:
                 window.close()
+
+    def test_beacon_uses_single_selector_and_receive_status_keeps_geometry(self):
+        old_data = pixelqso.DATA
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"PIXELQSO_DATA_DIR": folder}), \
+                patch("app.QTimer.singleShot"):
+            Path(folder, "settings.ini").write_text('[radio]\nauto_connect_cat=false\n')
+            window = pixelqso.MainWindow()
+            try:
+                import json
+                card_path = Path(folder, 'beacon-card.json')
+                card = window.card
+                card_path.write_text(json.dumps(dict(callsign='K1ABC', grid='FN42',
+                    palette=card.palette, pixels=card.pixels, card_id=1234,
+                    width=card.width, height=card.height)))
+                window.card_combo.addItem('Beacon fixture', str(card_path))
+                window.card_combo.setCurrentIndex(window.card_combo.count() - 1)
+                window.exchange_mode.setCurrentIndex(2)
+                window._set_advanced_controls(True)
+                self.assertTrue(window.auto_stage_group.isHidden())
+                self.assertFalse(window.manual_card_widget.isHidden())
+                self.assertEqual(window._chosen_card().card_id, 1234)
+                with patch.object(window, 'selected_adapter', return_value=pixelqso.DATA2G_ADAPTER), \
+                        patch.object(window, 'selected_backend', return_value=Mock()), \
+                        patch.object(window, '_prepare_data2g_transmission') as send:
+                    window.transmit_beacon()
+                    self.assertEqual(send.call_args.kwargs['card_override'].card_id, 1234)
+                window.show()
+                for percent in (100, 115):
+                    window._apply_interface_text_size(percent)
+                    window.resize(1024, 768)
+                    window.rx_status.setText('Receiving signal · checking card data')
+                    # Font/style changes enqueue several layout passes before
+                    # the window reaches its minimum size at this text scale.
+                    for _ in range(5):
+                        self.app.processEvents()
+                    before = [widget.geometry() for widget in (
+                        window.rx_status, window.beacon_button, window.card_combo,
+                        window.listen_indicator, window.exchange_log)]
+                    window.rx_status.setText('Receiving card from K1ABC · identity received · checking card integrity and other enabled modes')
+                    for _ in range(5):
+                        self.app.processEvents()
+                    self.assertEqual(before, [widget.geometry() for widget in (
+                        window.rx_status, window.beacon_button, window.card_combo,
+                        window.listen_indicator, window.exchange_log)])
+                window.exchange_mode.setCurrentIndex(0)
+                self.assertFalse(window.auto_stage_group.isHidden())
+            finally:
+                window._apply_interface_text_size(100)
+                window.close()
+                pixelqso.DATA = old_data
+
+    def test_stop_responding_cancels_pending_send_and_suppresses_peer_prompt(self):
+        old_data = pixelqso.DATA
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"PIXELQSO_DATA_DIR": folder}), \
+                patch("app.QTimer.singleShot") as timer:
+            Path(folder, "settings.ini").write_text('[radio]\nauto_connect_cat=false\n')
+            window = pixelqso.MainWindow()
+            try:
+                self.assertFalse(window.exchange_mode.model().item(1).isEnabled())
+                self.assertTrue(window.exchange_mode.view().isRowHidden(1))
+                report = {"card": {"callsign": "K1ABC", "message_type": "cq"}}
+                window.auto_armed = True
+                window.auto_role = "responder"
+                window.auto_peer = "K1ABC"
+                window.contact_stage = "send_exchange"
+                window.reply_report = report
+                window._refresh_contact_stage_indicator()
+                self.assertFalse(window.stop_responding_button.isHidden())
+                window._schedule_contact_transmit()
+                pending_send = timer.call_args.args[1]
+                with patch.object(window, "transmit_exchange") as transmit:
+                    window.stop_responding()
+                    pending_send()
+                    transmit.assert_not_called()
+                self.assertFalse(window.auto_armed)
+                self.assertIsNone(window.reply_report)
+                self.assertFalse(window.auto_receive_timer.isActive())
+                self.assertFalse(window.cq_timer.isActive())
+                self.assertTrue(window.stop_responding_button.isHidden())
+                window._show_reply_action(report)
+                self.assertIsNone(window.reply_report)
+                self.assertTrue(window.reply_to_button.isHidden())
+                window._show_reply_action({"card": {"callsign": "K2DEF", "message_type": "cq"}})
+                self.assertEqual(window.reply_report['card']['callsign'], 'K2DEF')
+                self.assertFalse(window.reply_to_button.isHidden())
+            finally:
+                window.close()
+                pixelqso.DATA = old_data
 
     def test_automatic_reply_sequences_and_ignores_duplicate_stages(self):
         old_data = pixelqso.DATA

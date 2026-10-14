@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QListWidget
     QFormLayout, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QInputDialog,
     QMessageBox, QPushButton, QSpinBox, QTabWidget, QTextEdit, QDialog,
     QVBoxLayout, QWidget, QButtonGroup, QScrollArea, QTableView, QAbstractItemView, QFrame, QCheckBox, QGroupBox,
-    QStackedWidget, QProgressBar, QMenu)
+    QStackedWidget, QProgressBar, QMenu, QSizePolicy)
 
 import cardmodem as modem
 from card_ids import allocate_card_id
@@ -158,6 +158,20 @@ def received_card_key(report):
 def session_wall_card_key(report):
     """Stable identity for one card while provisional snapshots improve."""
     return received_card_key(report)
+
+
+class ReceiveStatusLabel(QLabel):
+    """Keep decoder progress text out of the surrounding layout's sizing."""
+
+    def sizeHint(self):
+        return QSize(0, self.fontMetrics().lineSpacing() * 3 + 4)
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+    def setText(self, text):
+        super().setText(text)
+        self.setToolTip(text)
 
 
 class RigctlClient(QObject):
@@ -1873,6 +1887,7 @@ class MainWindow(QMainWindow):
         self.contact_stage = "idle"
         self.call_cq_active = False
         self.reply_report = None
+        self.stopped_reply_peers = set()
         self.quick_reply_card = None
         self.quick_draw_active = False
         self.last_cq_snapshot = None
@@ -2208,7 +2223,9 @@ class MainWindow(QMainWindow):
         stage_selected = {stage: combo.currentData() or self.settings.value("transfer/card_" + stage)
                           for stage, combo in getattr(self, "stage_card_combos", {}).items()}
         for combo in getattr(self, "stage_card_combos", {}).values(): combo.clear()
-        if hasattr(self, "card_combo"): self.card_combo.clear()
+        if hasattr(self, "card_combo"):
+            self.card_combo.clear()
+            self.card_combo.addItem("Current drawing", None)
         self.library_list.clear()
         card_sources = [*((path, "my") for path in folder.glob("*.json")),
                         *((path, "sent") for path in sent_folder.glob("*.json")),
@@ -2411,7 +2428,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "quick_draw_status"):
             return
         ready = self.quick_reply_card is not None
-        self.quick_draw_status.setText("Quick-draw card ready to send" if ready else "")
+        self.quick_draw_status.setText("Quick-draw card buffered · ready to send again" if ready else "")
         self.clear_quick_draw_button.setVisible(ready)
         self.quick_draw_send_button.setVisible(
             ready and self.exchange_mode.currentIndex() == 0 and not self.auto_armed)
@@ -3874,6 +3891,10 @@ class MainWindow(QMainWindow):
         if self.data2g_audio_config_errors:
             self.data2g_host_status.setText(self._data2g_audio_config_error_message())
         self.exchange_mode = QComboBox(); self.exchange_mode.addItems(["Manual send", "Automatic exchange", "Beacon"])
+        # Keep internal stage indices stable; the unfinished standalone mode
+        # is unavailable in both the popup and keyboard navigation.
+        self.exchange_mode.model().item(1).setEnabled(False)
+        self.exchange_mode.view().setRowHidden(1, True)
         self.exchange_mode.setToolTip(
             "Manual send sends the selected card once. Automatic exchange manages a CQ or reply sequence. "
             "Beacon repeats your card at the chosen interval.")
@@ -4143,6 +4164,7 @@ class MainWindow(QMainWindow):
 
         wav_button = QPushButton("Decode audio file…"); wav_button.clicked.connect(self.decode_wav)
         receive_group = QGroupBox("Receive")
+        self.receive_group = receive_group
         receive_layout = QHBoxLayout(receive_group)
         self.receive_status_hint = QLabel()
         self.receive_status_hint.setWordWrap(True)
@@ -4249,15 +4271,26 @@ class MainWindow(QMainWindow):
         wall_layout.addWidget(self.receive_preview_box, 0)
         self.receive_stack.setCurrentWidget(self.session_wall_page)
         right_panel.addWidget(self.receive_stack, 1)
-        self.rx_status = QLabel("Ready to receive")
+        self.rx_status = ReceiveStatusLabel("Ready to receive")
         self.rx_status.setObjectName("receiveStatus")
+        self.rx_status.setWordWrap(True)
+        self.rx_status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.rx_status.setFixedHeight(self.rx_status.sizeHint().height())
         self.rx_status.setAccessibleDescription("Current receive progress, verification result, or recovery guidance.")
+        self.rx_status.setVisible(
+            self.settings.value("ui/advanced_controls", False, type=bool))
         right_panel.addWidget(self.rx_status)
         right_panel.addWidget(receive_group)
         self.reply_to_button = QPushButton("Reply to CQ")
         self.reply_to_button.setVisible(False)
         self.reply_to_button.clicked.connect(self.reply_to_received)
         right_panel.addWidget(self.reply_to_button)
+        self.stop_responding_button = QPushButton("Stop responding")
+        self.stop_responding_button.setVisible(False)
+        self.stop_responding_button.setToolTip(
+            "Cancel this contact and pending replies, stop transmission, and keep listening.")
+        self.stop_responding_button.clicked.connect(self.stop_responding)
+        right_panel.addWidget(self.stop_responding_button)
         self.quick_draw_button = QPushButton("Quick draw")
         self.quick_draw_button.setToolTip("Sketch a card while receiving or transmitting; use it for the next manual send.")
         self.quick_draw_button.clicked.connect(self.start_quick_draw_reply)
@@ -4312,10 +4345,14 @@ class MainWindow(QMainWindow):
         self.receive_all_modes.setVisible(enabled and receive_all_supported)
         self.receive_all_modes_label.setVisible(enabled and receive_all_supported)
         self.exchange_mode.setVisible(enabled)
+        if hasattr(self, "rx_status"):
+            self.rx_status.setVisible(enabled)
+        if hasattr(self, "receive_group"):
+            self.receive_group.setVisible(enabled)
         # Stage send controls are part of the everyday Operate workflow, not
         # an advanced-only setting. Keep their parent visible across backend
         # reconnects and advanced-control toggles.
-        self.auto_stage_group.setVisible(True)
+        self.auto_stage_group.setVisible(self.exchange_mode.currentIndex() != 2)
         if hasattr(self, "rx_visual_stack"):
             self._update_backend_ui()
 
@@ -4549,6 +4586,8 @@ class MainWindow(QMainWindow):
         self._refresh_listen_indicator_width()
 
     def _refresh_listen_indicator_width(self):
+        if hasattr(self, "rx_status"):
+            self.rx_status.setFixedHeight(self.rx_status.sizeHint().height())
         if not hasattr(self, "listen_indicator"):
             return
         receiver_states = ("● HOST DISCONNECTED", "● NOT CONNECTED", "● CONNECTING",
@@ -4666,8 +4705,12 @@ class MainWindow(QMainWindow):
         active = self._station_operation_active()
         self.station_settings_apply_button.setVisible(not reconnect)
         self.station_settings_reconnect_button.setVisible(reconnect)
-        self.station_settings_apply_button.setEnabled(changed and not active)
-        self.station_settings_reconnect_button.setEnabled(changed and not active)
+        self.station_settings_apply_button.setEnabled(not active)
+        self.station_settings_reconnect_button.setEnabled(not active)
+        self.station_settings_cancel_button.setText("Cancel" if changed else "Close")
+        self.station_settings_cancel_button.setToolTip(
+            "Discard pending settings edits; live connection actions remain in effect."
+            if changed else "Close settings; live connection actions remain in effect.")
         if active:
             message = "Stop the active transmission, exchange, or beacon before applying station settings."
             tone = "warning"
@@ -4681,7 +4724,7 @@ class MainWindow(QMainWindow):
             message = "Your changes are ready to apply."
             tone = "muted"
         else:
-            message = "Changes are saved only when you apply them."
+            message = "No pending settings edits. Apply or Close to return to the app."
             tone = "muted"
         self.station_settings_notice.setText(message)
         self.station_settings_notice.setStyleSheet(semantic_text_style(tone, padding="2px"))
@@ -4705,11 +4748,14 @@ class MainWindow(QMainWindow):
         self._station_settings_reconnect = None
         self._update_station_settings_actions()
         result = self.station_dialog.exec()
-        self._station_settings_editing = False
         if result != QDialog.DialogCode.Accepted:
             self._restore_station_settings(self._station_settings_baseline)
+            self._station_settings_editing = False
+            self._station_settings_baseline = None
+            self._station_settings_reconnect = None
             self._restore_station_settings_connection_controls()
             return
+        self._station_settings_editing = False
         reconnect = self._station_settings_reconnect
         backend_changed = (
             self._station_settings_baseline["values"].get("backend_combo") !=
@@ -4788,6 +4834,9 @@ class MainWindow(QMainWindow):
     def _apply_station_settings(self, reconnect=False):
         if self._station_operation_active():
             self._update_station_settings_actions()
+            return
+        if self._station_settings_values() == self._station_settings_baseline:
+            self.station_dialog.accept()
             return
         try:
             DATA2G_ADAPTER.validate_station_call(self.station_call.text().strip())
@@ -5703,8 +5752,7 @@ class MainWindow(QMainWindow):
             self.auto_connect_cat.setToolTip(
                 "Used by local modem modes; Data2G handles radio control while its backend is active.")
         if hasattr(self, "rx_visual_stack"):
-            advanced = self.settings.value("ui/advanced_controls", False, type=bool)
-            show_spectrum = capabilities.spectrum and advanced and not host_busy
+            show_spectrum = capabilities.spectrum and not host_busy
             self.rx_visual_stack.setVisible(show_spectrum)
             if show_spectrum:
                 self.rx_visual_stack.setCurrentWidget(self.rx_waterfall)
@@ -5953,7 +6001,7 @@ class MainWindow(QMainWindow):
             self.quick_reply_card is not None and not automatic and not beacon and not self.auto_armed)
         legacy = self.selected_mode() == "standard"
         self.role_widget.setVisible(False)
-        self.auto_stage_group.setVisible(True)
+        self.auto_stage_group.setVisible(not beacon)
         for button in self.manual_stage_buttons.values():
             button.setEnabled(True)
         for button in self.stage_send_buttons.values():
@@ -5961,8 +6009,8 @@ class MainWindow(QMainWindow):
             button.setEnabled(True)
         for combo in self.stage_card_combos.values():
             combo.setEnabled(not self.auto_armed)
-        self.manual_card_widget.setVisible(not automatic and not beacon and legacy)
-        self.manual_card_label.setVisible(not automatic and not beacon and legacy)
+        self.manual_card_widget.setVisible(beacon or (not automatic and legacy))
+        self.manual_card_label.setVisible(beacon or (not automatic and legacy))
         self.auto_controls.setVisible(automatic)
         self.auto_start_btn.setVisible(False)
         self.auto_stop_btn.setVisible(self.auto_armed)
@@ -6028,6 +6076,11 @@ class MainWindow(QMainWindow):
                 button.update()
 
     def _refresh_contact_stage_indicator(self):
+        if hasattr(self, "stop_responding_button"):
+            responding = self.auto_armed and bool(self.auto_peer)
+            self.stop_responding_button.setVisible(responding)
+            self.stop_responding_button.setText(
+                f"Stop responding to {self.auto_peer}" if responding else "Stop responding")
         buttons = getattr(self, "manual_stage_buttons", None)
         if not buttons:
             return
@@ -6367,7 +6420,11 @@ class MainWindow(QMainWindow):
         """Return the active RX mode, resolving receive-all to the winning decoder."""
         if profile == "auto":
             return "all enabled modes"
-        profile = profile or self.rx_live_profile
+        # In single-mode receive, the selected transfer mode is authoritative.
+        # A previously detected decoder may remain useful for receive-all,
+        # but must not make the status disagree with the user's selection.
+        if profile is None and self.receive_mode() == "auto":
+            profile = self.rx_live_profile
         if profile:
             if is_card_backend(profile):
                 return get_backend(profile).label
@@ -6875,7 +6932,7 @@ class MainWindow(QMainWindow):
         if on_complete: on_complete(bool(self.rig_freq_read and self.rig_mode))
 
     def _chosen_card(self):
-        stage_combo = (self._auto_stage_card_combo()
+        stage_combo = (None if self.exchange_mode.currentIndex() == 2 else self._auto_stage_card_combo()
                        if self.exchange_mode.currentIndex() == 1 else
                        self.stage_card_combos.get(self._outgoing_message_type()))
         selected_path = stage_combo.currentData() if stage_combo is not None else None
@@ -6999,6 +7056,7 @@ class MainWindow(QMainWindow):
         card = (report or {}).get("card") or {}
         if not card:
             return
+        self.stopped_reply_peers.discard(str(card.get("callsign") or "").strip().upper())
         stage = card.get("message_type", "card")
         if stage == "cq":
             if self.auto_armed or not self._assembly_verified(report):
@@ -7026,6 +7084,8 @@ class MainWindow(QMainWindow):
 
     def _show_reply_action(self, report):
         card = report.get("card") or {}
+        if str(card.get("callsign") or "").strip().upper() in self.stopped_reply_peers:
+            return
         self.reply_report = report
         if self.auto_armed:
             self.reply_to_button.setVisible(False)
@@ -7055,6 +7115,23 @@ class MainWindow(QMainWindow):
             if quick_reply else
             "Sketch a card while receiving or transmitting; use it for the next manual send.")
         self.quick_draw_button.setVisible(self.exchange_mode.currentIndex() == 0 and not self.auto_armed)
+        self._refresh_operate_primary_action()
+
+    def stop_responding(self):
+        peer = self.auto_peer or str((self.reply_report or {}).get("card", {}).get("callsign") or "")
+        if peer:
+            self.stopped_reply_peers.add(peer.strip().upper())
+        self.reply_report = None
+        self.auto_generation += 1
+        self.auto_armed = False
+        if self.data2g_tx_total:
+            self._stop_current_transmit()
+        self.stop_auto_exchange(f"Stopped responding to {peer or 'this station'}; continuing to listen.")
+        self.contact_stage = "idle"
+        self.tx_snr_db = None
+        self.reply_to_button.hide()
+        self.exchange_mode.setCurrentIndex(0)
+        self._refresh_contact_stage_indicator()
         self._refresh_operate_primary_action()
 
     @staticmethod
@@ -7770,13 +7847,7 @@ class MainWindow(QMainWindow):
         if message in {"Transmit complete; releasing PTT.", "Audio playback complete."}:
             if self.tx_quick_draw_card is not None:
                 try:
-                    if self._save_quick_draw_to_sent_library(self.tx_quick_draw_card):
-                        current = self.quick_reply_card
-                        sent = self.tx_quick_draw_card
-                        if (current is not None and current.card_id == sent.card_id
-                                and current.callsign == sent.callsign and current.grid == sent.grid
-                                and current.pixels == sent.pixels):
-                            self.quick_reply_card = None
+                    self._save_quick_draw_to_sent_library(self.tx_quick_draw_card)
                 except OSError as exc:
                     self.exchange_log.append(f"Couldn't save sent quick draw to My Cards: {exc}")
         self.tx_card = None
@@ -7891,7 +7962,7 @@ class MainWindow(QMainWindow):
             self.update_identity()
             self.tx_snr_db = None
             self._prepare_data2g_transmission(
-                backend, message_type="card", card_override=self.card, beacon=True)
+                backend, message_type="card", card_override=self._chosen_card(), beacon=True)
             return
         if not self.rig.connected():
             QMessageBox.warning(self, "CAT unavailable", "Connect to rigctld to send a beacon at the current radio frequency.")
@@ -7918,8 +7989,8 @@ class MainWindow(QMainWindow):
             return
         try:
             self.update_identity()
-            self.card.validate()
-            audio = self._append_cwid_audio(self._card_tx_audio(self.card, beacon=True))
+            card = self._chosen_card()
+            audio = self._append_cwid_audio(self._card_tx_audio(card, beacon=True))
             self.tx_bytes = pcm16_audio_bytes(audio)
             self.tx_offset = 0
             self.tx_deadline = len(audio) / modem.SAMPLE_RATE + 8.0
@@ -8284,16 +8355,8 @@ class MainWindow(QMainWindow):
         self.live_decode_workers[token] = worker
         worker.signals.finished.connect(self._live_decode_finished)
         worker.signals.preview.connect(self._live_decode_preview)
-        worker.signals.progress.connect(self._live_decode_progress)
         self.live_decode_inflight = True
         self.decode_pool.start(worker)
-
-    def _live_decode_progress(self, result):
-        generation, mode = result
-        if not self._live_decode_generation_current(generation):
-            return
-        self.rx_status.setText(
-            f"Trying RX modem: {self._receive_mode_label(mode)} · receive-all scan")
 
     def _merge_live_preview(self, report):
         snapshot, improved = self.card_assembly.merge_preview(report)

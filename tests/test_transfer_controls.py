@@ -184,6 +184,22 @@ class TransferControlTests(unittest.TestCase):
             finally:
                 window.close()
 
+    def test_interlaced_preference_remains_selectable_in_any_mode(self):
+        with tempfile.TemporaryDirectory() as folder, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": folder}), patch("app.QTimer.singleShot"):
+            window = pixelqso.MainWindow()
+            try:
+                def inspect_interlace_setting(_dialog):
+                    self.assertTrue(window.interlaced_copies.isEnabled())
+                    window.interlaced_copies.setChecked(True)
+                    window.interlaced_copies.setChecked(False)
+                    self.assertFalse(window.interlaced_copies.isChecked())
+                    return pixelqso.QDialog.DialogCode.Rejected
+                with patch("app.QDialog.exec", new=inspect_interlace_setting):
+                    window.open_station_settings()
+            finally:
+                window.close()
+
     def test_station_settings_apply_and_reconnect_dispatches_after_apply(self):
         with tempfile.TemporaryDirectory() as folder, patch.dict(
                 os.environ, {"PIXELQSO_DATA_DIR": folder}), patch("app.QTimer.singleShot"), \

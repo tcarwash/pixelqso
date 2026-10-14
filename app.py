@@ -6275,11 +6275,15 @@ class MainWindow(QMainWindow):
                 framing + compression)
             if hasattr(self, "interlaced_copies"):
                 supported = bool(getattr(backend, "supports_interlaced_copies", False))
-                self.interlaced_copies.setEnabled(supported and maximum > 1)
+                # Keep the global preference editable in every mode so the
+                # operator can turn it off even when the selected encoder
+                # currently ignores it (or copies are temporarily set to 1).
+                self.interlaced_copies.setEnabled(True)
                 self.interlaced_copies.setToolTip(
                     "Stagger LDPC/RS block order across protected copies; the receiver restores each block before combining."
-                    if supported else
-                    "This local modem format does not yet support interlaced copies.")
+                    if supported and maximum > 1 else
+                    "Interlaced copies apply to supported local modem modes when sending multiple copies. "
+                    "This preference remains available so you can turn it off here.")
         legacy = self.selected_mode() == "standard"
         if hasattr(self, "manual_card_widget"):
             show_legacy_card = legacy and self.exchange_mode.currentIndex() != 2

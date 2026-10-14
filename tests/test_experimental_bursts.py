@@ -38,6 +38,17 @@ class ExperimentalBurstTests(unittest.TestCase):
         self.assertTrue(merged["assembly_event"]["verified_complete"])
         self.assertEqual(merged["assembly_event"]["verification_scope"], "whole_raster_crc32")
 
+    def test_interlaced_setting_reaches_decorated_burst_encoder(self):
+        backend = get_backend("experimental_8fsk_outer_rs")
+        expected = np.zeros(32, dtype=np.float32)
+        with patch("modem_envelope.transmit_interlaced", return_value=expected) as transmit:
+            result = EXPERIMENTAL_ADAPTER.encode(
+                backend, self.card, 3, "cq", None, interlaced=True)
+        self.assertIs(result, expected)
+        transmit.assert_called_once()
+        self.assertEqual(transmit.call_args.args[:3],
+                         ("experimental_8fsk_outer_rs", self.card, 3))
+
     def test_four_modes_are_gated_and_share_copy_policy(self):
         self.assertFalse(set(burst.MODE_KEYS) & {key for key, _ in available_modes()})
         self.assertTrue(set(burst.MODE_KEYS) <= {key for key, _ in available_modes(include_experimental=True)})

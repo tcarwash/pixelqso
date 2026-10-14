@@ -486,8 +486,11 @@ class ExperimentalBurstBackend:
 
 def _with_copy_header(cls):
     encode_payload, decode_payload, estimate_payload = cls.encode, cls.decode, cls.estimate_seconds
-    def encode(self, card, repeats, message_type, snr_db):
+    def encode(self, card, repeats, message_type, snr_db, *, interlaced=False):
         from modem_envelope import transmit
+        if interlaced and getattr(self, 'supports_interlaced_copies', False):
+            return encode_payload(self, card, repeats, message_type, snr_db,
+                                  interlaced=True)
         payload = encode_payload(self, card, 1, message_type, snr_db)
         return transmit(self.key, card, payload, repeats, message_type, snr_db)
     def decode(self, audio, sample_rate):

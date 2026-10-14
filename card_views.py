@@ -182,13 +182,18 @@ class DeckDialog(QDialog):
         self.add_received_card = add_received_card
         self.export_contact = export_contact
         self.entry = entry
-        self.setWindowTitle(f"Contact with {entry.get('peer_callsign', 'Unknown')}")
+        received_archive = entry.get('deck_type') == 'received_archive'
+        callsign = entry.get('peer_callsign', 'Unknown')
+        self.setWindowTitle(
+            f"Received cards from {callsign}" if received_archive else f"Contact with {callsign}")
         self.resize(780, 760)
         layout = QVBoxLayout(self); layout.setSpacing(SPACING['md'])
-        heading = QLabel(entry.get('peer_callsign', 'Unknown'))
+        heading = QLabel(callsign)
         heading.setObjectName("pageTitle")
         layout.addWidget(heading)
         metadata = QLabel(
+            (f"{entry.get('peer_grid', '')}  ·  All received cards across sessions  ·  "
+             f"{len(entry.get('received_cards', []))} unique cards") if received_archive else
             f"{entry.get('peer_grid', '')}  ·  {entry.get('started_at', '')}  ·  "
             f"{entry.get('status', 'Saved')}")
         metadata.setObjectName("supportingText")
@@ -223,8 +228,12 @@ class DeckDialog(QDialog):
         self.strip = QListWidget(); self.strip.setViewMode(QListWidget.ViewMode.IconMode); self.strip.setMovement(QListWidget.Movement.Static)
         self.strip.setFlow(QListWidget.Flow.LeftToRight); self.strip.setWrapping(False)
         self.strip.setIconSize(QSize(80, 100)); self.strip.setGridSize(QSize(112, 135)); self.strip.setFixedHeight(155)
-        self.strip.setAccessibleName("Contact cards sent and received")
+        self.strip.setAccessibleName(
+            f"Received cards from {callsign}" if received_archive else
+            "Contact cards sent and received")
         self.strip.setAccessibleDescription(
+            "All received cards for this callsign, ordered by first reception. Select a card to view its details."
+            if received_archive else
             "Chronological list of cards in this contact. Select a card to view its details.")
         for direction, card in self.events:
             label = stage_label(card)
@@ -243,10 +252,12 @@ class DeckDialog(QDialog):
             self.strip.addItem(item)
         self.strip.currentRowChanged.connect(self.show_card); layout.addWidget(self.strip)
         actions = QHBoxLayout()
-        self.copy_contact_button = QPushButton('Copy contact PNG')
+        self.copy_contact_button = QPushButton(
+            'Copy received archive PNG' if received_archive else 'Copy contact PNG')
         self.copy_contact_button.clicked.connect(self._copy_contact_png)
         actions.addWidget(self.copy_contact_button)
-        self.export_contact_button = QPushButton('Export contact…')
+        self.export_contact_button = QPushButton(
+            'Export received archive…' if received_archive else 'Export contact…')
         self.export_contact_button.clicked.connect(self._export_contact)
         self.export_contact_button.setVisible(self.export_contact is not None)
         actions.addWidget(self.export_contact_button)

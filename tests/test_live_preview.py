@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication, QLabel, QDialog, QPushButton
 
@@ -16,6 +17,7 @@ from backend_adapters import (ADAPTERS, AdapterCapabilities, AdapterKind,
                               ExperimentalLocalAdapter, IntegrityScope,
                               register_adapter)
 from card_backends import get_backend
+from card_views import DeckDialog
 from card_transfer import CardAssemblyService, CardPreviewAssembler, fragment
 
 
@@ -1137,6 +1139,125 @@ class LivePreviewTests(unittest.TestCase):
         # Mutating the decoder's original report cannot mutate cached evidence.
         card["exact"] = True
         self.assertFalse(service.preview_snapshot().card["exact"])
+
+    def test_same_image_with_a_new_message_stage_updates_preview(self):
+        state = preview_state()
+        card = {"callsign": "AG7SU", "grid": "CN85", "card_id": 7,
+                "width": 1, "height": 1, "palette": [[0, 0, 0], [15, 0, 0]],
+                "avatar_burst": True, "image_id": "same-raster", "exact": False,
+                "message_type": "cq", "pixel_coverage": [True]}
+        first, changed = state.merge({"card": card, "pixels": [1]})
+        self.assertTrue(changed)
+        self.assertEqual(first["card"]["message_type"], "cq")
+
+        second, changed = state.merge({"card": {**card, "message_type": "exchange"},
+                                       "pixels": [1]})
+        self.assertTrue(changed)
+        self.assertEqual(second["card"]["message_type"], "exchange")
+
+    def test_preview_pixmap_fits_inside_styled_label_without_clipping(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}):
+            window = MainWindow()
+            try:
+                window.show()
+                self.app.processEvents()
+                report = {"card": {"callsign": "W1ABC", "grid": "FN42",
+                                   "card_id": 7, "width": 32, "height": 32,
+                                   "palette": pixel.MINIMAL_AVATAR_PALETTE,
+                                   "pixel_coverage": [True] * 1024},
+                          "pixels": [1] * 1024}
+                window._show_receive_preview(window.card_image(report), card=report["card"],
+                                             coverage=report["card"]["pixel_coverage"])
+                self.app.processEvents()
+                pixmap = window.receive_view.pixmap()
+                self.assertIsNotNone(pixmap)
+                self.assertLessEqual(pixmap.width(), window.receive_view.contentsRect().width())
+                self.assertLessEqual(pixmap.height(), window.receive_view.contentsRect().height())
+            finally:
+                window.close()
+
+    def test_callsign_archive_aggregates_received_cards_only_across_sessions(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}):
+            window = MainWindow()
+            try:
+                window.qso_log_dir.mkdir(parents=True, exist_ok=True)
+                received = {"card": {"callsign": "W1ABC", "grid": "FN42",
+                                     "card_id": 7, "message_type": "cq",
+                                     "width": 1, "height": 1,
+                                     "palette": [[0, 0, 0], [15, 0, 0]]},
+                            "pixels": [1], "exact": True}
+                first = {"peer_callsign": "W1ABC", "peer_grid": "FN42",
+                         "started_at": "2026-01-01 00:00:00", "sent_cards": [
+                             {"card": {"callsign": "N0ME", "card_id": 3}}],
+                         "received_cards": [received]}
+                second = {"peer_callsign": "K2XYZ", "peer_grid": "FN31",
+                          "started_at": "2026-02-01 00:00:00", "sent_cards": [],
+                          "received_cards": [{**received, "logged_at": "2026-02-01 01:00:00"},
+                                             {"card": {**received["card"], "callsign": "K2XYZ",
+                                                       "card_id": 8}, "pixels": [0]}]}
+                (window.qso_log_dir / "one.json").write_text(json.dumps(first))
+                (window.qso_log_dir / "two.json").write_text(json.dumps(second))
+
+                window.log_deck_view.setCurrentIndex(1)
+                window.log_search.setText("w1abc")
+                self.assertEqual(window.log_gallery.count(), 1)
+                entry, path = window._load_qso_deck_source(
+                    window.log_gallery.item(0).data(Qt.ItemDataRole.UserRole))
+                self.assertIsNone(path)
+                self.assertEqual(entry["peer_callsign"], "W1ABC")
+                self.assertEqual(entry["sent_cards"], [])
+                self.assertEqual(len(entry["received_cards"]), 1)
+                self.assertEqual(entry["received_cards"][0]["card"]["callsign"], "W1ABC")
+                deck = DeckDialog(entry, window.card_image)
+                self.assertEqual(deck.windowTitle(), "Received cards from W1ABC")
+                self.assertEqual(deck.strip.count(), 1)
+                self.assertEqual(deck.strip.accessibleName(), "Received cards from W1ABC")
+                deck.close()
+            finally:
+                window.close()
+
+    def test_off_peer_reception_does_not_enter_active_contact_deck(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}):
+            window = MainWindow()
+            try:
+                window._begin_qso_log("K1AAA", "FN31")
+                active_log = window.active_qso_log
+                report = {"card": {"callsign": "W1ABC", "grid": "FN42", "card_id": 9,
+                                   "message_type": "cq", "width": 1, "height": 1},
+                          "pixels": [0]}
+                window._record_received_card(report)
+                self.assertIs(window.active_qso_log, active_log)
+                self.assertEqual(active_log["peer_callsign"], "K1AAA")
+                self.assertEqual(active_log["received_cards"], [])
+                self.assertEqual(window.passive_received_logs["W1ABC"][0]["received_cards"][0]["card"]["callsign"],
+                                 "W1ABC")
+            finally:
+                window.close()
+
+    def test_same_raster_cq_and_exchange_get_separate_session_wall_tiles(self):
+        source = pixel.example_card()
+        packed = pixel.minimal_avatar_payload(source)
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}):
+            window = MainWindow()
+            try:
+                session = SimpleNamespace(port=8100, connected=False, close=Mock())
+                window.data2g_session = session
+                with patch.object(window, "save_received_report"), \
+                        patch.object(window, "_record_received_card"), \
+                        patch.object(window, "_handle_contact_message"):
+                    window._data2g_rx_frame(session, 8100,
+                                            fragment(source, packed, 0, packed, "cq"))
+                    window._data2g_rx_frame(session, 8100,
+                                            fragment(source, packed, 0, packed, "exchange"))
+                stages = {key[2] for key in window.session_wall_items}
+                self.assertEqual(stages, {"cq", "exchange"})
+                self.assertEqual(window.session_wall_count, 2)
+            finally:
+                window.close()
 
     def test_content_identity_merges_mode_changes_and_rejects_verified_conflicts_atomically(self):
         service = CardAssemblyService()

@@ -125,6 +125,7 @@ def build_app_stylesheet(text_scale=1.0):
         QLabel#stationIdentity {{ font-weight: 700; color: {c['text']}; padding: 0 8px; }}
         QLabel#testModeBanner {{ background: {c['warning']}; color: {c['text_primary']}; padding: 6px 10px; border-radius: {r['button']}px; font-weight: 700; }}
         QLabel#receiverEmpty, QLabel#receiveView, QLabel#receiveWaterfallUnavailable {{ background: {c['surface_scrollbar']}; color: {c['text_muted']}; border: 1px solid {c['border']}; border-radius: {r['panel']}px; padding: 10px; }}
+        QLabel#receiveView {{ padding: 0px; }}
         QLabel#receiverEmpty {{ padding: 24px; font-size: {type_size['section']}px; }}
         QLabel#receiveStatus {{ color: {c['text_soft']}; padding: 2px; }}
         QLabel#quickDrawStatus {{ color: {c['positive']}; padding: 2px; }}

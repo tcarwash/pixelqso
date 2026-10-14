@@ -1696,6 +1696,7 @@ class MainWindow(QMainWindow):
         self.decode_pool = QThreadPool.globalInstance()
         self.active_qso_log = None
         self._active_qso_path = None
+        self.passive_received_logs = {}
         self.qso_log_dir = DATA / "qso-log"
         root = QWidget(); layout = QVBoxLayout(root)
         self.tabs = QTabWidget()
@@ -1888,6 +1889,14 @@ class MainWindow(QMainWindow):
         self.log_clear_button.clicked.connect(self._clear_contact_search)
         self.log_clear_button.setVisible(False)
         controls.addWidget(self.log_clear_button)
+        self.log_deck_view = QComboBox()
+        self.log_deck_view.addItem("Contact sessions", "sessions")
+        self.log_deck_view.addItem("Received by callsign", "received_by_call")
+        self.log_deck_view.setAccessibleName("Contact deck view")
+        self.log_deck_view.setToolTip(
+            "Show individual contact sessions or all received cards grouped by callsign.")
+        self.log_deck_view.currentIndexChanged.connect(self.refresh_qso_log)
+        controls.addWidget(self.log_deck_view)
         self.log_sort = QComboBox(); self.log_sort.addItems(["Newest first", "Oldest first", "Callsign A–Z"])
         self.log_sort.setAccessibleName("Sort contacts")
         controls.addWidget(self.log_sort)
@@ -2397,43 +2406,146 @@ class MainWindow(QMainWindow):
             try:
                 entry = json.loads(path.read_text())
                 if not isinstance(entry, dict): continue
-                if query and query not in (str(entry.get("peer_callsign", "")) + " " + str(entry.get("peer_grid", ""))).casefold(): continue
+                by_call_view = (getattr(self, "log_deck_view", None) is not None and
+                                self.log_deck_view.currentData() == "received_by_call")
+                if (query and not by_call_view and query not in
+                        (str(entry.get("peer_callsign", "")) + " " +
+                         str(entry.get("peer_grid", ""))).casefold()):
+                    continue
                 entries.append((path, entry))
             except (OSError, ValueError): continue
+        if getattr(self, "log_deck_view", None) is not None and self.log_deck_view.currentData() == "received_by_call":
+            decks = self._aggregate_received_decks(entries)
+            if query:
+                decks = {call: entry for call, entry in decks.items()
+                         if query in (call + " " + str(entry.get("peer_grid", ""))).casefold()}
+            display_entries = [(f"received-callsign:{call}", entry) for call, entry in decks.items()]
+        else:
+            display_entries = [(str(path), entry) for path, entry in entries]
         sort = self.log_sort.currentIndex()
-        entries.sort(key=lambda pair: str(pair[1].get("peer_callsign" if sort == 2 else "started_at", "")), reverse=sort == 0)
-        for path, entry in entries:
+        display_entries.sort(key=lambda pair: str(pair[1].get(
+            "peer_callsign" if sort == 2 else
+            ("latest_received_at" if sort == 0 and pair[0].startswith("received-callsign:") else
+             "earliest_received_at" if pair[0].startswith("received-callsign:") else "started_at"), "")),
+            reverse=sort == 0)
+        for source, entry in display_entries:
             events = deck_events(entry)
             image = next((image for _direction, card in events if (image := self.card_image(card)) is not None), None)
             call = str(entry.get("peer_callsign", "Unknown"))
             started = str(entry.get("started_at", ""))
             status = str(entry.get("status", "Saved"))
             count = len(events)
-            item = QListWidgetItem(
-                f"{started}\n{status} · {count} card{'s' if count != 1 else ''}")
-            item.setIcon(QIcon(card_art(image, call, str(entry.get("peer_grid", "")) + " · CONTACT DECK", QSize(220, 275), stacked=True)))
-            item.setData(Qt.ItemDataRole.UserRole, str(path))
-            item.setToolTip(f"Open {call}'s contact deck")
+            label = (f"{call}\n{count} received card{'s' if count != 1 else ''} · all time"
+                     if source.startswith("received-callsign:") else
+                     f"{started}\n{status} · {count} card{'s' if count != 1 else ''}")
+            item = QListWidgetItem(label)
+            deck_kind = "RECEIVED ARCHIVE" if source.startswith("received-callsign:") else "CONTACT DECK"
+            item.setIcon(QIcon(card_art(image, call, str(entry.get("peer_grid", "")) + " · " + deck_kind, QSize(220, 275), stacked=True)))
+            item.setData(Qt.ItemDataRole.UserRole, source)
+            item.setToolTip(f"Open {call}'s received-card archive" if source.startswith("received-callsign:")
+                            else f"Open {call}'s contact deck")
             item.setData(
                 Qt.ItemDataRole.AccessibleTextRole,
-                f"Contact with {call} · {entry.get('peer_grid') or 'grid unknown'} · "
+                (f"All received cards from {call} · {entry.get('peer_grid') or 'grid unknown'} · "
+                 if source.startswith("received-callsign:") else
+                 f"Contact with {call} · {entry.get('peer_grid') or 'grid unknown'} · ") +
                 f"{started or 'date unknown'} · {status} · {count} card"
                 f"{'s' if count != 1 else ''}")
             self.log_gallery.addItem(item)
         self.log_status.setText(
-            f"{len(entries)} contact deck{'s' if len(entries) != 1 else ''}" if entries else "")
+            (f"{len(display_entries)} callsign archive{'s' if len(display_entries) != 1 else ''}"
+             if self.log_deck_view.currentData() == "received_by_call" else
+             f"{len(display_entries)} contact deck{'s' if len(display_entries) != 1 else ''}")
+            if display_entries else "")
         self.log_clear_button.setVisible(bool(query))
-        if entries:
+        if display_entries:
             self.contact_stack.setCurrentWidget(self.contact_stack.widget(0))
         else:
-            self.contact_empty_operate_button.setVisible(not query)
-            self.contact_empty_title.setText(
-                "No matching contacts" if query else "No contacts yet")
-            self.contact_empty_copy.setText(
-                "Try another callsign or grid, or clear your search." if query else
-                "Contacts appear here after you call CQ or reply and exchange cards.")
+            self.contact_empty_operate_button.setVisible(
+                not query and self.log_deck_view.currentData() == "sessions")
+            if self.log_deck_view.currentData() == "received_by_call":
+                self.contact_empty_title.setText(
+                    "No matching received cards" if query else "No received cards yet")
+                self.contact_empty_copy.setText(
+                    "Received card history is grouped by station callsign. Try another search or switch to contact sessions.")
+            else:
+                self.contact_empty_title.setText(
+                    "No matching contacts" if query else "No contacts yet")
+                self.contact_empty_copy.setText(
+                    "Try another callsign or grid, or clear your search." if query else
+                    "Contacts appear here after you call CQ or reply and exchange cards.")
             self.contact_stack.setCurrentWidget(self.contact_empty_page)
         self._update_export_buttons()
+
+    @staticmethod
+    def _received_archive_key(report):
+        card = report.get("card") or {}
+        content = card.get("image_id", card.get("image_crc32"))
+        if content is None and report.get("pixels") is not None:
+            content = hashlib.blake2s(
+                json.dumps(report.get("pixels"), separators=(",", ":")).encode(),
+                digest_size=8).hexdigest()
+        return (str(card.get("callsign", "")).upper(), card.get("card_id"),
+                card.get("message_type", "card"), content)
+
+    def _aggregate_received_decks(self, entries):
+        grouped = {}
+        for _path, entry in entries:
+            for report in entry.get("received_cards", []):
+                card = report.get("card") or {}
+                call = str(card.get("callsign") or entry.get("peer_callsign") or "").strip().upper()
+                if not call:
+                    continue
+                group = grouped.setdefault(call, {"peer_callsign": call,
+                    "peer_grid": card.get("grid") or entry.get("peer_grid", ""),
+                    "started_at": report.get("logged_at") or entry.get("started_at", ""),
+                    "latest_received_at": report.get("logged_at") or entry.get("started_at", ""),
+                    "status": "Received archive", "deck_type": "received_archive",
+                    "sent_cards": [], "received_cards": []})
+                key = self._received_archive_key(report)
+                existing = next((item for item in group["received_cards"]
+                                if self._received_archive_key(item) == key), None)
+                logged_at = report.get("logged_at") or entry.get("started_at", "")
+                if not group["started_at"] or (logged_at and logged_at < group["started_at"]):
+                    group["started_at"] = logged_at
+                if logged_at > group["latest_received_at"]:
+                    group["latest_received_at"] = logged_at
+                if existing is None:
+                    grouped_report = copy.deepcopy(report)
+                    grouped_report["logged_at"] = logged_at
+                    grouped[call]["received_cards"].append(grouped_report)
+                else:
+                    attempts = int(existing.get("receive_attempts", 1)) + int(report.get("receive_attempts", 1))
+                    if _receive_report_rank(report) > _receive_report_rank(existing):
+                        received_at = existing.get("logged_at")
+                        existing.update(copy.deepcopy(report))
+                        existing["logged_at"] = received_at
+                    existing["receive_attempts"] = attempts
+        for group in grouped.values():
+            group["received_cards"].sort(key=lambda item: item.get("logged_at", ""))
+            for order, report in enumerate(group["received_cards"], 1):
+                report["order"] = order
+            group["status"] = f"All received cards · {len(group['received_cards'])} unique"
+        return grouped
+
+    def _load_qso_deck_source(self, source):
+        source = str(source)
+        if source.startswith("received-callsign:"):
+            call = source.split(":", 1)[1]
+            try:
+                entries = []
+                for path in self.qso_log_dir.glob("*.json"):
+                    try:
+                        entry = json.loads(path.read_text())
+                        if isinstance(entry, dict):
+                            entries.append((path, entry))
+                    except (OSError, ValueError):
+                        continue
+                return self._aggregate_received_decks(entries).get(call), None
+            except OSError:
+                return None, None
+        path = Path(source)
+        return json.loads(path.read_text()), path
 
     def _update_export_buttons(self, *_):
         if hasattr(self, "export_card_button"):
@@ -2477,7 +2589,9 @@ class MainWindow(QMainWindow):
         if item is None:
             return
         try:
-            entry = json.loads(Path(item.data(Qt.ItemDataRole.UserRole)).read_text())
+            entry, _path = self._load_qso_deck_source(item.data(Qt.ItemDataRole.UserRole))
+            if entry is None:
+                return
             QApplication.clipboard().setImage(deck_image(entry, self.card_image))
             self.log_status.setText("QSO contact sheet copied · paste into an image editor or message")
         except Exception as exc:
@@ -2528,23 +2642,28 @@ class MainWindow(QMainWindow):
         item = self.log_gallery.currentItem() if hasattr(self, "log_gallery") else None
         if item is None:
             return
-        self._export_qso_archive(Path(item.data(Qt.ItemDataRole.UserRole)))
+        self._export_qso_archive(item.data(Qt.ItemDataRole.UserRole))
 
     def _export_qso_archive(self, source, dialog_parent=None):
         dialog_parent = dialog_parent or self
         try:
-            entry = json.loads(source.read_text())
+            entry, source_path = self._load_qso_deck_source(source)
+            if entry is None:
+                raise ValueError("No received cards were found for this callsign.")
             callsign = "".join(ch if ch.isalnum() or ch in "-_" else "_"
                                for ch in str(entry.get("peer_callsign", "Unknown")))
             date = "".join(ch for ch in str(entry.get("started_at", ""))[:10]
                            if ch.isalnum() or ch == "-")
+            received_archive = entry.get("deck_type") == "received_archive"
+            prefix = "received" if received_archive else "qso"
             target_name, file_filter = QFileDialog.getSaveFileName(
-                dialog_parent, "Export QSO", str(DATA / "exports" / f"qso-{callsign}-{date}.png"),
+                dialog_parent, "Export received-card archive" if received_archive else "Export QSO",
+                str(DATA / "exports" / f"{prefix}-{callsign}-{date}.png"),
                 "PNG contact sheet (*.png);;Pixel QSO contact archive (*.json)")
             if not target_name:
                 return None
             target = Path(target_name)
-            if target.resolve() == source.resolve():
+            if source_path is not None and target.resolve() == source_path.resolve():
                 QMessageBox.warning(dialog_parent, "Couldn't export QSO", "Choose a different file from the saved contact archive.")
                 return None
             if "PNG" in file_filter:
@@ -2555,8 +2674,8 @@ class MainWindow(QMainWindow):
             else:
                 target = target.with_suffix(".json")
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(source.read_bytes())
-            self.log_status.setText(f"Exported QSO to {target.name}")
+                target.write_text(json.dumps(entry, indent=2) + "\n")
+            self.log_status.setText(f"Exported {'received archive' if received_archive else 'QSO'} to {target.name}")
             return target
         except Exception as exc:
             QMessageBox.warning(dialog_parent, "Couldn't export QSO", str(exc))
@@ -2565,16 +2684,22 @@ class MainWindow(QMainWindow):
     def show_log_deck(self, item=None, *_):
         item = item or self.log_gallery.currentItem()
         if item is None: return
-        path = Path(item.data(Qt.ItemDataRole.UserRole))
         try:
-            entry = json.loads(path.read_text())
+            entry, path = self._load_qso_deck_source(item.data(Qt.ItemDataRole.UserRole))
+            if entry is None:
+                self.log_status.setText("No received cards are saved for this callsign yet.")
+                return
         except (OSError, ValueError): return
         if not deck_events(entry):
             self.log_status.setText("This contact has no saved image cards yet."); return
-        add_received = lambda card: self.add_received_card_to_library(card, path)
+        provenance = path if path is not None else Path(
+            f"received-{entry.get('peer_callsign', 'unknown')}")
+        add_received = lambda card: self.add_received_card_to_library(card, provenance)
         deck = DeckDialog(
             entry, self.card_image, add_received, self,
-            export_contact=lambda: self._export_qso_archive(path, deck))
+            export_contact=lambda: self._export_qso_archive(
+                str(path) if path is not None else
+                f"received-callsign:{entry.get('peer_callsign', '')}", deck))
         deck.exec()
 
     def add_received_card_to_library(self, report, qso_path):
@@ -8255,6 +8380,29 @@ class MainWindow(QMainWindow):
 
     def _record_received_card(self, report):
         card = report.get("card") or {}
+        callsign = str(card.get("callsign", "Unknown")).strip().upper() or "Unknown"
+        active_call = str((self.active_qso_log or {}).get("peer_callsign", "")).strip().upper()
+        if self.active_qso_log is not None and active_call and active_call != callsign:
+            # Keep an unrelated station's reception out of the active QSO. A
+            # passive per-station log preserves it for the callsign archive and
+            # can collect later cards from that station during this app session.
+            passive = self.passive_received_logs.get(callsign)
+            if passive is None:
+                now = time.strftime("%Y-%m-%d %H:%M:%S")
+                passive_entry = {"peer_callsign": callsign, "peer_grid": card.get("grid", ""),
+                                 "started_at": now, "sent_cards": [], "received_cards": [],
+                                 "status": "Received during multi-station session"}
+                passive = (passive_entry, self.qso_log_dir /
+                           f"qso-{time.strftime('%Y%m%d-%H%M%S')}-"
+                           f"{id(passive_entry) & 0xffff:04x}-rx.json")
+                self.passive_received_logs[callsign] = passive
+            original_log, original_path = self.active_qso_log, self._active_qso_path
+            try:
+                self.active_qso_log, self._active_qso_path = passive
+                self._append_qso_card("received_cards", copy.deepcopy(report))
+            finally:
+                self.active_qso_log, self._active_qso_path = original_log, original_path
+            return
         self._begin_qso_log(card.get("callsign", "Unknown"), card.get("grid", ""))
         if card.get("message_type") == "exchange" and self.last_cq_snapshot:
             if not any((item.get("card") or {}).get("message_type") == "cq" for item in self.active_qso_log["sent_cards"]):

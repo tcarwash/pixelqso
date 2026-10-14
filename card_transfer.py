@@ -229,7 +229,11 @@ class CardPreviewAssembler:
                     old is not None and new is not None and old != new
                     for old, new in zip(old_checksums, incoming_checksums)):
                 raise ValueError("conflicting checked-block checksums for the same image identity")
-        changed = reset_state or self.current_key != key
+        previous_stage = (state.get("card", {}).get("message_type")
+                          if state is not None else None)
+        changed = (reset_state or self.current_key != key or
+                   (incoming_card.get("message_type") is not None and
+                    incoming_card.get("message_type") != previous_stage))
         diagnostics = incoming_card.get("diagnostics") or {}
         acquisition_start = diagnostics.get("acquisition_start_sample")
         candidate_revision = (

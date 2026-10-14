@@ -23,10 +23,10 @@ for _thread_env in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"
     os.environ[_thread_env] = os.environ.get("PIXELQSO_DSP_THREADS", "1")
 
 import numpy as np
-from PySide6.QtCore import Qt, QRect, QSize, QObject, QTimer, QRunnable, QThreadPool, Signal, QStandardPaths, QMimeData, QPoint, QUrl, QSortFilterProxyModel, QSettings, QSignalBlocker
+from PySide6.QtCore import Qt, QRect, QSize, QObject, QTimer, QRunnable, QThreadPool, Signal, QStandardPaths, QMimeData, QPoint, QUrl, QSortFilterProxyModel, QBuffer, QByteArray, QIODevice, QSettings, QSignalBlocker
 from PySide6.QtGui import QAction, QColor, QPainter, QPen, QImage, QPixmap, QFont, QIcon, QKeySequence, QShortcut, QDrag, QStandardItem, QStandardItemModel
 from PySide6.QtNetwork import QTcpSocket, QUdpSocket, QHostAddress
-from PySide6.QtMultimedia import QAudioDevice, QAudioFormat, QAudioSink, QAudioSource, QMediaDevices
+from PySide6.QtMultimedia import QAudio, QAudioDevice, QAudioFormat, QAudioSink, QAudioSource, QMediaDevices
 from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QListWidget, QListWidgetItem,
     QFormLayout, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QInputDialog,
     QMessageBox, QPushButton, QSpinBox, QTabWidget, QTextEdit, QDialog,
@@ -768,6 +768,7 @@ class StampShelf(QListWidget):
 
 class CardCanvas(QWidget):
     TOOL_HELP = {
+        "select": "Drag a box around pixels. Drag the box to move it, drag its corner to resize, or save it to My stamps.",
         "draw": "Draw with the selected palette color; right-click erases.",
         "erase": "Erase pixels to transparency.",
         "fill": "Fill a connected area with the selected palette color.",
@@ -791,9 +792,13 @@ class CardCanvas(QWidget):
         self.redo_stack = []
         self.base_pixels = list(card.pixels)
         self.stamp_layers = []
+        self.selection_rect = QRect()
+        self.selection_handle = QRect()
+        self.selection_origin = None
         self.selected_layer = None
         self.hover_layer = None
         self.hover_remove_rect = QRect()
+        self.hover_convert_rect = QRect()
         self.hover_resize_rect = QRect()
         self.drag_layer = None
         self.drag_offset = (0, 0)
@@ -838,8 +843,11 @@ class CardCanvas(QWidget):
         return QPoint(int(ox+x*cell+cell/2), int(oy+y*cell+cell/2))
 
     def _update_hover_remove_rect(self):
+        if self.hover_layer is None and self.selected_layer is not None:
+            self.hover_layer = self.selected_layer
         if self.hover_layer is None or self.hover_layer >= len(self.stamp_layers):
             self.hover_remove_rect = QRect()
+            self.hover_convert_rect = QRect()
             self.hover_resize_rect = QRect()
             return
         side = min(self.width(), self.height())
@@ -850,8 +858,10 @@ class CardCanvas(QWidget):
         stamp_right = int(ox + (layer["x"] + layer["width"]) * cell)
         stamp_top = int(oy + layer["y"] * cell)
         button_size = max(20, min(30, int(cell * 0.9)))
-        self.hover_remove_rect = QRect(stamp_right-button_size, stamp_top,
-                                       button_size, button_size)
+        control_right = min(self.width(), max(2 * button_size + 4, stamp_right))
+        control_top = min(max(0, stamp_top), max(0, self.height() - button_size))
+        self.hover_remove_rect = QRect(control_right-button_size, control_top, button_size, button_size)
+        self.hover_convert_rect = QRect(control_right-2*button_size-4, control_top, button_size, button_size)
         resize_size = max(14, min(20, int(cell * 0.75)))
         stamp_bottom = int(oy + (layer["y"] + layer["height"]) * cell)
         resize_rect = QRect(stamp_right-resize_size, stamp_bottom-resize_size,
@@ -880,9 +890,18 @@ class CardCanvas(QWidget):
             p.setPen(QPen(QColor(COLORS["editor_selection"]), 2))
             p.drawRect(QRect(int(ox+layer['x']*cell), int(oy+layer['y']*cell),
                              int(layer['width']*cell), int(layer['height']*cell)))
+        self._update_hover_remove_rect()
         if self.hover_layer is not None and self.hover_layer < len(self.stamp_layers):
             layer = self.stamp_layers[self.hover_layer]
-            self._update_hover_remove_rect()
+            p.setPen(QPen(QColor("#8cc8ff"), 1))
+            p.setBrush(QColor("#174b75"))
+            p.drawEllipse(self.hover_convert_rect)
+            p.setPen(QPen(QColor("white"), 1))
+            icon = self.hover_convert_rect.adjusted(6, 6, -6, -6)
+            for row in range(2):
+                for col in range(2):
+                    p.drawRect(icon.left()+col*max(4, icon.width()//2),
+                               icon.top()+row*max(4, icon.height()//2), 3, 3)
             p.setPen(QPen(QColor(COLORS["stamp_remove_border"]), 1))
             remove_background = QColor(COLORS["stamp_remove_background"])
             remove_background.setAlpha(245)
@@ -911,7 +930,16 @@ class CardCanvas(QWidget):
                            self.hover_resize_rect.top()+inset)
         else:
             self.hover_remove_rect = QRect()
+            self.hover_convert_rect = QRect()
             self.hover_resize_rect = QRect()
+        if not self.selection_rect.isNull():
+            box = self.selection_rect
+            screen = QRect(round(ox+box.x()*cell), round(oy+box.y()*cell),
+                           round(box.width()*cell), round(box.height()*cell))
+            p.setPen(QPen(QColor("#8cc8ff"), 2, Qt.PenStyle.DashLine)); p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRect(screen.adjusted(1, 1, -1, -1))
+            self.selection_handle = QRect(screen.right()-14, screen.bottom()-14, 14, 14)
+            p.fillRect(self.selection_handle, QColor("#174b75"))
         if self.hasFocus():
             x, y = self.keyboard_cursor
             cursor_rect = QRect(int(ox+x*cell), int(oy+y*cell),
@@ -944,10 +972,17 @@ class CardCanvas(QWidget):
             x, y = self.keyboard_cursor
             self.keyboard_cursor = (min(max(0, x + dx), self.card.width - 1),
                                     min(max(0, y + dy), self.card.height - 1))
+            if self.tool == "select" and self.selection_origin is not None:
+                ax, ay = self.selection_origin; bx, by = self.keyboard_cursor
+                self.selection_rect = QRect(min(ax, bx), min(ay, by), abs(ax-bx)+1, abs(ay-by)+1)
+                self.changed.emit()
             self.update_accessible_description()
             self.update()
             event.accept()
             return
+        if event.key() == Qt.Key.Key_Escape and not self.selection_rect.isNull():
+            self.selection_rect = QRect(); self.selection_handle = QRect(); self.selection_origin = None
+            self.changed.emit(); self.update(); event.accept(); return
         if event.key() == Qt.Key.Key_Escape and self.selected_layer is not None:
             self.selected_layer = None
             self.update_accessible_description()
@@ -957,6 +992,12 @@ class CardCanvas(QWidget):
             return
         if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
             x, y = self.keyboard_cursor
+            if self.tool == "select":
+                if self.selection_origin is None:
+                    self.selection_origin = (x, y); self.selection_rect = QRect(x, y, 1, 1)
+                else:
+                    self.selection_origin = None
+                self.changed.emit(); self.update(); event.accept(); return
             index = y * self.card.width + x
             if self.tool == "pick":
                 self.color_index = self.card.pixels[index]
@@ -1022,6 +1063,7 @@ class CardCanvas(QWidget):
                                       "y": min(max(0, int(layer["y"])), card.height-height),
                                       "width": width, "height": height, "pixels": values})
         self.selected_layer = None
+        self.selection_rect = QRect(); self.selection_handle = QRect()
         self.drag_layer = None
         self.undo_stack.clear(); self.redo_stack.clear()
         self._render_layers()
@@ -1044,7 +1086,8 @@ class CardCanvas(QWidget):
         width, height, palette, base, layers = source.pop()
         self.card.width, self.card.height, self.card.palette = width, height, palette
         self.base_pixels, self.stamp_layers = base, layers
-        self.selected_layer = self.drag_layer = None
+        self.selected_layer = self.drag_layer = self.hover_layer = None
+        self.selection_rect = QRect(); self.selection_handle = QRect(); self.selection_origin = None
         self.color_index = min(self.color_index, len(palette)-1)
         self._render_layers()
         self.update_accessible_description()
@@ -1078,6 +1121,7 @@ class CardCanvas(QWidget):
 
     def change_format(self, width: int, height: int, palette: list[tuple[int, int, int]]):
         self.remember_edit()
+        self.selection_rect = QRect(); self.selection_handle = QRect(); self.selection_origin = None
         old_width, old_height = self.card.width, self.card.height
         old_palette = self.card.palette
         def color_map(index):
@@ -1130,6 +1174,47 @@ class CardCanvas(QWidget):
         self.selected_layer = len(self.stamp_layers)-1
         self._render_layers()
 
+    def lift_selection(self):
+        rect = self.selection_rect.intersected(QRect(0, 0, self.card.width, self.card.height))
+        if rect.isEmpty(): return None
+        self.remember_edit()
+        values = [self.card.pixels[y*self.card.width+x] for y in range(rect.top(), rect.bottom()+1)
+                  for x in range(rect.left(), rect.right()+1)]
+        for y in range(rect.top(), rect.bottom()+1):
+            for x in range(rect.left(), rect.right()+1):
+                self.base_pixels[y*self.card.width+x] = 0
+                for layer in self.stamp_layers:
+                    sx, sy = x-layer["x"], y-layer["y"]
+                    if 0 <= sx < layer["width"] and 0 <= sy < layer["height"]:
+                        layer["pixels"][sy*layer["width"]+sx] = None
+        self.stamp_layers.append(dict(x=rect.x(), y=rect.y(), width=rect.width(), height=rect.height(), pixels=values))
+        self.selected_layer = self.hover_layer = len(self.stamp_layers)-1
+        self.selection_rect = QRect(); self.selection_handle = QRect()
+        self.tool = "move"
+        self._render_layers()
+        return self.selected_layer
+
+    def convert_stamp_to_pixels(self, index=None):
+        index = self.selected_layer if index is None else index
+        if index is None or not 0 <= index < len(self.stamp_layers):
+            return False
+        self.remember_edit()
+        # Bake through this layer so overlapping lower stamps retain their
+        # visible order when the selected stamp becomes editable canvas pixels.
+        for layer in self.stamp_layers[:index + 1]:
+            for sy in range(layer["height"]):
+                for sx in range(layer["width"]):
+                    x, y = layer["x"] + sx, layer["y"] + sy
+                    color = layer["pixels"][sy * layer["width"] + sx]
+                    if color is not None and 0 <= x < self.card.width and 0 <= y < self.card.height:
+                        self.base_pixels[y * self.card.width + x] = int(color)
+        del self.stamp_layers[:index + 1]
+        self.selected_layer = self.hover_layer = None
+        self.tool = "draw"
+        self._render_layers()
+        self.update_accessible_description()
+        return True
+
     def _hit_layer(self, x, y):
         for index in range(len(self.stamp_layers)-1, -1, -1):
             layer = self.stamp_layers[index]
@@ -1156,6 +1241,27 @@ class CardCanvas(QWidget):
         if event.button() not in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton): return
         self.last_paint_pixel = None
         point = event.position().toPoint()
+        if self.tool == "select" and event.button() == Qt.MouseButton.LeftButton:
+            x, y = self.card_position(point)
+            if x is None: return
+            resizing = self.selection_handle.contains(point)
+            if resizing or self.selection_rect.contains(x, y):
+                index = self.lift_selection()
+                if index is not None:
+                    layer = self.stamp_layers[index]
+                    if resizing:
+                        self.resize_layer = index; self.resize_origin_point = point
+                        self.resize_original = {"width": layer["width"], "height": layer["height"], "pixels": list(layer["pixels"])}
+                    else:
+                        self.drag_layer = index; self.drag_offset = (x-layer["x"], y-layer["y"])
+                return
+            self.selected_layer = self.hover_layer = None
+            self.selection_origin = (x, y); self.selection_rect = QRect(x, y, 1, 1)
+            self.selection_handle = QRect(); self.update(); self.changed.emit(); return
+        self._update_hover_remove_rect()
+        if event.button() == Qt.MouseButton.LeftButton and self.hover_convert_rect.contains(point):
+            self.convert_stamp_to_pixels(self.hover_layer)
+            return
         if (event.button() == Qt.MouseButton.LeftButton and self.hover_layer is not None and
                 self.hover_layer < len(self.stamp_layers) and self.hover_remove_rect.contains(point)):
             self.remember_edit()
@@ -1218,6 +1324,7 @@ class CardCanvas(QWidget):
             self.paint_at(point, event.button() == Qt.MouseButton.RightButton)
 
     def mouseReleaseEvent(self, event):
+        self.selection_origin = None
         self.last_paint_pixel = None
         self.drag_layer = None
         self.resize_layer = None
@@ -1228,21 +1335,34 @@ class CardCanvas(QWidget):
         self.changed.emit()
 
     def mouseMoveEvent(self, event):
+        if self.selection_origin is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            x, y = self.card_position(event.position().toPoint())
+            if x is not None:
+                ox, oy = self.selection_origin
+                self.selection_rect = QRect(min(x, ox), min(y, oy), abs(x-ox)+1, abs(y-oy)+1)
+                self.update(); self.changed.emit()
+            return
         if not event.buttons() & (Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton):
             point = event.position().toPoint()
             x, y = self.card_position(point)
             # The close control may cover transparent pixels or extend beyond a small stamp.
             layer = (self.hover_layer if self.hover_layer is not None and
-                     (self.hover_remove_rect.contains(point) or
+                     (self.hover_remove_rect.contains(point) or self.hover_convert_rect.contains(point) or
                       self.hover_resize_rect.contains(point)) else
-                     self._hit_layer(x, y) if x is not None else None)
+                     next((i for i in range(len(self.stamp_layers)-1, -1, -1)
+                           if self.stamp_layers[i]["x"] <= x < self.stamp_layers[i]["x"] + self.stamp_layers[i]["width"]
+                           and self.stamp_layers[i]["y"] <= y < self.stamp_layers[i]["y"] + self.stamp_layers[i]["height"]), None)
+                     if x is not None else None)
+            if layer is None:
+                layer = self.selected_layer
             if layer != self.hover_layer:
                 self.hover_layer = layer
                 self._update_hover_remove_rect()
                 self.update()
             if layer is not None and self.hover_resize_rect.contains(point):
                 self.setCursor(Qt.CursorShape.SizeFDiagCursor)
-            elif layer is not None and self.hover_remove_rect.contains(point):
+            elif layer is not None and (self.hover_remove_rect.contains(point) or self.hover_convert_rect.contains(point)):
+                self.setToolTip("Convert stamp and stamps beneath it to editable pixels (Undo restores stamps)" if self.hover_convert_rect.contains(point) else "Remove placed stamp")
                 self.setCursor(Qt.CursorShape.PointingHandCursor)
             else:
                 self.setCursor(Qt.CursorShape.ArrowCursor)
@@ -1411,6 +1531,120 @@ class StampDrawingCanvas(QWidget):
     def mouseMoveEvent(self, event):
         if event.buttons() & (Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton):
             self._paint_pixel(event.position().toPoint())
+
+
+class ListenEncodeSignals(QObject):
+    finished = Signal(object)
+
+
+class ListenEncodeWorker(QRunnable):
+    def __init__(self, card, backend, token):
+        super().__init__()
+        self.card, self.backend, self.token = card, backend, token
+        self.signals = ListenEncodeSignals()
+
+    def run(self):
+        try:
+            audio = EXPERIMENTAL_ADAPTER.encode(self.backend, self.card, 1, "cq", None)
+            result = (self.token, pcm16_audio_bytes(audio), None)
+        except Exception as exc:
+            result = (self.token, None, str(exc))
+        self.signals.finished.emit(result)
+
+
+class CanvasListenDialog(QDialog):
+    def __init__(self, snapshot, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Listen in")
+        self.snapshot = snapshot
+        self.token = 0
+        self.jobs = {}
+        self.sink = self.buffer = None
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.mode = QComboBox()
+        for key, backend in available_modes(include_experimental=True):
+            if key not in TX_DISABLED_MODE_KEYS and MODE_REGISTRY[key].adapter == EXPERIMENTAL_ADAPTER.key:
+                self.mode.addItem(backend.label, key)
+        preferred = "experimental_8fsk_musical_25"
+        if parent is not None and hasattr(parent, "selected_mode"):
+            preferred = parent.selected_mode()
+        index = self.mode.findData(preferred)
+        if index < 0:
+            index = self.mode.findData("experimental_8fsk_musical_25")
+        if index >= 0:
+            self.mode.setCurrentIndex(index)
+        self.output = QComboBox()
+        default = QMediaDevices.defaultAudioOutput()
+        for device in QMediaDevices.audioOutputs():
+            self.output.addItem(device.description(), device)
+            if device.id() == default.id():
+                self.output.setCurrentIndex(self.output.count() - 1)
+        self.volume = QSpinBox(); self.volume.setRange(0, 100); self.volume.setValue(25); self.volume.setSuffix(" %")
+        self.volume.valueChanged.connect(lambda value: self.sink.setVolume(value / 100) if self.sink else None)
+        form.addRow("Modem", self.mode); form.addRow("Audio output", self.output); form.addRow("Volume", self.volume)
+        layout.addLayout(form)
+        self.status = QLabel("Play the current canvas as one modem transmission.")
+        self.status.setWordWrap(True); layout.addWidget(self.status)
+        buttons = QHBoxLayout()
+        self.play = QPushButton("Play"); self.stop_button = QPushButton("Stop"); close = QPushButton("Close")
+        self.play.clicked.connect(self.start_playback); self.stop_button.clicked.connect(self.stop_playback); close.clicked.connect(self.reject)
+        for button in (self.play, self.stop_button, close): buttons.addWidget(button)
+        layout.addLayout(buttons)
+        self.stop_button.setEnabled(False)
+        self.mode.currentIndexChanged.connect(lambda _: self.stop_playback())
+        self.output.currentIndexChanged.connect(lambda _: self.stop_playback())
+        self.finished.connect(lambda _: self.stop_playback())
+        self.resize(460, 220)
+
+    def stop_playback(self):
+        self.token += 1
+        if self.sink is not None:
+            self.sink.stop(); self.sink.deleteLater(); self.sink = None
+        if self.buffer is not None:
+            self.buffer.close(); self.buffer.deleteLater(); self.buffer = None
+        self.play.setEnabled(True); self.stop_button.setEnabled(False)
+        self.status.setText("Stopped")
+
+    def start_playback(self):
+        self.stop_playback()
+        if self.output.currentData() is None or self.mode.currentData() is None:
+            self.status.setText("Choose an available modem and audio output."); return
+        try:
+            card = self.snapshot()
+        except Exception as exc:
+            self.status.setText(str(exc)); return
+        worker = ListenEncodeWorker(card, get_backend(self.mode.currentData(), 300), self.token)
+        self.jobs[self.token] = worker
+        worker.signals.finished.connect(self.audio_ready)
+        self.play.setEnabled(False); self.stop_button.setEnabled(True)
+        self.status.setText("Preparing canvas audio…")
+        QThreadPool.globalInstance().start(worker)
+
+    def audio_ready(self, result):
+        token, pcm, error = result
+        self.jobs.pop(token, None)
+        if token != self.token or not self.isVisible(): return
+        if error:
+            self.status.setText(error); self.play.setEnabled(True); self.stop_button.setEnabled(False); return
+        fmt = QAudioFormat(); fmt.setSampleRate(modem.SAMPLE_RATE); fmt.setChannelCount(1)
+        fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        device = self.output.currentData()
+        if device is None or not device.isFormatSupported(fmt):
+            self.status.setText("This output does not support 48 kHz mono audio.")
+            self.play.setEnabled(True); self.stop_button.setEnabled(False); return
+        self.buffer = QBuffer(self); self.buffer.setData(QByteArray(pcm)); self.buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+        self.sink = QAudioSink(device, fmt, self); self.sink.setVolume(self.volume.value()/100)
+        self.sink.stateChanged.connect(self.audio_state_changed)
+        self.sink.start(self.buffer)
+        self.status.setText(f"Playing · {len(pcm)/(2*modem.SAMPLE_RATE):.1f} seconds")
+
+    def audio_state_changed(self, state):
+        if state == QAudio.State.IdleState and self.buffer is not None and self.buffer.atEnd():
+            self.stop_playback(); self.status.setText("Playback complete")
+        elif state == QAudio.State.StoppedState and self.sink is not None and self.sink.error() not in (QAudio.Error.NoError, QAudio.Error.UnderrunError):
+            self.status.setText(f"Audio output failed: {self.sink.error().name}")
+            self.play.setEnabled(True); self.stop_button.setEnabled(False)
 
 
 class EditorDialog(QDialog):
@@ -2815,7 +3049,7 @@ class MainWindow(QMainWindow):
         drawing = QVBoxLayout(); outer.addLayout(drawing, 3)
         tools = QHBoxLayout(); self.tool_buttons = {}
         self.tool_group = QButtonGroup(self); self.tool_group.setExclusive(True)
-        for title, tool in (("Draw", "draw"), ("Erase", "erase"), ("Fill", "fill"), ("Pick", "pick"), ("Move stamp", "move")):
+        for title, tool in (("Draw", "draw"), ("Erase", "erase"), ("Fill", "fill"), ("Pick", "pick"), ("Move stamp", "move"), ("Box select", "select")):
             button = QPushButton(title); button.setCheckable(True)
             button.setAccessibleName(f"{title} tool")
             button.setAccessibleDescription(CardCanvas.TOOL_HELP[tool])
@@ -2893,7 +3127,7 @@ class MainWindow(QMainWindow):
         self._update_editor_format_disclosure()
         self.paint_color_combo = QComboBox(); self.paint_color_combo.currentIndexChanged.connect(self.select_color)
         self.paint_color_combo.setVisible(False)
-        self.palette_widget = QWidget(); self.palette_layout = QGridLayout(self.palette_widget)
+        self.palette_widget = QWidget(); self.palette_widget.setFixedWidth(146); self.palette_layout = QGridLayout(self.palette_widget)
         self.palette_layout.setContentsMargins(0, 0, 0, 0); self.palette_layout.setSpacing(6)
         side.addWidget(self.palette_widget)
         self._set_editor_format(self.card)
@@ -2940,6 +3174,16 @@ class MainWindow(QMainWindow):
         self.remove_placed_stamp_button = QPushButton("Remove placed stamp")
         self.remove_placed_stamp_button.clicked.connect(self.remove_placed_stamp)
         side.addWidget(self.remove_placed_stamp_button)
+        self.convert_stamp_button = QPushButton("Convert stamp to pixels")
+        self.convert_stamp_button.setToolTip("Merge the selected stamp and stamps beneath it into editable pixels. Undo restores stamps.")
+        self.convert_stamp_button.clicked.connect(lambda: self.canvas.convert_stamp_to_pixels())
+        side.addWidget(self.convert_stamp_button)
+        self.save_selection_stamp_button = QPushButton("Convert selection to stamp")
+        self.save_selection_stamp_button.clicked.connect(self.save_canvas_selection_stamp)
+        side.addWidget(self.save_selection_stamp_button)
+        self.listen_canvas_button = QPushButton("Listen in…")
+        self.listen_canvas_button.clicked.connect(self.listen_to_canvas)
+        side.addWidget(self.listen_canvas_button)
         self.load_stamps()
         buttons = QHBoxLayout()
         for label, handler in (("New", self.new_card), ("Open…", self.open_card), ("Save", self.save_card), ("Paste image", self.paste_card_image), ("Export WAV…", self.export_wav)):
@@ -2966,6 +3210,8 @@ class MainWindow(QMainWindow):
 
     def set_editor_tool(self, tool):
         self.canvas.tool = tool
+        if tool != "select":
+            self.canvas.selection_rect = QRect(); self.canvas.selection_handle = QRect()
         self.canvas.update_accessible_description()
         self.tool_buttons[tool].setChecked(True)
 
@@ -2978,6 +3224,8 @@ class MainWindow(QMainWindow):
         self.placed_stamp_width.setEnabled(selected); self.resize_stamp_button.setEnabled(selected)
         self.stamp_resize_controls.setVisible(selected)
         self.remove_placed_stamp_button.setVisible(selected)
+        self.convert_stamp_button.setVisible(selected)
+        self.save_selection_stamp_button.setVisible(not self.canvas.selection_rect.isNull() or selected)
         saved_stamp_selected = self.stamp_list.currentItem() is not None
         self.stamp_actions_widget.setVisible(saved_stamp_selected)
         self.place_stamp_button.setVisible(saved_stamp_selected)
@@ -3042,7 +3290,7 @@ class MainWindow(QMainWindow):
             button.setToolTip(f"Color {index+1} · {color}")
             button.setStyleSheet(palette_swatch_style(color, selected=selected))
             button.clicked.connect(lambda _checked=False, value=index: (self.select_color(value), self._refresh_paint_colors()))
-            self.palette_layout.addWidget(button, index//8, index%8)
+            self.palette_layout.addWidget(button, index//4, index%4)
 
     def change_card_format(self, *_):
         if not hasattr(self, "canvas_size_combo"):
@@ -3327,6 +3575,40 @@ class MainWindow(QMainWindow):
             "Stamp placed · drag to move; drag the lower-right handle to resize")
 
         self._sync_editor_controls()
+
+    def save_canvas_selection_stamp(self):
+        rect = self.canvas.selection_rect
+        index = self.canvas.selected_layer
+        if not rect.isNull():
+            image = QImage(rect.width(), rect.height(), QImage.Format.Format_ARGB32)
+            for y in range(rect.height()):
+                for x in range(rect.width()):
+                    color = self.card.palette[self.card.pixels[(rect.y()+y)*self.card.width+rect.x()+x]]
+                    image.setPixelColor(x, y, QColor(*(v*17 for v in color)))
+        elif index is not None and 0 <= index < len(self.canvas.stamp_layers):
+            layer = self.canvas.stamp_layers[index]
+            image = QImage(layer["width"], layer["height"], QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.transparent)
+            for i, value in enumerate(layer["pixels"]):
+                if value is not None:
+                    image.setPixelColor(i % layer["width"], i // layer["width"], QColor(*(v*17 for v in self.card.palette[value])))
+        else:
+            return
+        path = DATA / "stamps" / f"stamp-{time.time_ns()}.png"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not image.save(str(path), "PNG"):
+            self.status.setText("Could not save stamp."); return
+        self.load_stamps()
+        self.status.setText(f"Saved {image.width()}×{image.height()} pixels to My stamps.")
+
+    def listen_to_canvas(self):
+        def snapshot():
+            card = copy.deepcopy(self.card)
+            card.callsign = self.call.text().strip().upper()
+            card.grid = self.grid.text().strip().upper()
+            return card
+        dialog = CanvasListenDialog(snapshot, self)
+        dialog.exec()
 
     def resize_placed_stamp(self):
         index = self.canvas.selected_layer

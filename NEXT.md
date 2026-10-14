@@ -1,5 +1,18 @@
 # Next steps: Pixel QSO UI/UX
 
+## Canvas tools — 2026-10-14
+
+Implemented a four-column palette at a fixed compact width, persistent selected-stamp
+controls, a contextual Convert to pixels button beside Delete, and undoable conversion.
+Box select supports mouse/keyboard selection; dragging or resizing lifts pixels into a
+placed stamp. Convert selection to stamp saves a reusable PNG in My stamps without
+changing the canvas. Listen in has a modem dropdown, output device, volume, Play/Stop,
+and asynchronous canvas encoding. Playback uses a dedicated audio sink without CAT/PTT.
+Editor and audio dialog inspected in offscreen renders; canvas tests cover appearance
+preservation, Undo, actual box resize gesture, library export, palette placement, waveform
+generation and canceled playback. Speaker playback and live editor use remain unverified.
+Source and container files are staged; the active app must restart to load them.
+
 ## Receive recovery — 2026-10-14
 
 Discard preview now replaces the worker cache and resets the decode sample watermark.

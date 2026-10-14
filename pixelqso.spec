@@ -16,6 +16,9 @@ bundled_datas.extend(
     (path, "examples/starter-cards")
     for path in glob.glob(os.path.join(SPECPATH, "examples", "starter-cards", "*.json")))
 bundled_binaries = []
+bundled_datas.extend(
+    (path, "examples/stamps")
+    for path in glob.glob(os.path.join(SPECPATH, "examples", "stamps", "*.png")))
 bundled_hidden = []
 if include_data2g_host:
     from PyInstaller.utils.hooks import collect_all

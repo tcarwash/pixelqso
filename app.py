@@ -63,6 +63,7 @@ from ui_theme import (COLORS, SPACING, build_app_stylesheet, palette_swatch_styl
 
 APP_ICON_PATH = Path(__file__).resolve().with_name("icon.png")
 STARTER_CARDS_PATH = Path(__file__).resolve().parent / "examples" / "starter-cards"
+DEFAULT_STAMPS_PATH = Path(__file__).resolve().parent / "examples" / "stamps"
 DATA2G_ACK_TIMEOUT_MS = 15_000
 DATA2G_BUSY_ACK_TIMEOUT_MS = 5 * 60_000
 DATA = Path.home() / ".local" / "share" / "PixelQSO"
@@ -3327,6 +3328,17 @@ class MainWindow(QMainWindow):
 
     def load_stamps(self):
         folder = DATA / "stamps"; folder.mkdir(parents=True, exist_ok=True)
+        # Seed each bundled stamp once, preserving user edits and deletions.
+        seeded_path = folder / ".bundled-stamps.json"
+        seeded = set(json.loads(seeded_path.read_text())) if seeded_path.exists() else set()
+        for path in sorted(DEFAULT_STAMPS_PATH.glob("*.png")):
+            if path.name in seeded:
+                continue
+            destination = folder / path.name
+            if not destination.exists():
+                destination.write_bytes(path.read_bytes())
+            seeded.add(path.name)
+        seeded_path.write_text(json.dumps(sorted(seeded)))
         self.stamp_list.clear()
         for path in sorted(folder.glob("*.png")):
             image = QImage(str(path))

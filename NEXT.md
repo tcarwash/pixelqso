@@ -1,5 +1,16 @@
 # Next steps: Pixel QSO UI/UX
 
+## Default chip cards and stamps — 2026-10-14
+
+Added four E-major chip cards to the starter gallery and eight opaque pixel stamps
+to the bundled default shelf. Stamps seed once per asset for new and existing
+profiles, preserving later edits and deletions. The desktop spec bundles the stamps.
+Source assets came from `/home/tyler/pixelqso-chip-cards`; its synthetic WAV auditions
+are not modem implementations or framed transmit audio. Live desktop use and a
+rebuilt executable remain unverified.
+Validation: all four cards pass native Card validation; an isolated offscreen
+shelf loads all eight PNGs and retains a deletion on reload. Diff checks pass.
+
 ## Canvas tools — 2026-10-14
 
 Implemented a four-column palette at a fixed compact width, persistent selected-stamp

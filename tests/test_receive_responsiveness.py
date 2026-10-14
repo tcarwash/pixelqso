@@ -86,7 +86,7 @@ class ReceiveResponsivenessTests(unittest.TestCase):
 
     def test_receive_all_checks_selected_mode_then_earliest_useful_candidate(self):
         from types import SimpleNamespace
-        from app import order_receive_candidates
+        from app import filter_receive_candidates, order_receive_candidates
         slow=SimpleNamespace(minimum_audio_seconds=lambda: 5.)
         quick=SimpleNamespace(minimum_audio_seconds=lambda: .3)
         tied=SimpleNamespace(minimum_audio_seconds=lambda: .3)
@@ -97,6 +97,40 @@ class ReceiveResponsivenessTests(unittest.TestCase):
                          ['slow-selected','quick','tied','malformed'])
         self.assertEqual([key for key,_ in order_receive_candidates(choices,'missing')],
                          ['quick','tied','slow-selected','malformed'])
+
+        self.assertEqual([key for key, _ in filter_receive_candidates(
+            choices, {"quick", "tied"}, "slow-selected")], ["quick", "tied"])
+        self.assertEqual([key for key, _ in filter_receive_candidates(
+            choices, set(), "slow-selected")], ["slow-selected"])
+
+    def test_starred_receive_all_modes_are_persisted_and_marked_in_selector(self):
+        qt = QApplication.instance() or QApplication([])
+        key = "experimental_8fsk_musical_25"
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), \
+                patch("app.QTimer.singleShot"):
+            window = MainWindow()
+            try:
+                window.backend_combo.setCurrentIndex(
+                    window.backend_combo.findData("experimental"))
+                window.show_experimental_modes.setChecked(True)
+                window._set_mode_options(key)
+                self.assertEqual(window.mode_combo.currentData(), key)
+                self.assertNotIn(key, window.rx_starred_modes)
+                window.receive_mode_star_button.click()
+                self.assertIn(key, window.rx_starred_modes)
+                self.assertIn(key, window._receive_all_scan_modes())
+                self.assertTrue(window.receive_mode_star_button.isChecked())
+                self.assertTrue(window.mode_combo.currentText().startswith("★ "))
+                self.assertIn(key, window.settings.value("transfer/receive_all_starred_modes"))
+
+                window.receive_mode_star_button.click()
+                self.assertNotIn(key, window._receive_all_scan_modes())
+                self.assertFalse(window.receive_mode_star_button.isChecked())
+                self.assertTrue(window._receive_all_scan_modes())
+            finally:
+                window.close()
+                qt.processEvents()
 
     def test_clean_qpsk_copy_finishes_without_demodulating_later_copies(self):
         card = pixel.example_card()

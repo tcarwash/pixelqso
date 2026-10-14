@@ -61,7 +61,8 @@ performance. Full traces, JSON, and test logs are stored under
 
 ## Reproducing
 
-Profile a mono, 16-bit WAV capture using the selected mode and receive-all:
+For a one-shot offline decode, profile a mono, 16-bit WAV capture with the
+existing full-capture profiler:
 
 ```sh
 .venv/bin/python tools/profile_receive_all.py capture.wav \
@@ -74,3 +75,30 @@ Measure PCM snapshot and conversion costs:
 ```sh
 .venv/bin/python tools/benchmark_receive_buffer.py
 ```
+
+For a live-path profile, use `tools/profile_live_receive.py`. It replays the
+capture as growing snapshots (first at one second, then every five seconds),
+keeps `CopyCaptureCache` alive between snapshots, and limits each snapshot to
+the live receiver's 360-second rolling window. It runs the actual
+`LiveDecodeWorker`, including PCM conversion, incremental protected-header
+search, receive-all routing, and modem decoding. It writes per-snapshot
+latencies and decoder attempts to JSON and a cumulative Python call profile to
+a sibling `.prof` file. The cProfile run adds instrumentation overhead, so use
+per-snapshot values to compare the same capture and runtime configuration;
+they are not a substitute for uninstrumented live UI latency.
+
+This is an offline source-code replay. Run it from this repository with its
+virtual environment and a mono 16-bit WAV capture:
+
+```sh
+.venv/bin/python tools/profile_live_receive.py \
+  /path/to/CAPTURE.wav \
+  --mode auto \
+  --selected-mode experimental_16fsk_grid \
+  --output work/rx-latency/CAPTURE-live-profile.json
+```
+
+It uses the decoder modules from this checkout and does not attach to or
+interrupt a live audio receiver. The profiler is set up but has not been run
+against a capture. Keep captures and their corresponding JSON/`.prof` outputs
+together so the results are reproducible.

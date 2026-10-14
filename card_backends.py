@@ -42,6 +42,7 @@ EXPERIMENTAL_MODE_LABELS = {
     "experimental_16fsk_ldpc": "16-FSK · soft LDPC · copy combining",
     "experimental_4fsk_orthogonal": "4-FSK · orthogonal · soft LDPC",
     "experimental_8fsk_orthogonal": "8-FSK · orthogonal · soft LDPC",
+    "experimental_8fsk_musical_25": "8-FSK · E-major scale · 25 baud",
     **{f"resilient_{baud}": f"8-FSK · RS + soft Chase · {baud} baud · ≈{9 * baud} Hz"
        for baud in (100, 50, 25)},
     "fast_avatar_fec": "8-FSK · RS + soft Chase · 400 baud · block CRC",
@@ -78,6 +79,10 @@ EXPERIMENTAL_MODE_DESCRIPTIONS = {
         "pilot timing and whole-card CRC32. Fixed tones 1200–2100 Hz; new experimental wire format.",
     "experimental_8fsk_orthogonal": "Orthogonal 8-FSK at 300 baud with 300 Hz tone spacing, interleaved rate-matched LDPC, "
         "pilot timing and whole-card CRC32. Fixed tones 450–2550 Hz; new experimental wire format.",
+    "experimental_8fsk_musical_25": "Experimental musical 8-FSK at 25 baud. The eight palette indices map directly "
+        "to the E-major scale E4–E5 (330, 370, 415, 440, 494, 554, 622, 659 Hz), so each image pixel selects a note "
+        "lasting about 40 ms. Raw pixel tones make the image audible as a note pattern; pixel data has no FEC or "
+        "whole-card checksum, so incomplete or corrupted pixels are not promoted as verified.",
     **{key: "8-tone FSK with shortened Reed–Solomon RS(63,61), bounded soft-decision "
        "Chase recovery, and per-block CRC16. Provisional pixels appear before block verification."
        for key in ("resilient_100", "resilient_50", "resilient_25", "fast_avatar_fec")},
@@ -628,6 +633,11 @@ BACKENDS: dict[str, CardBackend] = {
     "fast_avatar_fec": AvatarBackend("fast_avatar_fec", EXPERIMENTAL_MODE_LABELS["fast_avatar_fec"], True),
     "fast_avatar_fec_v4": AvatarBackend("fast_avatar_fec_v4", EXPERIMENTAL_MODE_LABELS["fast_avatar_fec_v4"], True,
                                          wire_version=4),
+    "experimental_8fsk_musical_25": AvatarBackend(
+        "experimental_8fsk_musical_25",
+        EXPERIMENTAL_MODE_LABELS["experimental_8fsk_musical_25"], False,
+        pixel.ModemProfile("musical-e-major-25", "E-major scale · 25 baud", 25,
+                           (330, 370, 415, 440, 494, 554, 622, 659), 330)),
     **{f"resilient_{baud}": AvatarBackend(
         f"resilient_{baud}", EXPERIMENTAL_MODE_LABELS[f"resilient_{baud}"], True,
         pixel.ModemProfile(f"avatar-{baud}", f"Narrow avatar · {baud} baud", baud,
@@ -674,6 +684,9 @@ MODE_REGISTRY: dict[str, ModeSpec] = {
        for key in ("experimental_8fsk_ldpc", "experimental_qpsk_equalized",
                    "experimental_8fsk_outer_rs", "experimental_16fsk_ldpc",
                    "experimental_4fsk_orthogonal", "experimental_8fsk_orthogonal")},
+    "experimental_8fsk_musical_25": ModeSpec(
+        "experimental_8fsk_musical_25", EXPERIMENTAL_MODE_LABELS["experimental_8fsk_musical_25"],
+        True, "pixelqso_audio"),
     "resilient_100": ModeSpec("resilient_100", EXPERIMENTAL_MODE_LABELS["resilient_100"], True, "pixelqso_audio", supports_audio_placement=True),
     "resilient_50": ModeSpec("resilient_50", EXPERIMENTAL_MODE_LABELS["resilient_50"], True, "pixelqso_audio", supports_audio_placement=True),
     "resilient_25": ModeSpec("resilient_25", EXPERIMENTAL_MODE_LABELS["resilient_25"], True, "pixelqso_audio", supports_audio_placement=True),

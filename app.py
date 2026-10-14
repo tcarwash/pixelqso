@@ -388,6 +388,17 @@ def order_receive_candidates(backends, preferred_key=None):
     return [(key,backend) for key,backend,_ in sorted(ranked,key=lambda item:item[2])]
 
 
+def filter_receive_candidates(backends, allowed_modes, preferred_key=None):
+    """Limit blind receive-all fallback to the user's starred local modes."""
+    candidates = list(backends)
+    if allowed_modes is None:
+        return candidates
+    allowed = set(allowed_modes)
+    if not allowed and preferred_key:
+        allowed.add(preferred_key)
+    return [(key, backend) for key, backend in candidates if key in allowed]
+
+
 def newest_protected_acquisition(copies):
     """Keep copies for the newest announced content identity only.
 
@@ -429,7 +440,8 @@ def _receive_report_rank(report):
 def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
                              preferred_mode=None, include_experimental=False,
                              on_preview=None, copy_cache=None, capture_start_sample=0, announced_copies=None,
-                             live_snapshot=False, on_mode_attempt=None, capture_session_id=0):
+                             live_snapshot=False, on_mode_attempt=None, capture_session_id=0,
+                             receive_modes=None):
     """Try the selected format first, then fall back to all installed formats."""
     # A verified common header routes RX before costly native decoder trials.
     # An unannounced historical capture retains the blind receive-all path.
@@ -531,6 +543,7 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
     backends = [(key, backend) for key, backend in backends
                 if MODE_REGISTRY.get(key) is not None and
                 MODE_REGISTRY[key].adapter != DATA2G_ADAPTER.key]
+    backends = filter_receive_candidates(backends, receive_modes, preferred_mode)
     preferred_key = {"fast_avatar": "fast_avatar_fec",
                      "experimental_qpsk_combined": "experimental_qpsk_5s"}.get(
                          preferred_mode, preferred_mode)
@@ -631,12 +644,13 @@ class LiveDecodeWorker(QRunnable):
     def __init__(self, samples: bytes, sample_rate: int, profile: str, generation: int,
                  mode="standard", audio_placement="near_carrier", preferred_mode=None,
                  include_experimental=False, copy_cache=None, capture_start_sample=0,
-                 capture_start_utc=None, receive_session_id=0):
+                 capture_start_utc=None, receive_session_id=0, receive_modes=None):
         super().__init__()
         self.copy_cache=copy_cache
         self.capture_start_sample=capture_start_sample
         self.capture_start_utc=capture_start_utc
         self.receive_session_id=receive_session_id
+        self.receive_modes=receive_modes
         self.samples = samples
         self.sample_rate = sample_rate
         self.profile = profile
@@ -690,7 +704,8 @@ class LiveDecodeWorker(QRunnable):
                                                    copy_cache=self.copy_cache,
                                                    capture_start_sample=self.capture_start_sample, announced_copies=announced,
                                                    live_snapshot=True,
-                                                   capture_session_id=self.receive_session_id)
+                                                   capture_session_id=self.receive_session_id,
+                                                   receive_modes=self.receive_modes)
                 if outcome.failure:
                     self._finish(None, False, outcome.failure, started)
                     return
@@ -3582,6 +3597,15 @@ class MainWindow(QMainWindow):
         self.exchange_mode.currentIndexChanged.connect(self._refresh_transfer_summary)
         self.exchange_role.currentIndexChanged.connect(self._refresh_transfer_summary)
         self.mode_combo = QComboBox()
+        saved_scan_modes = self.settings.value("transfer/receive_all_starred_modes", None)
+        if isinstance(saved_scan_modes, str):
+            saved_scan_modes = [saved_scan_modes]
+        self.rx_starred_modes = {
+            str(key) for key in (saved_scan_modes or [])
+            if str(key) in MODE_REGISTRY and
+            MODE_REGISTRY[str(key)].execution_path == "pixelqso_audio"
+        }
+        self._has_saved_rx_starred_modes = saved_scan_modes is not None
         configured_mode = self.settings.value("transfer/mode", DEFAULT_MODE_KEY)
         preserved_legacy_mode = (
             configured_mode not in {"data2g_1200_robust", "data2g_1200_fast"} and
@@ -3613,6 +3637,19 @@ class MainWindow(QMainWindow):
                 f"Your saved local modem mode {configured_mode!r} is preserved under "
                 "Experimental modems. Enable Show experimental modem modes and select "
                 "that backend to use it.", 15000)
+        if not self._has_saved_rx_starred_modes:
+            selected_key = self.selected_mode()
+            if (selected_key not in MODE_REGISTRY or
+                    MODE_REGISTRY[selected_key].execution_path != "pixelqso_audio"):
+                selected_key = next((key for key, spec in MODE_REGISTRY.items()
+                                     if spec.execution_path == "pixelqso_audio" and key in BACKENDS),
+                                    None)
+            if selected_key:
+                self.rx_starred_modes.add(selected_key)
+            self.settings.setValue("transfer/receive_all_starred_modes",
+                                   [key for key in MODE_REGISTRY if key in self.rx_starred_modes])
+        # Rebuild labels now that the initial default starred mode is known.
+        self._set_mode_options(self.selected_mode())
         self.mode_combo.currentIndexChanged.connect(self._persist_selected_mode)
         self.mode_combo.currentIndexChanged.connect(self._mark_mode_selection_explicit)
         self.mode_combo.currentIndexChanged.connect(self._on_mode_selection_changed)
@@ -3626,13 +3663,27 @@ class MainWindow(QMainWindow):
             "Select the digital mode used to send and receive cards. "
             "This is separate from the radio control mode and frequency.")
         mode_form = QFormLayout()
-        mode_form.addRow("Transfer mode", self.mode_combo)
-        self.transfer_mode_label = mode_form.labelForField(self.mode_combo)
+        self.transfer_mode_row = QWidget()
+        transfer_mode_layout = QHBoxLayout(self.transfer_mode_row)
+        transfer_mode_layout.setContentsMargins(0, 0, 0, 0)
+        transfer_mode_layout.addWidget(self.mode_combo, 1)
+        self.receive_mode_star_button = QPushButton("☆")
+        self.receive_mode_star_button.setCheckable(True)
+        self.receive_mode_star_button.setFixedWidth(42)
+        self.receive_mode_star_button.setToolTip(
+            "Star this modem for receive-all blind fallback. Protected headers still route directly.")
+        self.receive_mode_star_button.clicked.connect(self._toggle_receive_mode_star)
+        transfer_mode_layout.addWidget(self.receive_mode_star_button)
+        mode_form.addRow("Transfer mode", self.transfer_mode_row)
+        self.transfer_mode_label = mode_form.labelForField(self.transfer_mode_row)
+        self.mode_combo.currentIndexChanged.connect(self._update_receive_mode_star_button)
+        self._update_receive_mode_star_button()
         self._update_transfer_mode_visibility()
         self.receive_all_modes = QCheckBox("Receive all local audio modem types")
         self.receive_all_modes.setChecked(self.settings.value("transfer/receive_all", True, type=bool))
         self.receive_all_modes.setToolTip(
-            "This applies to Pixel QSO's local audio decoders. Data2G receives decoded card frames from its host.")
+            "Blind receive-all fallback tests only starred local modes; if none are starred, it uses the RX-preferred mode. "
+            "Protected headers route directly to their announced modem. Data2G receives decoded card frames from its host.")
         self.receive_all_modes.toggled.connect(lambda value: self.settings.setValue("transfer/receive_all", value))
         self.receive_all_modes.toggled.connect(self._update_rx_mode_controls)
         mode_form.addRow("Receive", self.receive_all_modes)
@@ -6180,6 +6231,43 @@ class MainWindow(QMainWindow):
         self._update_transfer_controls()
         self._refresh_transfer_summary()
 
+    def _update_receive_mode_star_button(self, *_):
+        button = getattr(self, "receive_mode_star_button", None)
+        if button is None:
+            return
+        key = self.mode_combo.currentData() or self.selected_mode()
+        spec = MODE_REGISTRY.get(key)
+        starable = bool(spec and spec.execution_path == "pixelqso_audio")
+        starred = key in getattr(self, "rx_starred_modes", set())
+        button.setEnabled(starable)
+        button.setChecked(starred)
+        button.setText("★" if starred else "☆")
+        label = MODE_REGISTRY[key].label if key in MODE_REGISTRY else str(key)
+        button.setAccessibleName(
+            f"{'Remove' if starred else 'Add'} {label} {'from' if starred else 'to'} receive-all starred modes")
+
+    def _toggle_receive_mode_star(self, *_):
+        key = self.mode_combo.currentData() or self.selected_mode()
+        spec = MODE_REGISTRY.get(key)
+        if spec is None or spec.execution_path != "pixelqso_audio":
+            self._update_receive_mode_star_button()
+            return
+        if key in self.rx_starred_modes:
+            self.rx_starred_modes.remove(key)
+        else:
+            self.rx_starred_modes.add(key)
+        self.settings.setValue(
+            "transfer/receive_all_starred_modes",
+            [mode for mode in MODE_REGISTRY if mode in self.rx_starred_modes])
+        self._set_mode_options(self.selected_mode())
+        self._update_receive_mode_star_button()
+
+    def _receive_all_scan_modes(self):
+        """Return starred, available local decoders in registry order."""
+        return tuple(key for key, spec in MODE_REGISTRY.items()
+                     if key in self.rx_starred_modes and key in BACKENDS and
+                     spec.execution_path == "pixelqso_audio")
+
     def _set_mode_options(self, preferred):
         data2g = self.backend_combo.currentData() == "data2g"
         recommendations = dict(recommended_data2g_modes(self.data2g_modes)) if data2g else {}
@@ -6223,6 +6311,8 @@ class MainWindow(QMainWindow):
                 label = MODE_REGISTRY[key].label if key == LEGACY_MODE_KEY else backend.label
                 if key in recommendations:
                     label = f"★ {recommendations[key]} · {backend.label.removeprefix('Data2G · ')}"
+                elif not data2g and key in getattr(self, "rx_starred_modes", set()):
+                    label = f"★ {label}"
                 self.mode_combo.addItem(label, key)
                 if key in EXPERIMENTAL_MODE_DESCRIPTIONS:
                     self.mode_combo.setItemData(self.mode_combo.count() - 1,
@@ -6240,6 +6330,7 @@ class MainWindow(QMainWindow):
         if not data2g or (self.data2g_modes and selected in selectable_keys):
             self.settings.setValue(setting, selected)
         self._mode_has_explicit_selection = selected != fallback
+        self._update_receive_mode_star_button()
         self._update_transfer_mode_visibility()
 
     def _update_transfer_mode_visibility(self):
@@ -6248,7 +6339,8 @@ class MainWindow(QMainWindow):
             return
         unavailable = (self.backend_combo.currentData() == "data2g" and
                        not self.data2g_modes)
-        self.mode_combo.setVisible(not unavailable)
+        mode_row = getattr(self, "transfer_mode_row", self.mode_combo)
+        mode_row.setVisible(not unavailable)
         self.transfer_mode_label.setVisible(not unavailable)
 
     def _update_transfer_controls(self, *_):
@@ -7970,7 +8062,9 @@ class MainWindow(QMainWindow):
                                   capture_start_sample=self.rx_capture_sample_offset,
                                   capture_start_utc=(None if getattr(self, "rx_capture_start_utc", None) is None else
                                       self.rx_capture_start_utc + self.rx_capture_sample_offset/self.rx_rate),
-                                  receive_session_id=self.rx_session_id)
+                                  receive_session_id=self.rx_session_id,
+                                  receive_modes=(self._receive_all_scan_modes()
+                                                 if self.receive_mode() == "auto" else None))
         # QThreadPool owns the C++ QRunnable while queued, but the Python
         # wrapper owns its QObject signals. Keep that wrapper alive until the
         # finished callback has been delivered, including across session pivots.

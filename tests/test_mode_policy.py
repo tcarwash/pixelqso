@@ -40,6 +40,12 @@ class ModePolicyTests(unittest.TestCase):
         self.assertFalse(mode_supports_audio_placement("fast_avatar_fec_v4"))
         self.assertEqual(get_backend("resilient_100", 300).profile.tones_hz[0], 300)
 
+        musical = get_backend("experimental_8fsk_musical_25")
+        self.assertEqual(musical.profile.baud, 25)
+        self.assertEqual(musical.profile.tones_hz,
+                         (330, 370, 415, 440, 494, 554, 622, 659))
+        self.assertTrue(MODE_REGISTRY["experimental_8fsk_musical_25"].experimental)
+
     def test_static_mode_catalog_contains_only_experimental_local_modems(self):
         visible = {key for key, _backend in available_modes()}
         self.assertFalse(visible)

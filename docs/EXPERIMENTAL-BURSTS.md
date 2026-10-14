@@ -7,10 +7,26 @@ See [shared copy framing and receiver hardening](../tools/COPY_COMBINING.md).
 
 
 Enable **Show experimental modem modes** in Station settings, select
-**Experimental modems**, then select one of the four new modes. Each sends one
-burst containing a 32×32 card in the canonical eight-color palette. Larger cards
-are rejected with a size explanation. Existing modem IDs and formats remain
-available.
+**Experimental modems**, then select one of the four single-burst modes in the
+table below. Each sends one burst containing a 32×32 card in the canonical
+eight-color palette. Larger cards are rejected with a size explanation.
+Existing modem IDs and formats remain available.
+
+The **8-FSK · E-major scale · 25 baud** experimental mode maps palette indices
+0–7 to E4, F♯4, G♯4, A4, B4, C♯5, D♯5, and E5 (about 330–659 Hz). Each image
+symbol lasts 40 ms, so the raster can be heard as a sequence of scale tones.
+This mode sends the palette symbols directly and has no whole-card error
+correction or checksum; use it as a musical experiment, not for reliable card
+transfer. A clean synthetic encode/decode currently recovered the first 1,020
+of 1,024 raster symbols, with the last four falling at the frame edge. The
+protected common copy header remains outside the musical raster.
+
+In Operate, the ☆ beside **Transfer mode** marks a local modem for blind
+**Receive all** scans. The starred set is saved in settings, and receive-all
+tries only those modes during blind fallback. A protected header that identifies
+a specific mode still routes directly to that decoder, even when it is not
+starred. If the starred set is empty, the RX-preferred mode is used as the sole
+blind candidate.
 
 | Mode ID | Modulation and correction | Burst airtime |
 | --- | --- | --- |

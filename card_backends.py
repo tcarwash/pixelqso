@@ -657,6 +657,10 @@ class ModeSpec:
     availability: str = "installed"
     adapter_key: str | None = None
     supports_audio_placement: bool = False
+    # None means the wire format accepts variable dimensions. These are UI
+    # capabilities, not a promise that every host mode has unlimited capacity.
+    supported_sizes: tuple[tuple[int, int], ...] | None = ((32, 32),)
+    supported_palette_sizes: tuple[int, ...] = (8,)
 
     @property
     def adapter(self) -> str:
@@ -670,6 +674,21 @@ class ModeSpec:
         # the stable mode key or the policy metadata.
         backend = BACKENDS.get(self.key)
         return backend.label if backend is not None else self.fallback_label
+
+    def supports_card(self, width: int, height: int, palette_size: int) -> bool:
+        size_ok = self.supported_sizes is None or (int(width), int(height)) in self.supported_sizes
+        return size_ok and int(palette_size) in self.supported_palette_sizes
+
+    @property
+    def capability_label(self) -> str:
+        if self.supported_sizes is None:
+            size = "variable size"
+        elif len(self.supported_sizes) == 1:
+            size = f"{self.supported_sizes[0][0]}×{self.supported_sizes[0][1]}"
+        else:
+            size = "/".join(f"{w}×{h}" for w, h in self.supported_sizes)
+        palettes = "/".join(str(value) for value in self.supported_palette_sizes)
+        return f"{size} · {palettes} colors"
 
 
 # Single mode catalog. Runtime host discovery fills in the Data2G backends in
@@ -696,7 +715,23 @@ MODE_REGISTRY: dict[str, ModeSpec] = {
     "experimental_qpsk_5s": ModeSpec("experimental_qpsk_5s", EXPERIMENTAL_MODE_LABELS["experimental_qpsk_5s"], True, "pixelqso_audio", "scipy"),
     "experimental_qpsk_combined": ModeSpec("experimental_qpsk_combined", EXPERIMENTAL_MODE_LABELS["experimental_qpsk_combined"], True, "pixelqso_audio", "scipy"),
     "standard": ModeSpec("standard", EXPERIMENTAL_MODE_LABELS["standard"], True, "pixelqso_audio"),
+    "data2g_1200_robust": ModeSpec(
+        "data2g_1200_robust", "Data2G · 1.2 kHz · robust", False,
+        "data2g_host", "host", "data2g_host", supported_sizes=None,
+        supported_palette_sizes=(8, 16, 32)),
+    "data2g_1200_fast": ModeSpec(
+        "data2g_1200_fast", "Data2G · 1.2 kHz · fast", False,
+        "data2g_host", "host", "data2g_host", supported_sizes=None,
+        supported_palette_sizes=(8, 16, 32)),
 }
+# The resilient/raw avatar envelope carries its dimensions and palette ID in
+# the protected header. The newer burst and weak-signal formats are fixed to
+# the original 32×32, eight-color envelope.
+for _key in ("resilient_100", "resilient_50", "resilient_25",
+             "fast_avatar_fec", "fast_avatar_fec_v4", "fast_avatar"):
+    MODE_REGISTRY[_key] = replace(
+        MODE_REGISTRY[_key], supported_sizes=None,
+        supported_palette_sizes=(8, 16, 32))
 MODE_ORDER = tuple(MODE_REGISTRY)
 EXPERIMENTAL_MODE_KEYS = frozenset(key for key, spec in MODE_REGISTRY.items() if spec.experimental)
 LEGACY_MODE_KEY = "standard"
@@ -716,8 +751,9 @@ def register_data2g_mode_backends(backends):
                 BACKENDS.pop(key, None)
     for key, backend in backends.items():
         BACKENDS[key] = backend
-        MODE_REGISTRY[key] = ModeSpec(key, backend.label, False, "data2g_host", "host",
-                                      "data2g_host")
+        MODE_REGISTRY[key] = ModeSpec(
+            key, backend.label, False, "data2g_host", "host", "data2g_host",
+            supported_sizes=None, supported_palette_sizes=(8, 16, 32))
     MODE_ORDER = tuple(MODE_REGISTRY)
 
 

@@ -73,6 +73,31 @@ PALETTE = [(0, 0, 0), (15, 15, 15), (0, 0, 15), (0, 15, 15),
 PALETTE_NAMES = ("Black", "White", "Blue", "Cyan", "Green", "Yellow", "Red", "Magenta")
 _BASE_APPLICATION_FONT = None
 
+
+def normalize_card_palette(card):
+    """Map imported arbitrary palettes onto the protocol's shared 8 colors."""
+    if len(card.palette) in (8, 16, 32):
+        return card
+    source = []
+    for color in card.palette:
+        if len(color) != 3:
+            return modem.Card(card.callsign, card.grid, list(PALETTE),
+                              [0] * (card.width * card.height), card.card_id,
+                              card.width, card.height)
+        source.append(tuple(
+            max(0, min(15, round(int(channel) / 17) if int(channel) > 15 else int(channel)))
+            for channel in color))
+    if not source:
+        source = [(0, 0, 0)]
+    mapped_pixels = []
+    for index in card.pixels:
+        rgb = source[int(index)]
+        mapped_pixels.append(min(
+            range(len(PALETTE)),
+            key=lambda target: sum((rgb[k] - PALETTE[target][k]) ** 2 for k in range(3))))
+    return modem.Card(card.callsign, card.grid, list(PALETTE), mapped_pixels,
+                      card.card_id, card.width, card.height)
+
 CW_MORSE = {
     "A": ".-", "B": "-...", "C": "-.-.", "D": "-..", "E": ".",
     "F": "..-.", "G": "--.", "H": "....", "I": "..", "J": ".---",
@@ -2641,6 +2666,7 @@ class MainWindow(QMainWindow):
     def _load_card_path(self, path):
         d = json.loads(path.read_text())
         self.card = modem.Card(d["callsign"], d["grid"], [tuple(c) for c in d["palette"]], d["pixels"], d.get("card_id", 0xC0DE), d.get("width", 32), d.get("height", 32))
+        self.card = normalize_card_palette(self.card)
         self.card.validate(); self.card_path = path
         self.canvas.set_card(self.card, d.get("base_pixels", self.card.pixels), d.get("stamp_layers", []))
         self._sync_editor_controls()
@@ -3905,6 +3931,13 @@ class MainWindow(QMainWindow):
         self.exchange_mode.currentIndexChanged.connect(self._refresh_transfer_summary)
         self.exchange_role.currentIndexChanged.connect(self._refresh_transfer_summary)
         self.mode_combo = QComboBox()
+        self.mode_compatibility_filter = QComboBox()
+        self.mode_compatibility_filter.addItem("All modes", "all")
+        self.mode_compatibility_filter.addItem("Compatible with current card", "compatible")
+        self.mode_compatibility_filter.setToolTip(
+            "Filter modes by the current card's canvas size and palette size. "
+            "All modes remain available by default.")
+        self.mode_compatibility_filter.setAccessibleName("Mode compatibility filter")
         configured_mode = self.settings.value("transfer/mode", DEFAULT_MODE_KEY)
         preserved_legacy_mode = (
             configured_mode not in {"data2g_1200_robust", "data2g_1200_fast"} and
@@ -3951,6 +3984,9 @@ class MainWindow(QMainWindow):
         mode_form = QFormLayout()
         mode_form.addRow("Transfer mode", self.mode_combo)
         self.transfer_mode_label = mode_form.labelForField(self.mode_combo)
+        self.mode_compatibility_filter.currentIndexChanged.connect(
+            lambda *_: self._set_mode_options(self.selected_mode()))
+        mode_form.addRow("Show", self.mode_compatibility_filter)
         self._update_transfer_mode_visibility()
         self.receive_all_modes = QCheckBox("Receive all local audio modem types")
         self.receive_all_modes.setChecked(self.settings.value("transfer/receive_all", True, type=bool))
@@ -4003,6 +4039,7 @@ class MainWindow(QMainWindow):
         self.card_combo = QComboBox()
         self.card_combo.setIconSize(QSize(42, 42))
         self.card_combo.currentIndexChanged.connect(self._refresh_transfer_summary)
+        self.card_combo.currentIndexChanged.connect(self._refresh_mode_capabilities)
         self.manual_card_widget = QWidget(); manual_card_layout = QHBoxLayout(self.manual_card_widget)
         manual_card_layout.setContentsMargins(0, 0, 0, 0); manual_card_layout.addWidget(self.card_combo)
         mode_form.addRow("Card", self.manual_card_widget)
@@ -4024,6 +4061,7 @@ class MainWindow(QMainWindow):
             combo = QComboBox(); combo.setIconSize(QSize(48, 48))
             combo.currentIndexChanged.connect(self._save_auto_stage_cards)
             combo.currentIndexChanged.connect(self._refresh_transfer_summary)
+            combo.currentIndexChanged.connect(self._refresh_mode_capabilities)
             self.stage_card_combos[stage] = combo
             button = QPushButton(title); button.setCheckable(True)
             button.setProperty("stage", stage)
@@ -6544,6 +6582,40 @@ class MainWindow(QMainWindow):
         self._update_transfer_controls()
         self._refresh_transfer_summary()
 
+    def _current_card_capability(self):
+        try:
+            card = self._chosen_card()
+        except Exception:
+            card = getattr(self, "card", None)
+        if card is None:
+            return None
+        return int(card.width), int(card.height), len(card.palette)
+
+    def _mode_capability_label(self, key):
+        spec = MODE_REGISTRY.get(key)
+        return spec.capability_label if spec is not None else "capabilities unknown"
+
+    def _mode_capability_tooltip(self, key, description=None):
+        spec = MODE_REGISTRY.get(key)
+        lines = []
+        if description:
+            lines.append(description)
+        if spec is not None:
+            lines.append(f"Supports: {spec.capability_label}")
+            card = self._current_card_capability()
+            if card is not None and not spec.supports_card(*card):
+                lines.append(
+                    f"Current card: {card[0]}×{card[1]} · {card[2]} colors (incompatible)")
+        return "\n\n".join(lines)
+
+    def _refresh_mode_capabilities(self, *_):
+        """Refresh compatibility filtering after the selected card changes."""
+        if not hasattr(self, "mode_combo"):
+            return
+        # Rebuild tooltips so an incompatible current card is explained even
+        # when the user leaves the filter on All modes.
+        self._set_mode_options(self.selected_mode())
+
     def _set_mode_options(self, preferred):
         data2g = self.backend_combo.currentData() == "data2g"
         recommendations = dict(recommended_data2g_modes(self.data2g_modes)) if data2g else {}
@@ -6567,6 +6639,11 @@ class MainWindow(QMainWindow):
         else:
             entries = []
             fallback = "resilient_100"
+        if self.mode_compatibility_filter.currentData() == "compatible":
+            card = self._current_card_capability()
+            entries = [(key, backend) for key, backend in entries
+                       if (MODE_REGISTRY.get(key) is None or
+                           card is None or MODE_REGISTRY[key].supports_card(*card))]
         visible_keys = {key for key, _backend in entries}
         selectable_keys = {key for key, backend in entries
                            if (MODE_REGISTRY.get(key) is None or
@@ -6579,6 +6656,9 @@ class MainWindow(QMainWindow):
                     next((key for key, _backend in entries if key in selectable_keys), fallback))
         with QSignalBlocker(self.mode_combo):
             self.mode_combo.clear()
+            if not entries:
+                self.mode_combo.addItem("No compatible modes for this card")
+                self.mode_combo.model().item(0).setEnabled(False)
             for key, backend in entries:
                 if recommendations and key not in recommendations and self.mode_combo.count() == len(recommendations):
                     self.mode_combo.insertSeparator(self.mode_combo.count())
@@ -6587,10 +6667,16 @@ class MainWindow(QMainWindow):
                 label = MODE_REGISTRY[key].label if key == LEGACY_MODE_KEY else backend.label
                 if key in recommendations:
                     label = f"★ {recommendations[key]} · {backend.label.removeprefix('Data2G · ')}"
+                label = f"{label} · {self._mode_capability_label(key)}"
                 self.mode_combo.addItem(label, key)
                 if key in EXPERIMENTAL_MODE_DESCRIPTIONS:
                     self.mode_combo.setItemData(self.mode_combo.count() - 1,
-                        EXPERIMENTAL_MODE_DESCRIPTIONS[key], Qt.ItemDataRole.ToolTipRole)
+                        self._mode_capability_tooltip(
+                            key, EXPERIMENTAL_MODE_DESCRIPTIONS[key]), Qt.ItemDataRole.ToolTipRole)
+                else:
+                    self.mode_combo.setItemData(
+                        self.mode_combo.count() - 1,
+                        self._mode_capability_tooltip(key), Qt.ItemDataRole.ToolTipRole)
                 if (MODE_REGISTRY.get(key) is not None and
                         MODE_REGISTRY[key].adapter == DATA2G_ADAPTER.key and
                         not getattr(backend, "usable", False)):
@@ -6674,6 +6760,18 @@ class MainWindow(QMainWindow):
                     set_summary(backend.disabled_reason, True)
                     return
             card = self._chosen_card()
+            capability = MODE_REGISTRY.get(self.selected_mode())
+            capability_note = ""
+            if capability is not None:
+                capability_note = f" · modem supports {capability.capability_label}"
+                if not capability.supports_card(card.width, card.height, len(card.palette)):
+                    identity = " ".join(value for value in (card.callsign, card.grid) if value)
+                    set_summary(
+                        f"{identity} · {self._outgoing_message_type()} · "
+                        f"{card.width}×{card.height} · {len(card.palette)} colors · "
+                        f"incompatible with modem (supports {capability.capability_label})",
+                        data2g)
+                    return
             if backend is not None:
                 total_seconds = backend.estimate_seconds(card, self.repeat_count.value())
             else:
@@ -6696,7 +6794,7 @@ class MainWindow(QMainWindow):
             identity = " ".join(value for value in (card.callsign, card.grid) if value)
             set_summary(
                 f"{identity} · {stage_label} · {card.width}×{card.height} · "
-                f"{len(card.palette)} colors · {timing}", data2g)
+                f"{len(card.palette)} colors · {timing}{capability_note}", data2g)
             if mode_supports_audio_placement(self.selected_mode()):
                 tones = backend.profile.tones_hz
                 self.transfer_summary.setText(self.transfer_summary.text() + f" · {tones[0]:g}–{tones[-1]:g} Hz audio")
@@ -6942,6 +7040,7 @@ class MainWindow(QMainWindow):
             data = json.loads(Path(selected_path).read_text())
             card = modem.Card(data["callsign"], data["grid"], [tuple(c) for c in data["palette"]],
                               list(data["pixels"]), data.get("card_id", 0xC0DE), data.get("width", 32), data.get("height", 32))
+            card = normalize_card_palette(card)
         else:
             card = modem.Card(self.call.text().strip().upper(), self.grid.text().strip().upper(),
                               list(self.card.palette), list(self.card.pixels), self.card.card_id,

@@ -13,6 +13,57 @@ class TransferControlTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_experimental_startup_does_not_launch_data2g(self):
+        with tempfile.TemporaryDirectory() as folder, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": folder}), patch("app.QTimer.singleShot") as timer:
+            Path(folder, "settings.ini").write_text(
+                "[options]\nbackend=experimental\nshow_experimental_modes=true\n"
+                "[transfer]\nexperimental_mode=resilient_50\nmode=resilient_50\n")
+            window = pixelqso.MainWindow()
+            try:
+                self.assertEqual(window.backend_combo.currentData(), "experimental")
+                self.assertFalse(window.data2g_background_monitor)
+                self.assertIsNone(window.data2g_local_process)
+                self.assertFalse(any(call.args[-1] == window._connect_data2g_host
+                                     for call in timer.call_args_list))
+                with patch.object(window, "_start_local_data2g_host") as start:
+                    window._connect_data2g_host()
+                    start.assert_not_called()
+                self.assertEqual(window.selected_mode(), "resilient_50")
+            finally:
+                window.close()
+
+    def test_switch_to_experimental_releases_data2g_before_cat(self):
+        with tempfile.TemporaryDirectory() as folder, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": folder}), patch("app.QTimer.singleShot") as timer:
+            window = pixelqso.MainWindow()
+            try:
+                window.show_experimental_modes.setChecked(True)
+                with pixelqso.QSignalBlocker(window.backend_combo):
+                    window.backend_combo.setCurrentIndex(
+                        window.backend_combo.findData("experimental"))
+                session = object()
+                window.data2g_session = session
+                timer.reset_mock()
+                with patch("app.DATA2G_ADAPTER.is_connected", return_value=True), \
+                        patch("threading.Thread") as thread:
+                    window._on_backend_selection_changed()
+                    self.assertFalse(window.data2g_background_monitor)
+                    self.assertTrue(window.data2g_closing)
+                    self.assertEqual(thread.call_args.kwargs["args"], (session,))
+                    thread.return_value.start.assert_called_once()
+                    self.assertFalse(any(call.args[-1] == window.connect_rig
+                                         for call in timer.call_args_list))
+                with patch.object(window, "_stop_local_data2g_host") as stop:
+                    window._data2g_host_closed(session)
+                    stop.assert_called_once()
+                    self.assertIsNone(window.data2g_session)
+                    self.assertTrue(any(call.args[-1] == window.connect_rig
+                                        for call in timer.call_args_list))
+            finally:
+                window.data2g_session = None
+                window.close()
+
     def test_callsign_edit_with_background_monitor_reconnects_identity(self):
         with tempfile.TemporaryDirectory() as folder, patch.dict(
                 os.environ, {"PIXELQSO_DATA_DIR": folder}), patch("app.QTimer.singleShot"):

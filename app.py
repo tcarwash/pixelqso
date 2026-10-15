@@ -222,13 +222,14 @@ class RigctlClient(QObject):
         self.timer.start(3000)
 
     def _read(self):
-        if not self.pending: return
-        self.pending[3].extend(bytes(self.socket.readAll()).decode("utf-8", "replace").splitlines())
-        values = self.pending[3]
-        if values and values[-1].startswith("RPRT "):
-            self._finish(values)
-        elif len(values) >= self.pending[1]:
-            self._finish(values[:self.pending[1]])
+        # TCP may split a response anywhere, including within a frequency.
+        # Leave incomplete lines in Qt's buffer until the next readyRead.
+        while self.pending and self.socket.canReadLine():
+            line = bytes(self.socket.readLine()).decode("utf-8", "replace").rstrip("\r\n")
+            self.pending[3].append(line)
+            values = self.pending[3]
+            if line.startswith("RPRT ") or len(values) >= self.pending[1]:
+                self._finish(values)
 
     def _finish(self, result):
         self.timer.stop()
@@ -1868,7 +1869,7 @@ class MainWindow(QMainWindow):
         if not self.show_experimental_modes.isChecked() and saved_backend == "experimental":
             self.backend_combo.setCurrentIndex(0)
             self.settings.setValue("options/backend", "data2g")
-        self.data2g_background_monitor = self.backend_combo.currentData() == "experimental"
+        self.data2g_background_monitor = False
         self.backend_combo.currentIndexChanged.connect(self._on_backend_selection_changed)
         self.show_experimental_modes.toggled.connect(self._on_experimental_visibility_changed)
         self.audio_test_mode = QCheckBox("Audio-only test mode (PTT disabled)")
@@ -2022,7 +2023,6 @@ class MainWindow(QMainWindow):
             if self._should_auto_connect_rig():
                 QTimer.singleShot(0, self.connect_rig)
             QTimer.singleShot(250, self._ensure_session_receive)
-            QTimer.singleShot(0, self._ensure_data2g_background_monitor)
 
     def _show_about(self):
         QMessageBox.about(
@@ -5282,6 +5282,8 @@ class MainWindow(QMainWindow):
                         "verify the radio is unkeyed before reconnecting.")
 
     def _connect_data2g_host(self):
+        if self.backend_combo.currentData() != "data2g":
+            return
         if (self._closing or self.data2g_connecting or self.data2g_local_starting or
                 self.data2g_closing or self.data2g_handoff_pending):
             return
@@ -5550,9 +5552,6 @@ class MainWindow(QMainWindow):
                 self.backend_combo.currentData() == "experimental" and
                 not self.rx_timer.isActive()):
             QTimer.singleShot(0, self._ensure_session_receive)
-        if (not self._closing and self.backend_combo.currentData() == "experimental" and
-                self.data2g_background_monitor):
-            QTimer.singleShot(5000, self._ensure_data2g_background_monitor)
 
     def _mark_mode_selection_explicit(self, *_):
         self._mode_has_explicit_selection = True
@@ -5584,7 +5583,7 @@ class MainWindow(QMainWindow):
             self._update_station_settings_actions()
             return
         data2g = self.backend_combo.currentData() == "data2g"
-        self.data2g_background_monitor = not data2g
+        self.data2g_background_monitor = False
         if not data2g and not self._confirm_data2g_ptt_recovery():
             with QSignalBlocker(self.backend_combo):
                 self.backend_combo.setCurrentIndex(self.backend_combo.findData("data2g"))
@@ -5608,21 +5607,11 @@ class MainWindow(QMainWindow):
                 self._should_auto_connect_rig()
                 and not self.rig.connected()):
             QTimer.singleShot(0, self.connect_rig)
-        if not data2g:
-            self._ensure_data2g_background_monitor()
         self._update_transfer_controls()
         self._refresh_transfer_summary()
         self.audio_test_mode_changed(self.audio_test_mode.isChecked())
         self._update_data2g_host_controls()
         self.refresh_tx_button()
-
-    def _ensure_data2g_background_monitor(self):
-        if (self._closing or self.backend_combo.currentData() != "experimental" or
-                not self.data2g_background_monitor or self.data2g_connecting or
-                self.data2g_local_starting or self.data2g_closing or
-                DATA2G_ADAPTER.is_connected(self.data2g_session)):
-            return
-        self._connect_data2g_host()
 
     def _switch_to_data2g_backend(self):
         if not DATA2G_ADAPTER.is_connected(self.data2g_session):
@@ -5774,10 +5763,9 @@ class MainWindow(QMainWindow):
         self._update_backend_ui()
         if self.selected_adapter().capabilities.kind is not AdapterKind.FRAME_TRANSPORT:
             QTimer.singleShot(0, self._ensure_session_receive)
-            self._ensure_data2g_background_monitor()
 
     def _resume_experimental_backend(self):
-        """Acquire Experimental CAT/audio while an optional Data2G monitor listens."""
+        """Acquire Experimental CAT/audio after Data2G releases ownership."""
         if (self._closing or self.backend_combo.currentData() != "experimental" or
                 self.data2g_connecting or self.data2g_local_starting or self.data2g_closing or
                 (DATA2G_ADAPTER.is_connected(self.data2g_session) and

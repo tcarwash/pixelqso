@@ -165,7 +165,10 @@ catalog, opens the shared `PIXELQSO` broadcast group, and validates the catalog
 against that group's `BCAST MODE` support before showing choices.
 
 For Data2G modes, Data2G owns radio audio and PTT. Pixel QSO releases its local
-audio receiver and CAT connection while the host is selected. Local 8-FSK
+audio receiver and CAT connection while the host is selected. Experimental
+mode does not run a background Data2G receiver or detect Data2G cards. Switching
+to Experimental disconnects Data2G and stops the managed host before local
+radio control resumes; select Data2G explicitly to receive Data2G cards. Local 8-FSK
 modes continue using Pixel QSO's configured audio and CAT path. Do not connect
 Pixel QSO to a Data2G instance whose single-client command port is already
 owned by its GUI; use the managed host or a separate host instance instead.

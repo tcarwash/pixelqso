@@ -1,5 +1,47 @@
 # Next steps: Pixel QSO UI/UX
 
+## Provisional replies and reception reports — 2026-10-14
+
+Animation work is committed as `d3a2bb0` on `animations`. The following reply/report
+changes are a separate, uncommitted checkpoint.
+
+Identified provisional cards now expose the manual reply action. Both **Send Exchange**
+and **Send RR73 with report** include the current card's received-pixel count, CRC-passed
+block count and available total, callsign/card ID, and whole-card verification status.
+Saved-card and quick-draw replies share the same prepared-TX snapshot. Provisional CQ
+replies use manual Exchange rather than entering the verified automatic CQ flow.
+Ordinary received cards can also be replied to with Exchange. No ownership or image
+verification gate is relaxed. CQ, ordinary-card and final-73 sends clear transient feedback.
+
+Optional checked PQRP metadata carries reports in Data2G; local modems use common-header
+versions 6/7 for two checked halves, retained across incremental scans. References bind
+to checked outgoing image identity so reports can be displayed before the reply image
+finishes. Counts appear with signal reports in incoming details, wall backs, decks and
+saved QSO/sent snapshots. A late companion updates existing QSO metadata without adding
+an attempt. Data2G counts distinct checked transport-fragment ranges and leaves the
+unadvertised total unknown, explicitly distinguishing them from modem CRC raster blocks.
+Report-bearing airtime estimates include companion overhead, including animation coexistence.
+
+Incomplete reception is labeled **RETRY NEEDED**, even when every candidate pixel is
+present. Such a report about the active outgoing card cannot advance an automatic
+contact or offer final 73. Reports for another station/card and provisional off-peer
+messages cannot replace the automatic contact's reply target. RR73 with progress is
+recognized even without an SNR estimate. Deck verification now reads the actual image's
+verified flag, separately from the embedded report about the other station's card.
+
+Validation: 160 focused protocol, audio, transport, receive/UI and SNR checks and two
+subtests passed; diff checks pass. The tests include both actual Data2G transmit
+preparation stages with host submission mocked, complete ordinary/grouped/interlaced
+local audio roundtrips, old-header-reader fallback, partial reply-image association,
+late metadata persistence, automatic sequencing guards and quick-draw report preparation.
+Offscreen renders of the provisional reply action and received-report deck/front/back
+were inspected. Two known pre-existing transfer UI failures remain deselected (the same
+advanced-controls visibility and removed getting-started dialog tests recorded below).
+No running receiver/container was restarted or synchronized. Hardware audio, CAT/PTT,
+RF and a live two-host Data2G exchange remain unverified. Older clients can decode the
+ordinary image but cannot interpret the new partial-progress reports.
+See [reception report usage and wire format](docs/RECEPTION-REPORTS.md).
+
 ## Two-frame animations — 2026-10-14
 
 Implemented the one-way frame-2 reference. My Cards → More → Make selected card

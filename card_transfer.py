@@ -55,6 +55,7 @@ class Assembly:
     image_id: bytes | None = None
     data: bytearray = field(init=False)
     present: bytearray = field(init=False)
+    checked_ranges: set = field(default_factory=set)
 
     def __post_init__(self):
         if not 1 <= self.total <= 65536:
@@ -143,6 +144,7 @@ class CardTransferReceiver:
         # bytes. Do not insert a new identity or refresh cache recency until that
         # validation succeeds, so rejected frames leave the receiver unchanged.
         assembly.add(offset, frame[HEADER.size:])
+        assembly.checked_ranges.add((offset, chunk_size))
         if new_assembly:
             self.assemblies[key] = assembly
         else:
@@ -163,6 +165,9 @@ class CardTransferReceiver:
                           "snr_db": None if snr == -128 else snr,
                           "avatar_burst": True, "exact": assembly.exact,
                           "bits_per_pixel": bits, "pixel_coverage": coverage,
+                          "crc_blocks_passed": len(assembly.checked_ranges),
+                          "crc_blocks_total": None,
+                          "crc_block_kind": "transport_fragment",
                           # A KISS frame delivered by Data2G is already checked
                           # at the modem transport layer. Pixels fully present
                           # in those checked bytes are trusted regions even
@@ -233,6 +238,8 @@ class CardPreviewAssembler:
                           if state is not None else None)
         changed = (reset_state or self.current_key != key or
                    incoming_card.get("animation") != (state.get("card", {}).get("animation") if state else None) or
+                   incoming_card.get("reception_report") != (state.get("card", {}).get("reception_report") if state else None) or
+                   incoming_card.get("crc_blocks_passed") != (state.get("card", {}).get("crc_blocks_passed") if state else None) or
                    (incoming_card.get("message_type") is not None and
                     incoming_card.get("message_type") != previous_stage))
         diagnostics = incoming_card.get("diagnostics") or {}
@@ -380,10 +387,16 @@ class CardAssemblyService:
     def __init__(self, *, max_transport_assemblies=24, max_preview_images=12):
         from card_animation import LinkCache
         self.animation_links = LinkCache()
+        from card_feedback import FeedbackCache
+        self.feedback = FeedbackCache()
         self.transport = CardTransferReceiver(max_assemblies=max_transport_assemblies)
         self.previews = CardPreviewAssembler(max_images=max_preview_images)
 
     def feed_transport_frame(self, sender: str, frame: bytes):
+        from card_feedback import MAGIC as FEEDBACK_MAGIC
+        if frame.startswith(FEEDBACK_MAGIC):
+            self.feedback.add(frame)
+            return None, {"reception_metadata_only": True}
         from card_animation import MAGIC, decode_link
         if frame.startswith(MAGIC):
             self.animation_links.add(*decode_link(frame))
@@ -397,6 +410,7 @@ class CardAssemblyService:
             evidence = self.assess(incoming)
             incoming_card["exact"] = evidence.verified_complete
             self.animation_links.attach(incoming)
+            self.feedback.attach(incoming)
         snapshot, changed = self.previews.merge(incoming)
         card = snapshot.get("card") or {}
         decision = self.assess(snapshot)
@@ -404,6 +418,7 @@ class CardAssemblyService:
             card["exact"] = decision.verified_complete
             card["verification_scope"] = decision.scope
             self.animation_links.attach(snapshot)
+            self.feedback.attach(snapshot)
         identity = (self.previews.current_key if
                     card.get("raw_avatar") or card.get("avatar_burst") else None)
         if identity is None and card:

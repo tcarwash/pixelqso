@@ -175,7 +175,10 @@ class Data2GFrameAdapter:
         packed = modem.minimal_avatar_payload(card)
         from card_animation import encode_link
         sidecar = encode_link(card)
-        return ([sidecar] if sidecar else []) + [card_fragment(card, packed, offset,
+        from card_feedback import encode_report, data2g_binding
+        feedback = (encode_report(card.reception_report, data2g_binding(card, message_type, snr_db), message_type)
+                    if card.reception_report is not None and message_type in ('exchange', '73') else None)
+        return ([sidecar] if sidecar else []) + ([feedback] if feedback else []) + [card_fragment(card, packed, offset,
                               packed[offset:offset + chunk_size],
                               message_type, snr_db)
                 for offset in range(0, len(packed), chunk_size)]

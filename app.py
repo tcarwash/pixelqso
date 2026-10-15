@@ -37,6 +37,7 @@ import cardmodem as modem
 from card_ids import allocate_card_id
 from card_animation import (artwork_digest, validate_link, partner as animation_partner,
                             details as animation_details)
+from card_feedback import make_report as make_reception_report, report_lines as reception_report_lines
 from snr import set_measured_snr, snr_lines
 from backend_adapters import (AdapterKind, DATA2G_ADAPTER, DecodeFailure,
                               DecodeFailureKind, DecodeOutcome,
@@ -722,6 +723,8 @@ class LiveDecodeWorker(QRunnable):
                     with self.copy_cache.lock:
                         for digest, link in getattr(found, 'animation_links', ()):
                             self.copy_cache.animation_links.add(digest, link)
+                        for part in getattr(found, 'feedback_parts', ()):
+                            self.copy_cache.feedback.add_part(*part)
                     for copy in found:
                         copy.start+=scan_start
                         copy.end+=scan_start
@@ -5942,6 +5945,9 @@ class MainWindow(QMainWindow):
             if metadata.get("animation_metadata_only"):
                 self._refresh_animation_references()
                 return
+            if metadata.get("reception_metadata_only"):
+                self._refresh_animation_references()
+                return
             pixels = metadata.pop("pixels")
             palette_id = int(metadata["palette_id"])
             palette = [list(color) for color in modem.AVATAR_PALETTES[palette_id]]
@@ -6383,6 +6389,9 @@ class MainWindow(QMainWindow):
         if (report is not None and not duplicate and card.get("callsign") and
                 card.get("card_id") is not None):
             self._add_session_wall_card(report, image=image)
+            self._show_reply_action(report)
+            if card.get('reception_report'):
+                self._refresh_animation_references()
             if not exact:
                 self._record_received_card(report)
         identity = " ".join(value for value in (
@@ -6911,11 +6920,13 @@ class MainWindow(QMainWindow):
                         data2g)
                     return
             if backend is not None:
+                card = self._prepare_outgoing_card(card, self._outgoing_message_type())
                 total_seconds = backend.estimate_seconds(card, self.repeat_count.value())
             else:
                 symbols, profile = self._card_tx_symbols(card)
-                from modem_envelope import HEADER_SECONDS
-                total_seconds = len(symbols) / profile.baud + (4 if card.animation else 2)*HEADER_SECONDS*self.repeat_count.value()
+                from modem_envelope import HEADER_SECONDS, metadata_header_count
+                card = self._prepare_outgoing_card(card, self._outgoing_message_type())
+                total_seconds = len(symbols) / profile.baud + (2+metadata_header_count(card))*HEADER_SECONDS*self.repeat_count.value()
                 if self.cwid_enabled.isChecked():
                     station_call = self.station_call.text().strip().upper()
                     cwid_text = self.cwid_message.text().strip().upper()
@@ -6951,6 +6962,7 @@ class MainWindow(QMainWindow):
             raise ValueError(
                 "The Soft Viterbi modem is receive-only. Select another transfer mode to transmit.")
         stage = "card" if beacon else self._outgoing_message_type()
+        card = self._prepare_outgoing_card(card, stage)
         wire_type = {"report73": "73", "final73": "73"}.get(stage, stage)
         snr_db = self.tx_snr_db if stage in {"exchange", "report73"} else None
         backend = self.selected_backend()
@@ -7187,14 +7199,23 @@ class MainWindow(QMainWindow):
         return card
 
     def _remember_tx_card(self, card):
-        self.tx_card = modem.Card(card.callsign, card.grid, list(card.palette), list(card.pixels),
-                                  card.card_id, card.width, card.height, copy.deepcopy(card.animation))
+        self.tx_card = copy.deepcopy(card)
         quick = self.quick_reply_card
         self.tx_quick_draw_card = (self.tx_card if quick is not None and not self.auto_armed
                                    and self.exchange_mode.currentIndex() == 0
                                    and quick.card_id == card.card_id
                                    and quick.callsign == card.callsign and quick.grid == card.grid
                                    and quick.pixels == card.pixels else None)
+
+    def _prepare_outgoing_card(self, card, stage):
+        """Freeze the current receive evidence for this one outgoing reply."""
+        result = copy.deepcopy(card)
+        result.reception_report = None
+        received = self.reply_report
+        subject = (received or {}).get('card') or {}
+        if stage in {'exchange', 'report73'} and subject.get('callsign') and subject.get('card_id') is not None:
+            result.reception_report = make_reception_report(received)
+        return result
 
     def _toggle_call_cq(self, enabled):
         self.call_cq_active = bool(enabled)
@@ -7293,18 +7314,26 @@ class MainWindow(QMainWindow):
         card = (report or {}).get("card") or {}
         if not card:
             return
+        if self._reply_stage(report) is None:
+            self.reply_to_button.hide()
+            self._refresh_operate_primary_action()
+            return
         self.stopped_reply_peers.discard(str(card.get("callsign") or "").strip().upper())
         stage = card.get("message_type", "card")
         if stage == "cq":
-            if self.auto_armed or not self._assembly_verified(report):
+            if self.auto_armed:
                 return
-            self.exchange_mode.setCurrentIndex(1)
-            self.exchange_role.setCurrentIndex(1)
-            self.start_auto_exchange(reply_report=report)
-            return
-        if stage == "exchange":
+            if self._assembly_verified(report):
+                self.exchange_mode.setCurrentIndex(1)
+                self.exchange_role.setCurrentIndex(1)
+                self.start_auto_exchange(reply_report=report)
+                return
+            next_stage = 'exchange'
+        elif stage == 'card':
+            next_stage = 'exchange'
+        elif stage == "exchange":
             next_stage = "report73"
-        elif stage == "73" and card.get("snr_db") is not None:
+        elif stage == "73" and (card.get("snr_db") is not None or card.get('reception_report')):
             next_stage = "final73"
         else:
             self.reply_to_button.setVisible(False)
@@ -7319,9 +7348,23 @@ class MainWindow(QMainWindow):
         self.exchange_mode.setCurrentIndex(0)
         self.transmit_exchange()
 
+    def _feedback_matches_contact(self, card):
+        feedback = card.get('reception_report')
+        return (not self.auto_armed or not feedback or
+                feedback.get('callsign') == self.station_call.text().strip().upper() and
+                feedback.get('card_id') == self.auto_own_card_id)
+
     def _show_reply_action(self, report):
         card = report.get("card") or {}
         if str(card.get("callsign") or "").strip().upper() in self.stopped_reply_peers:
+            return
+        if str(card.get('callsign') or '').upper() == self.station_call.text().strip().upper():
+            return
+        if self.auto_armed and self.auto_peer and str(card.get('callsign') or '').upper() != self.auto_peer:
+            return
+        if self.auto_armed and not self._assembly_verified(report):
+            return
+        if not self._feedback_matches_contact(card):
             return
         self.reply_report = report
         if self.auto_armed:
@@ -7336,13 +7379,17 @@ class MainWindow(QMainWindow):
         peer = str(card.get("callsign") or "station")
         next_stage = {
             "cq": f"Reply to {peer}",
-            "exchange": f"Send RR73 to {peer}",
+            "card": f"Send Exchange to {peer}",
+            "exchange": f"Send RR73 with report to {peer}",
         }.get(kind)
-        if kind == "73" and card.get("snr_db") is not None:
+        if kind == "73" and self._reply_stage(report) == 'final73':
             next_stage = f"Send final 73 to {peer}"
+        provisional = not self._assembly_verified(report)
+        if provisional and next_stage:
+            next_stage += ' · provisional'
         self.reply_to_button.setText(next_stage or "Reply")
         self.reply_to_button.setToolTip(
-            f"Send the next exchange stage to {peer}." if next_stage else "")
+            f"Send the next exchange stage to {peer}, including received pixels and CRC-passed blocks." if next_stage else "")
         self.reply_to_button.setVisible(bool(next_stage))
         quick_reply = self._reply_stage(report) is not None
         self.quick_draw_button.setText(
@@ -7375,20 +7422,38 @@ class MainWindow(QMainWindow):
     def _reply_stage(report):
         card = (report or {}).get("card") or {}
         kind = card.get("message_type", "card")
-        if kind == "cq":
+        if kind in {"cq", "card"}:
             return "exchange"
         if kind == "exchange":
             return "report73"
-        if kind == "73" and card.get("snr_db") is not None:
+        if kind == '73' and card.get('reception_report') and not card['reception_report'].get('verified'):
+            return None
+        if kind == "73" and (card.get("snr_db") is not None or card.get('reception_report')):
             return "final73"
         return None
 
     def _handle_contact_message(self, report, *, initiated=False):
         card = report.get("card") or {}
-        if not self._assembly_verified(report) or not card.get("avatar_burst"):
+        if not card.get("avatar_burst"):
+            return
+        callsign = str(card.get('callsign') or '').strip().upper()
+        if self.auto_armed and self.auto_peer and callsign != self.auto_peer:
+            self.exchange_log.append(f"Ignoring {callsign}; current contact is with {self.auto_peer}.")
+            return
+        if not self._feedback_matches_contact(card):
+            self.exchange_log.append(f'Ignoring reception report from {callsign} for a different station or card.')
             return
         kind = card.get("message_type", "card")
         self._show_reply_action(report)
+        if not self._assembly_verified(report):
+            return
+        feedback = card.get('reception_report') or {}
+        if (feedback and not feedback.get('verified') and
+                feedback.get('callsign') == self.station_call.text().strip().upper() and
+                (not self.auto_armed or feedback.get('card_id') == self.auto_own_card_id)):
+            self.exchange_log.append('\n'.join(reception_report_lines(card)))
+            self.rx_status.setText(f"{card.get('callsign')} reports an incomplete card · retry needed")
+            return
         if kind == "cq":
             self.last_cq_snapshot = None
         if kind == "exchange" and self.last_cq_snapshot and self.active_qso_log is not None:
@@ -7528,8 +7593,9 @@ class MainWindow(QMainWindow):
                     f"This card uses {card.callsign.upper() or 'no call sign'}, but the "
                     f"Data2G broadcast group is open for {station_call or 'no call sign'}. "
                     "Update the card or Station settings so both identities match.")
-            self._remember_tx_card(card)
             message_type = message_type or self._outgoing_message_type()
+            card = self._prepare_outgoing_card(card, message_type)
+            self._remember_tx_card(card)
             wire_type = {"report73": "73", "final73": "73"}.get(message_type, message_type)
             # `report73` is serialized as wire stage `73`, but its optional
             # SNR field still carries the report when a local decoder supplied one.
@@ -7707,8 +7773,9 @@ class MainWindow(QMainWindow):
         self.tx_btn.setEnabled(False)
         try:
             card = card_override if card_override is not None else self._chosen_card()
-            self._remember_tx_card(card)
             self.tx_message_type = self._outgoing_message_type()
+            card = self._prepare_outgoing_card(card, self.tx_message_type)
+            self._remember_tx_card(card)
             if self.tx_message_type in {"exchange", "report73"} and self.reply_report:
                 self.tx_snr_db = (self.reply_report.get("card") or {}).get("measured_snr_db")
             elif self.tx_message_type not in {"exchange", "report73"}:
@@ -7873,8 +7940,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Select upper-sideband data mode", f"The rig reports {self.rig_mode}. Set the radio to USB or an upper-sideband data mode and read it again."); return
         try:
             card = card_override if card_override is not None else self._chosen_card()
-            self._remember_tx_card(card)
             self.tx_message_type = self._outgoing_message_type()
+            card = self._prepare_outgoing_card(card, self.tx_message_type)
+            self._remember_tx_card(card)
             if self.tx_message_type in {"exchange", "report73"} and self.reply_report:
                 self.tx_snr_db = (self.reply_report.get("card") or {}).get("measured_snr_db")
             elif self.tx_message_type not in {"exchange", "report73"}:
@@ -8916,6 +8984,8 @@ class MainWindow(QMainWindow):
         grid = str(card.get("grid") or "")
         kind = {"cq": "CQ", "exchange": "Exchange", "report73": "RR73",
                 "final73": "73", "73": "73"}.get(card.get("message_type"), "Card")
+        if card.get('message_type') == '73' and card.get('reception_report'):
+            kind = 'RR73 · report'
         received_at = time.strftime("%H:%M:%S")
         tile = image.scaled(QSize(144, 144), Qt.AspectRatioMode.KeepAspectRatio,
                             Qt.TransformationMode.FastTransformation)
@@ -9026,9 +9096,15 @@ class MainWindow(QMainWindow):
     def _refresh_animation_references(self):
         """Late sidecars upgrade metadata without inventing another reception."""
         links = self.card_assembly.animation_links
+        feedback_caches = (self.card_assembly.feedback, self.copy_capture_cache.feedback)
         for _item, button in self.session_wall_items.values():
             if hasattr(button, '_report'):
                 links.attach(button._report)
+                for cache in feedback_caches:
+                    if cache.attach(button._report):
+                        base = '\n'.join(line for line in button._ordinary_back.splitlines()
+                                         if not line.startswith('Their reception of '))
+                        button._ordinary_back = base + '\n' + '\n'.join(reception_report_lines(button._report['card']))
         entries = []
         if self.active_qso_log is not None:
             entries.append((self.active_qso_log, self._active_qso_path))
@@ -9043,9 +9119,12 @@ class MainWindow(QMainWindow):
         for entry, path in entries:
             changed = False
             for report in entry.get('received_cards', []):
-                before = copy.deepcopy((report.get('card') or {}).get('animation'))
+                meta = report.get('card') or {}
+                before = copy.deepcopy((meta.get('animation'), meta.get('reception_report')))
                 links.attach(report)
-                changed |= before != (report.get('card') or {}).get('animation')
+                for cache in feedback_caches:
+                    cache.attach(report)
+                changed |= before != (meta.get('animation'), meta.get('reception_report'))
             if changed and path is not None:
                 temporary = None
                 try:
@@ -9053,10 +9132,16 @@ class MainWindow(QMainWindow):
                         temporary = Path(handle.name); handle.write(json.dumps(entry, indent=2) + '\n')
                     os.replace(temporary, path)
                 except OSError as exc:
-                    self.rx_status.setText(f'Animation reference received; could not save it: {exc}')
+                    self.rx_status.setText(f'Card metadata received; could not save it: {exc}')
                 finally:
                     if temporary is not None:
                         temporary.unlink(missing_ok=True)
+        if self.reply_report:
+            changed = False
+            for cache in feedback_caches:
+                changed |= cache.attach(self.reply_report)
+            if changed:
+                self._handle_contact_message(self.reply_report)
         self._update_wall_animations()
 
     def _update_wall_animations(self):
@@ -9264,6 +9349,7 @@ class MainWindow(QMainWindow):
                           "width": card.width, "height": card.height,
                           "palette": [list(color) for color in card.palette],
                           "animation": copy.deepcopy(card.animation),
+                          "reception_report": copy.deepcopy(card.reception_report),
                           "message_type": {"report73": "73", "final73": "73"}.get(message_type, message_type),
                           "snr_db": snr_db}, "pixels": pixels}
 

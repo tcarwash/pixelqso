@@ -31,7 +31,7 @@ def incoming_card_text(report, mode_label=None):
     mode = mode_label or report.get('receive_profile') or diagnostic.get('announced_mode')
     if mode:
         lines.append(f"RX mode: {mode}")
-    if card.get('measured_snr_db') is not None or card.get('snr_db') is not None:
+    if card.get('measured_snr_db') is not None or card.get('snr_db') is not None or card.get('reception_report'):
         lines.extend(snr_lines(card))
     if report.get('frequency_hz') is not None:
         lines.append(f"Frequency: {float(report['frequency_hz'])/1e6:.6f} MHz")
@@ -107,7 +107,7 @@ def stage_label(card):
         'final73': '73 · FINAL',
         # Older contact archives use a single 73 stage; infer the report form
         # only when an SNR value was recorded with it.
-        '73': 'RR73 · REPORT' if meta.get('snr_db') is not None else '73 · GOODBYE',
+        '73': 'RR73 · REPORT' if meta.get('snr_db') is not None or meta.get('reception_report') else '73 · GOODBYE',
     }.get(kind, 'IMAGE CARD')
 
 
@@ -470,7 +470,7 @@ class DeckDialog(QDialog):
         verified = sum(bool(value) for value in verified_coverage)
         verified_percent = round(verified * 100 / len(verified_coverage)) if verified_coverage else 0
         integrity = ("Sent by this station" if direction == 'sent_cards' else
-                     "WHOLE CARD VERIFIED" if card.get('exact') else
+                     "WHOLE CARD VERIFIED" if meta.get('exact') else
                      f"PROVISIONAL · {received_percent}% received · {verified_percent}% of image regions verified")
         direction_label = 'SENT BY YOU' if direction == 'sent_cards' else 'RECEIVED'
         if direction == 'received_cards' and card.get('duplicate_receipt'):

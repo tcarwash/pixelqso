@@ -306,10 +306,14 @@ class Card:
     width: int = 32
     height: int = 32
     animation: dict | None = None
+    reception_report: dict | None = None  # Transient TX feedback, not card artwork.
 
     def validate(self) -> None:
         from card_animation import validate_link
         validate_link(self.animation, self.card_id)
+        if self.reception_report is not None:
+            from card_feedback import validate_report
+            validate_report(self.reception_report)
         if not 1 <= int(self.width) <= 255 or not 1 <= int(self.height) <= 255:
             raise ValueError("canvas dimensions must be in 1..255")
         if len(self.pixels) != int(self.width) * int(self.height):

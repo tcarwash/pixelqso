@@ -230,6 +230,8 @@ class Data2GHostBackend:
         if card.animation:
             from card_animation import encode_link
             frame_sizes.insert(0, len(encode_link(card)))
+        if card.reception_report:
+            frame_sizes.insert(0, 40)
         for frame_bytes in frame_sizes:
             # Data2G's broadcast stream adds a two-byte frame length before
             # coding. Reserve the host's maximum four control codewords; ACKMODE
@@ -509,9 +511,9 @@ def _with_copy_header(cls):
                               copy_decoder=(lambda xs, rate: self.decode_payload_copies(xs, rate))
                               if hasattr(self, 'decode_payload_copies') else None)
     def estimate(self, card, repeats):
-        from modem_envelope import HEADER_SECONDS
+        from modem_envelope import HEADER_SECONDS, metadata_header_count
         repeat_waveform(np.empty(0), repeats)
-        return repeats * (estimate_payload(self, card, 1) + (4 if card.animation else 2)*HEADER_SECONDS)
+        return repeats * (estimate_payload(self, card, 1) + (2+metadata_header_count(card))*HEADER_SECONDS)
     cls.encode, cls.decode, cls.estimate_seconds = encode, decode, estimate
     cls.decode_payload = decode_payload
     return cls
@@ -543,10 +545,10 @@ class GroupedFSKBackend:
     def estimate_seconds(self, card, repeats):
         import experimental_burst_modem as burst
         import weak_signal_modem as weak
-        from modem_envelope import HEADER_SECONDS
+        from modem_envelope import HEADER_SECONDS, metadata_header_count
         repeat_waveform(np.empty(0), repeats)
         weak.packet(card)
-        return (3 if card.animation else 1)*HEADER_SECONDS + repeats * burst.seconds(GROUPED_MODES[self.key])
+        return (1+metadata_header_count(card))*HEADER_SECONDS + repeats * burst.seconds(GROUPED_MODES[self.key])
 
     def minimum_audio_seconds(self):
         from modem_envelope import HEADER_SECONDS

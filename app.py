@@ -4753,7 +4753,10 @@ class MainWindow(QMainWindow):
             old_index = self._station_settings_baseline["values"].get("backend_combo")
             backend = self.backend_combo.itemData(old_index)
         return (DATA2G_ADAPTER.is_connected(self.data2g_session)
-                if backend == "data2g" else self.rig.connected())
+                if backend == "data2g" else
+                (self.rig.connected() or
+                 (self.data2g_background_monitor and
+                  DATA2G_ADAPTER.is_connected(self.data2g_session))))
 
     def _connect_station_settings_change_signals(self):
         controls = (self.backend_combo, self.station_call, self.station_grid, self.cwid_enabled,
@@ -4843,6 +4846,11 @@ class MainWindow(QMainWindow):
         backend_changed = (
             self._station_settings_baseline["values"].get("backend_combo") !=
             self.backend_combo.currentIndex())
+        monitor_identity_changed = (
+            self.data2g_background_monitor and
+            self.backend_combo.currentData() == "experimental" and
+            self._station_settings_baseline["values"].get("station_call") !=
+            self.station_call.text())
         self._station_settings_baseline = None
         self._station_settings_reconnect = None
         self._restore_station_settings_connection_controls()
@@ -4852,12 +4860,12 @@ class MainWindow(QMainWindow):
             self._reconnect_data2g_after_settings()
         elif reconnect == "rig":
             self._reconnect_rig_after_settings()
+        if monitor_identity_changed:
+            self._reconnect_data2g_after_settings()
 
     def _restore_station_settings_connection_controls(self):
         self._update_data2g_host_controls()
-        host_busy = bool(self.data2g_connecting or self.data2g_local_starting or
-                         self.data2g_closing or self.data2g_handoff_pending or
-                         DATA2G_ADAPTER.is_connected(self.data2g_session))
+        host_busy = self._data2g_blocks_local_cat()
         self.rig_button.setEnabled(not host_busy)
         self.rig_refresh.setEnabled(not host_busy and self.rig.connected())
         self._update_backend_ui()
@@ -5881,9 +5889,13 @@ class MainWindow(QMainWindow):
             self.station_button.setText(
                 "Station settings" if connected else "Connect station")
         if hasattr(self, "station_call"):
-            self.station_call.setEnabled(not host_busy)
+            editing_identity = (getattr(self, "_station_settings_editing", False) and
+                                not self._station_operation_active() and
+                                not (self.data2g_connecting or self.data2g_local_starting or
+                                     self.data2g_closing or self.data2g_handoff_pending))
+            self.station_call.setEnabled(not host_busy or editing_identity)
             self.station_call.setToolTip(
-                "Disconnect the Data2G host before changing call sign; the open group uses this identity."
+                "Apply and reconnect to update the Data2G group's call sign."
                 if host_busy else "Used in card identity and when opening the Data2G broadcast group.")
         if hasattr(self, "receive_status_hint"):
             if self.data2g_ptt_failed:
@@ -6958,6 +6970,14 @@ class MainWindow(QMainWindow):
                 and not self.test_link_enabled and
                 self.selected_adapter().capabilities.radio_owner != "data2g_host")
 
+    def _data2g_blocks_local_cat(self):
+        monitor_only = (self.backend_combo.currentData() == "experimental" and
+                        self.data2g_background_monitor)
+        return bool(self.data2g_closing or self.data2g_handoff_pending or
+                    (not monitor_only and
+                     (self.data2g_connecting or self.data2g_local_starting or
+                      DATA2G_ADAPTER.is_connected(self.data2g_session))))
+
     def connect_rig(self):
         if self.rig.connected():
             self.rig.disconnect()
@@ -6967,9 +6987,7 @@ class MainWindow(QMainWindow):
             self.rig_status.setText(
                 "Apply or cancel the pending rig connection changes before connecting.")
             return
-        if (self.data2g_connecting or self.data2g_local_starting or self.data2g_closing or
-                self.data2g_handoff_pending or
-                DATA2G_ADAPTER.is_connected(self.data2g_session)):
+        if self._data2g_blocks_local_cat():
             self.rig_status.setText(
                 "CAT connection blocked while Data2G owns or is acquiring radio/audio")
             return

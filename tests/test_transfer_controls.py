@@ -13,6 +13,34 @@ class TransferControlTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_callsign_edit_with_background_monitor_reconnects_identity(self):
+        with tempfile.TemporaryDirectory() as folder, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": folder}), patch("app.QTimer.singleShot"):
+            window = pixelqso.MainWindow()
+            try:
+                with pixelqso.QSignalBlocker(window.backend_combo):
+                    window.backend_combo.setCurrentIndex(
+                        window.backend_combo.findData("experimental"))
+                window.show_experimental_modes.setChecked(True)
+                window.data2g_background_monitor = True
+
+                def edit_identity(dialog):
+                    self.assertTrue(window.station_call.isEnabled())
+                    window.station_call.setText("W7XYZ")
+                    self.assertFalse(window.station_settings_reconnect_button.isHidden())
+                    window._apply_station_settings(reconnect=True)
+                    return dialog.result()
+
+                with patch("app.DATA2G_ADAPTER.is_connected", return_value=True), \
+                        patch.object(window.rig, "connected", return_value=False), \
+                        patch.object(window, "_reconnect_data2g_after_settings") as reconnect, \
+                        patch("app.QDialog.exec", new=edit_identity):
+                    window.open_station_settings()
+                    reconnect.assert_called_once()
+                self.assertEqual(window.settings.value("station/callsign"), "W7XYZ")
+            finally:
+                window.close()
+
     def test_advanced_controls_toggle_preserves_operating_configuration(self):
         old_data = pixelqso.DATA
         with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"PIXELQSO_DATA_DIR": folder}), \

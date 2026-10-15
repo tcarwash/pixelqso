@@ -2,4 +2,6 @@
 # only an optional upstream training dependency and is not installed here.
 numpy>=1.24
 PySide6>=6.6
+qrcode>=7.4
+zxing-cpp>=2.2
 data2g[tnc] @ git+https://github.com/arodland/Data2G.git@20bdb05c3cbb24d7d28b613a86841f51c00ba8f9

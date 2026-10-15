@@ -47,8 +47,9 @@ AVATAR_PALETTES = (
     MINIMAL_AVATAR_PALETTE,
     tuple((r, g, b) for r in (0, 5, 10, 15) for g in (0, 15) for b in (0, 15)),
     tuple((r, g, b) for r in (0, 5, 10, 15) for g in (0, 5, 10, 15) for b in (0, 15)),
+    ((0, 0, 0), (15, 15, 15)),
 )
-AVATAR_PALETTE_BITS = (3, 4, 5)
+AVATAR_PALETTE_BITS = (3, 4, 5, 1)
 AVATAR_RS_N, AVATAR_RS_K = 63, 61
 AVATAR_META_LEGACY_STRUCT = struct.Struct(">2s6BH12s8s")
 AVATAR_META_STRUCT = struct.Struct(">2s6BH12s8sBBb")
@@ -311,8 +312,8 @@ class Card:
             raise ValueError("canvas dimensions must be in 1..255")
         if len(self.pixels) != int(self.width) * int(self.height):
             raise ValueError(f"pixels must contain {self.width * self.height} palette indices")
-        if len(self.palette) not in (8, 16, 32):
-            raise ValueError("palette must contain 8, 16, or 32 RGB444 colors")
+        if len(self.palette) not in (2, 8, 16, 32):
+            raise ValueError("palette must contain 2, 8, 16, or 32 RGB444 colors")
         if any(not 0 <= int(p) < len(self.palette) for p in self.pixels):
             raise ValueError(f"pixel index outside 0..{len(self.palette)-1}")
         if any(len(c) != 3 or any(not 0 <= int(v) < 16 for v in c) for c in self.palette):
@@ -375,7 +376,19 @@ def _tones_to_indices(tones: Iterable[int], count: int, bits_per_index: int) -> 
 
 
 def _avatar_palette_id(card: Card) -> int:
-    return {8: 0, 16: 1, 32: 2}[len(card.palette)]
+    return {8: 0, 16: 1, 32: 2, 2: 3}[len(card.palette)]
+
+
+def monochrome_card(card: Card) -> Card:
+    """Return a black/white version for the compact monochrome wire format."""
+    card.validate()
+    pixels = []
+    for index in card.pixels:
+        red, green, blue = card.palette[int(index)]
+        luminance = (299 * red + 587 * green + 114 * blue) / 1000
+        pixels.append(1 if luminance >= 7.5 else 0)
+    return Card(card.callsign, card.grid, list(AVATAR_PALETTES[3]), pixels,
+                card.card_id, card.width, card.height)
 
 
 def _avatar_palette_map(card: Card) -> list[int]:

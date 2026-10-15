@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QDialog, QPushButton
 import cardmodem as pixel
 from app import (STARTER_CARDS_PATH, LiveDecodeWorker, MainWindow, decode_all_card_backends,
                  local_adapter_for_mode, newest_protected_acquisition)
-from backend_adapters import (ADAPTERS, AdapterCapabilities, AdapterKind,
+from backend_adapters import (ADAPTERS, DATA2G_ADAPTER, AdapterCapabilities, AdapterKind,
                               DecodeFailure, DecodeFailureKind, EXPERIMENTAL_ADAPTER,
                               ExperimentalLocalAdapter, IntegrityScope,
                               register_adapter)
@@ -472,6 +472,8 @@ class LivePreviewTests(unittest.TestCase):
             self.assertTrue(window.rx_visual_stack.isHidden())
 
             window.show_experimental_modes.setChecked(True)
+            window._station_settings_baseline = window._station_settings_values()
+            window._station_settings_editing = True
             window.backend_combo.setCurrentIndex(window.backend_combo.findData("experimental"))
             self.assertTrue(window.data2g_settings_group.isHidden())
             self.assertFalse(window.cat_settings_group.isHidden())
@@ -483,8 +485,37 @@ class LivePreviewTests(unittest.TestCase):
             self.assertIn("Used only by experimental local modems",
                           " ".join(label.text() for label in
                                    window.cat_settings_group.findChildren(QLabel)))
+            window._restore_station_settings(window._station_settings_baseline)
+            window._station_settings_editing = False
+            window._station_settings_baseline = None
             window.close()
             self.app.processEvents()
+
+    def test_station_settings_switch_sections_while_data2g_host_is_active(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+                os.environ, {"PIXELQSO_DATA_DIR": temp_dir}), \
+                patch("app.QTimer.singleShot"), patch("app.QDialog.exec", return_value=0):
+            window = MainWindow()
+            try:
+                with patch.object(DATA2G_ADAPTER, "is_connected", return_value=True):
+                    window.open_station_settings()
+                    self.assertFalse(window.data2g_settings_group.isHidden())
+                    window._station_settings_baseline = window._station_settings_values()
+                    window._station_settings_editing = True
+                    window.backend_combo.setCurrentIndex(
+                        window.backend_combo.findData("experimental"))
+                    self.assertTrue(window.data2g_settings_group.isHidden())
+                    self.assertFalse(window.experimental_audio_group.isHidden())
+                    self.assertFalse(window.cat_settings_group.isHidden())
+                    self.assertTrue(window.cat_settings_group.isEnabled())
+                    self.assertFalse(window.rig_button.isHidden())
+                    self.assertFalse(window.rig_button.isEnabled())
+                    window._restore_station_settings(window._station_settings_baseline)
+                    window._station_settings_editing = False
+                    window._station_settings_baseline = None
+            finally:
+                window.close()
+                self.app.processEvents()
 
     def test_starter_card_loads_as_new_personalizable_card(self):
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(

@@ -43,6 +43,7 @@ EXPERIMENTAL_MODE_LABELS = {
     "experimental_4fsk_orthogonal": "4-FSK · orthogonal · soft LDPC",
     "experimental_8fsk_orthogonal": "8-FSK · orthogonal · soft LDPC",
     "experimental_8fsk_musical_25": "8-FSK · E-major scale · 25 baud",
+    "experimental_8fsk_mono_fast": "8-FSK · black & white · fast · ≈5 s",
     **{f"resilient_{baud}": f"8-FSK · RS + soft Chase · {baud} baud · ≈{9 * baud} Hz"
        for baud in (100, 50, 25)},
     "fast_avatar_fec": "8-FSK · RS + soft Chase · 400 baud · block CRC",
@@ -83,6 +84,9 @@ EXPERIMENTAL_MODE_DESCRIPTIONS = {
         "to the E-major scale E4–E5 (330, 370, 415, 440, 494, 554, 622, 659 Hz), so each image pixel selects a note "
         "lasting about 40 ms. Raw pixel tones make the image audible as a note pattern; pixel data has no FEC or "
         "whole-card checksum, so incomplete or corrupted pixels are not promoted as verified.",
+    "experimental_8fsk_mono_fast": "Black-and-white 32×32 cards use one raster bit per pixel, protected identity, "
+        "Reed–Solomon blocks and whole-card CRC32/content tag. A typical full card takes about 3 seconds before "
+        "the common copy header; color artwork is luminance-thresholded to black and white.",
     **{key: "8-tone FSK with shortened Reed–Solomon RS(63,61), bounded soft-decision "
        "Chase recovery, and per-block CRC16. Provisional pixels appear before block verification."
        for key in ("resilient_100", "resilient_50", "resilient_25", "fast_avatar_fec")},
@@ -124,8 +128,11 @@ class AvatarBackend:
     profile: pixel.ModemProfile = pixel.MINIMAL_AVATAR_PROFILE
     wire_version: int = 3
     max_repeats: int = MAX_COPIES
+    monochrome: bool = False
 
     def encode(self, card, repeats, message_type, snr_db):
+        if self.monochrome:
+            card = pixel.monochrome_card(card)
         cycle = (pixel.minimal_avatar_resilient_cycle_symbols(
                     card, message_type=message_type, snr_db=snr_db,
                     wire_version=self.wire_version)
@@ -133,6 +140,8 @@ class AvatarBackend:
         return pixel.synthesize(pixel.repeat_symbol_stream(cycle, repeats), profile=self.profile)
 
     def estimate_seconds(self, card, repeats):
+        if self.monochrome:
+            card = pixel.monochrome_card(card)
         if self.checked:
             symbol_count = len(pixel.minimal_avatar_resilient_cycle_symbols(
                 card, wire_version=self.wire_version))
@@ -493,6 +502,8 @@ def _with_copy_header(cls):
     encode_payload, decode_payload, estimate_payload = cls.encode, cls.decode, cls.estimate_seconds
     def encode(self, card, repeats, message_type, snr_db, *, interlaced=False):
         from modem_envelope import transmit
+        if getattr(self, 'monochrome', False):
+            card = pixel.monochrome_card(card)
         if interlaced and getattr(self, 'supports_interlaced_copies', False):
             return encode_payload(self, card, repeats, message_type, snr_db,
                                   interlaced=True)
@@ -505,6 +516,8 @@ def _with_copy_header(cls):
                               copy_decoder=(lambda xs, rate: self.decode_payload_copies(xs, rate))
                               if hasattr(self, 'decode_payload_copies') else None)
     def estimate(self, card, repeats):
+        if getattr(self, 'monochrome', False):
+            card = pixel.monochrome_card(card)
         from modem_envelope import HEADER_SECONDS
         repeat_waveform(np.empty(0), repeats)
         return repeats * (estimate_payload(self, card, 1) + 2*HEADER_SECONDS)
@@ -633,6 +646,9 @@ BACKENDS: dict[str, CardBackend] = {
     "fast_avatar_fec": AvatarBackend("fast_avatar_fec", EXPERIMENTAL_MODE_LABELS["fast_avatar_fec"], True),
     "fast_avatar_fec_v4": AvatarBackend("fast_avatar_fec_v4", EXPERIMENTAL_MODE_LABELS["fast_avatar_fec_v4"], True,
                                          wire_version=4),
+    "experimental_8fsk_mono_fast": AvatarBackend(
+        "experimental_8fsk_mono_fast", EXPERIMENTAL_MODE_LABELS["experimental_8fsk_mono_fast"],
+        True, wire_version=4, monochrome=True),
     "experimental_8fsk_musical_25": AvatarBackend(
         "experimental_8fsk_musical_25",
         EXPERIMENTAL_MODE_LABELS["experimental_8fsk_musical_25"], False,
@@ -692,6 +708,9 @@ MODE_REGISTRY: dict[str, ModeSpec] = {
     "resilient_25": ModeSpec("resilient_25", EXPERIMENTAL_MODE_LABELS["resilient_25"], True, "pixelqso_audio", supports_audio_placement=True),
     "fast_avatar_fec": ModeSpec("fast_avatar_fec", EXPERIMENTAL_MODE_LABELS["fast_avatar_fec"], True, "pixelqso_audio"),
     "fast_avatar_fec_v4": ModeSpec("fast_avatar_fec_v4", EXPERIMENTAL_MODE_LABELS["fast_avatar_fec_v4"], True, "pixelqso_audio"),
+    "experimental_8fsk_mono_fast": ModeSpec(
+        "experimental_8fsk_mono_fast", EXPERIMENTAL_MODE_LABELS["experimental_8fsk_mono_fast"],
+        True, "pixelqso_audio"),
     "fast_avatar": ModeSpec("fast_avatar", EXPERIMENTAL_MODE_LABELS["fast_avatar"], True, "pixelqso_audio"),
     "experimental_qpsk_5s": ModeSpec("experimental_qpsk_5s", EXPERIMENTAL_MODE_LABELS["experimental_qpsk_5s"], True, "pixelqso_audio", "scipy"),
     "experimental_qpsk_combined": ModeSpec("experimental_qpsk_combined", EXPERIMENTAL_MODE_LABELS["experimental_qpsk_combined"], True, "pixelqso_audio", "scipy"),

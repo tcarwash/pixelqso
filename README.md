@@ -57,6 +57,26 @@ python -m pip install -r requirements-app.txt
 python app.py
 ```
 
+### Windows (install from Python)
+
+This runs Pixel QSO from its Python package instead of the unsigned Windows
+desktop bundle. Install 64-bit Python 3.11 and Git for Windows first. In the
+Python installer, enable the Python launcher (`py`); after installing Git,
+open a new PowerShell window so `git` is on `PATH`. Then run:
+
+```powershell
+git clone https://github.com/tcarwash/pixelqso.git
+cd pixelqso
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install .
+.\.venv\Scripts\pixel-qso.exe
+```
+
+To start it again later, open PowerShell in the `pixelqso` folder and run
+`.\.venv\Scripts\pixel-qso.exe`. To update, run `git pull` and then
+`.\.venv\Scripts\python.exe -m pip install --upgrade .` from that folder.
+
 The app includes 16×16, 32×32, and 64×64 cards; 8-, 16-, and 32-color
 palettes; drawing, text, and stamps; manual, automatic, and beacon exchanges;
 and local card and QSO storage.
@@ -97,6 +117,13 @@ copy combining (the older combined-mode ID remains supported). The legacy
 selectable for transmission. Hover over a mode for its
 error correction and checksum details. Display names do not change saved mode
 IDs. The new common copy-header format is versioned; historical native payloads remain readable.
+
+**8-FSK · black & white · fast** thresholds artwork to two colors and sends a
+32×32 raster at one bit per pixel with protected identity and whole-card checks.
+It takes about 3 seconds for the card payload, plus framing. In the card editor,
+**QR code…** creates a centered QR card; keep the QR inside the canvas. When a
+received card is fully verified, **Read QR code** shows its decoded text. New
+monochrome and QR features require the same Pixel QSO version at both stations.
 
 Data2G reception is selected and decoded by the connected host; it does not
 follow Pixel QSO's transmit-mode selector. The host sends checked application

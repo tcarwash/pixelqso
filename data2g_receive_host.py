@@ -10,9 +10,40 @@ from __future__ import annotations
 import sys
 import hashlib
 import math
+import os
+import socket
+import struct
 from collections import defaultdict, deque
 
 from snr import KISS_RX_SNR, encode_rx_snr
+
+
+def waterfall_audio_datagram(data, channels: int, sample_rate: int) -> bytes:
+    """Encode the host's left-channel float capture for the UI waterfall."""
+    import numpy as np
+    samples = np.frombuffer(data, dtype=np.float32)[::max(1, int(channels))]
+    return struct.pack("!I", int(sample_rate)) + samples.astype("<f4", copy=False).tobytes()
+
+
+def enable_waterfall_audio(port: int) -> None:
+    """Mirror local-host capture blocks to PixelQSO's read-only waterfall."""
+    from data2g.host import Capture
+
+    sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    original_take = Capture._take
+
+    def take(self, data, nframes, timing, status):
+        result = original_take(self, data, nframes, timing, status)
+        try:
+            # The host decodes the left channel. Mirror exactly that channel;
+            # never open the audio device a second time in the GUI.
+            sender.sendto(waterfall_audio_datagram(data, self.nin, self.rate),
+                          ("127.0.0.1", port))
+        except (OSError, TypeError, ValueError):
+            pass  # Waterfall is optional and must never interrupt radio RX.
+        return result
+
+    Capture._take = take
 
 
 def enable_advertised_receive_lengths() -> None:
@@ -99,8 +130,18 @@ def enable_receive_snr():
 
 
 def main() -> int:
+    waterfall_port = None
+    if "--pixelqso-waterfall-port" in sys.argv:
+        index = sys.argv.index("--pixelqso-waterfall-port")
+        try:
+            waterfall_port = int(sys.argv[index + 1])
+        except (IndexError, ValueError):
+            raise SystemExit("--pixelqso-waterfall-port needs a UDP port")
+        del sys.argv[index:index + 2]
     enable_advertised_receive_lengths()
     enable_receive_snr()
+    if waterfall_port:
+        enable_waterfall_audio(waterfall_port)
     from data2g.host import main as data2g_host_main
 
     sys.argv = ["data2g-host", *sys.argv[1:]]

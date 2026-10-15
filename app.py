@@ -4054,12 +4054,15 @@ class MainWindow(QMainWindow):
         auto_stage_layout.setSpacing(6)
         self.stage_card_combos = {}
         self.stage_send_buttons = {}
+        self.stage_select_buttons = {}
         self.manual_stage_group = QButtonGroup(self); self.manual_stage_group.setExclusive(True)
         self.manual_stage_buttons = {}
         for stage, title in (("cq", "CQ"), ("exchange", "Exchange"),
                               ("report73", "RR73 · report"), ("final73", "73 · final")):
             combo = QComboBox(); combo.setIconSize(QSize(48, 48))
             combo.currentIndexChanged.connect(self._save_auto_stage_cards)
+            combo.currentIndexChanged.connect(
+                lambda _index, s=stage: self._select_manual_stage(s))
             combo.currentIndexChanged.connect(self._refresh_transfer_summary)
             combo.currentIndexChanged.connect(self._refresh_mode_capabilities)
             self.stage_card_combos[stage] = combo
@@ -4074,11 +4077,17 @@ class MainWindow(QMainWindow):
             self.manual_stage_group.addButton(button, len(self.manual_stage_buttons))
             self.manual_stage_buttons[stage] = button
             self.stage_send_buttons[stage] = button
+            select_button = QPushButton("Select")
+            select_button.setToolTip(f"Select the {title} stage and its assigned card without transmitting")
+            select_button.setAccessibleName(f"Select {title} stage and card")
+            select_button.clicked.connect(lambda _checked=False, s=stage: self._select_manual_stage(s))
+            self.stage_select_buttons[stage] = select_button
             row = QHBoxLayout()
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(8)
-            button.setMinimumWidth(132)
+            button.setMinimumWidth(112)
             row.addWidget(button)
+            row.addWidget(select_button)
             row.addWidget(combo, 1)
             auto_stage_layout.addLayout(row)
         self.manual_stage_buttons["exchange"].setChecked(True)
@@ -6498,6 +6507,14 @@ class MainWindow(QMainWindow):
             path = combo.currentData()
             if path:
                 self.settings.setValue("transfer/card_" + stage, path)
+
+    def _select_manual_stage(self, stage):
+        """Select a stage/card for compatibility and summary updates, without sending."""
+        button = getattr(self, "manual_stage_buttons", {}).get(stage)
+        if button is None:
+            return
+        button.setChecked(True)
+        self._refresh_transfer_summary()
 
     def _auto_stage_card_combo(self):
         stage = self._outgoing_message_type()

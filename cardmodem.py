@@ -305,8 +305,11 @@ class Card:
     card_id: int = 0xC0DE
     width: int = 32
     height: int = 32
+    animation: dict | None = None
 
     def validate(self) -> None:
+        from card_animation import validate_link
+        validate_link(self.animation, self.card_id)
         if not 1 <= int(self.width) <= 255 or not 1 <= int(self.height) <= 255:
             raise ValueError("canvas dimensions must be in 1..255")
         if len(self.pixels) != int(self.width) * int(self.height):

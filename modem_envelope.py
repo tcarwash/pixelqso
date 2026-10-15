@@ -28,6 +28,7 @@ VERSION = 1
 GROUP_VERSION = 2
 COMPRESSED_VERSION = 3
 INTERLACED_VERSION = 4
+ANIMATION_VERSION = 5  # Optional sidecar; never replaces a normal copy header.
 COMPRESSED_MODES = frozenset((
     'experimental_8fsk_compressed', 'experimental_16fsk_compressed', 'experimental_16fsk_grid'))
 GROUP_MODES = {
@@ -148,11 +149,36 @@ def header_symbols(key, payload_samples, identity, *, trailer=False, copies=None
         version = INTERLACED_VERSION
         payload_samples |= int(copy_index) << 27
     body = BODY.pack(b'PQCH', version, mode, payload_samples, identity)
+    return _protected_symbols(body)
+
+
+def _protected_symbols(body):
     wire = body + struct.pack('>I', zlib.crc32(body))
     coded = rs_encode(pixel._bytes_to_gf64(wire), PARITY)
     tones = np.asarray(pixel._gf64_to_tones(coded))
     training, permutation = constants()
     return np.concatenate((training, tones[permutation]))
+
+
+def animation_audio(key, card):
+    from card_animation import encode_link, LINK
+    frame = encode_link(card)
+    if frame is None:
+        return np.empty(0, np.float32)
+    _, _, first, duration, first_digest, second_digest = LINK.unpack(frame[:-4])
+    body = BODY.pack(b'PQCH', ANIMATION_VERSION, MODE_IDS[key],
+                     (first << 16) | duration, first_digest + second_digest)
+    audio = pixel.synthesize(_protected_symbols(body), sample_rate=RATE, profile=PROFILE)
+    return resample_poly(np.pad(audio, (round(GUARD*RATE),)*2), 6, 1).astype(np.float32)
+
+
+def _animation_framed(key, card, audio):
+    marker = animation_audio(key, card)
+    if not len(marker):
+        return audio
+    rms = np.sqrt(np.mean(np.asarray(audio, float)**2))
+    marker *= rms / max(np.sqrt(np.mean(marker.astype(float)**2)), 1e-12)
+    return np.concatenate((marker, audio, marker))
 
 
 def header_audio(key, payload_samples, identity, *, trailer=False, copies=None, copy_index=None):
@@ -172,7 +198,7 @@ def transmit(key, card, payload, copies, message_type='card', snr_db=None):
     rms = np.sqrt(np.mean(np.asarray(payload, float)**2))
     for marker in (prefix, suffix):
         marker *= rms / max(np.sqrt(np.mean(marker.astype(float)**2)), 1e-12)
-    return np.tile(np.concatenate((prefix, payload, suffix)), int(copies))
+    return np.tile(_animation_framed(key, card, np.concatenate((prefix, payload, suffix))), int(copies))
 
 
 def transmit_interlaced(key, card, copies, payload_for_copy, message_type='card', snr_db=None):
@@ -195,7 +221,7 @@ def transmit_interlaced(key, card, copies, payload_for_copy, message_type='card'
         rms = np.sqrt(np.mean(payload.astype(float)**2))
         for marker in (prefix, suffix):
             marker *= rms / max(np.sqrt(np.mean(marker.astype(float)**2)), 1e-12)
-        frames.append(np.concatenate((prefix, payload, suffix)))
+        frames.append(_animation_framed(key, card, np.concatenate((prefix, payload, suffix))))
     return np.concatenate(frames)
 
 
@@ -207,7 +233,7 @@ def transmit_group(key, card, payload, copies, message_type='card', snr_db=None)
     prefix = header_audio(key, len(payload), content_id(key, card, message_type, snr_db), copies=copies)
     rms = np.sqrt(np.mean(np.asarray(payload, float)**2))
     prefix *= rms / max(np.sqrt(np.mean(prefix.astype(float)**2)), 1e-12)
-    return np.concatenate((prefix, np.tile(payload, int(copies))))
+    return _animation_framed(key, card, np.concatenate((prefix, np.tile(payload, int(copies)))))
 
 
 def decode_header(metrics, *, soft=False):
@@ -267,6 +293,12 @@ def decode_header(metrics, *, soft=False):
     if zlib.crc32(body) != crc:
         raise ValueError('copy header checksum failed')
     magic, version, mode, samples, identity = BODY.unpack(body)
+    if magic == b'PQCH' and version == ANIMATION_VERSION and mode in ID_MODES:
+        from card_animation import validate_link
+        link = validate_link(dict(first_card_id=samples >> 16, frame_ms=samples & 65535,
+                                  first_digest=identity[:8].hex()))
+        return dict(mode=ID_MODES[mode], animation_link=(identity[8:].hex(), link),
+                    version=version)
     copies = 1
     copy_index = None
     if version == INTERLACED_VERSION:
@@ -370,6 +402,12 @@ class AnnouncedCopy:
     start: int
     end: int
     diagnostics: dict
+
+
+class AnnouncedCopies(list):
+    def __init__(self, copies=(), animation_links=()):
+        super().__init__(copies)
+        self.animation_links = list(animation_links)
 
 
 def find_copies(audio, sample_rate, *, capture_start_utc=None, grid_window=.1):
@@ -494,8 +532,12 @@ def find_copies(audio, sample_rate, *, capture_start_utc=None, grid_window=.1):
             continue
         checked_positions.append(start)
         markers.append((start, header, score, offset))
+    links = [header['animation_link'] for _, header, _, _ in markers if 'animation_link' in header]
     copies = []
     for start, header, score, offset in markers:
+        if 'animation_link' in header:
+            continue
+        header = {**header, 'animation_links': links}
         header = {**header, 'estimated_snr_db_2500': header_snr_db(analytic, start, offset)}
         payload_length = header['payload_samples'] * RATE / 48000
         boundary = (start - GUARD*RATE if header['trailer'] else
@@ -526,7 +568,7 @@ def find_copies(audio, sample_rate, *, capture_start_utc=None, grid_window=.1):
         copies.append(AnnouncedCopy(header['mode'], header['identity'], original_first,
                     original_last, {**header, 'acquisition_score': score,
                     'carrier_offset_hz': offset}))
-    return sorted(copies, key=lambda c: c.start)[:MAX_COPIES]
+    return AnnouncedCopies(sorted(copies, key=lambda c: c.start)[:MAX_COPIES], links)
 
 
 def groups(copies, key):
@@ -539,11 +581,20 @@ def groups(copies, key):
 
 def decode_capture(key, audio, sample_rate, decoder, copies=None, copy_decoder=None, announced_decoder=None):
     announced = find_copies(audio, sample_rate) if copies is None else copies
+    from card_animation import LinkCache
+    animation_links = LinkCache()
+    for digest, link in getattr(announced, 'animation_links', ()):
+        animation_links.add(digest, link)
+    for copy in announced:
+        for digest, link in copy.diagnostics.get('animation_links', ()):
+            animation_links.add(digest, link)
     matched = groups(announced, key)
     if not announced:
         if key in GROUP_MODES or key in COMPRESSED_MODES:
             raise ValueError('waiting for protected grouped header')
-        return decoder(audio, sample_rate)  # historical native waveform
+        report = decoder(audio, sample_rate)  # historical native waveform
+        animation_links.attach(report)
+        return report
     if not matched:
         raise ValueError('common header announces a different modem')
     best, best_start, error = None, None, ValueError('announced payload is incomplete')
@@ -611,6 +662,7 @@ def decode_capture(key, audio, sample_rate, decoder, copies=None, copy_decoder=N
         finally:
             ADMITTED_IDENTITY.reset(token)
         card = report.get('card') or {}
+        animation_links.attach(report)
         estimates = [copy.diagnostics.get('estimated_snr_db_2500') for copy in group]
         estimates = [float(value) for value in estimates if value is not None and np.isfinite(value)]
         if estimates:
@@ -645,6 +697,8 @@ class CopyCaptureCache:
     in-progress copy with its longer snapshot; never count snapshots as copies.
     """
     def __init__(self, max_bytes=256*1024*1024, max_groups=4):
+        from card_animation import LinkCache
+        self.animation_links = LinkCache()
         from threading import RLock
         self.max_bytes=max_bytes; self.max_groups=max_groups
         self.lock=RLock(); self.entries={}; self.serial=0
@@ -652,6 +706,7 @@ class CopyCaptureCache:
 
     def clear(self):
         with self.lock:
+            self.animation_links.links.clear()
             self.entries.clear()
             self.header_scan_sample=None
 
@@ -725,7 +780,11 @@ class CopyCaptureCache:
 
     def update(self, audio, sample_rate, copies, capture_start_sample=0):
         with self.lock:
+            for digest, link in getattr(copies, 'animation_links', ()):
+                self.animation_links.add(digest, link)
             for copy in copies:
+                for digest, link in copy.diagnostics.get('animation_links', ()):
+                    self.animation_links.add(digest, link)
                 key=(copy.mode,copy.identity)
                 self.serial+=1
                 group=self.entries.setdefault(key,dict(frames=[],touched=self.serial))
@@ -784,6 +843,8 @@ class CopyCaptureCache:
                 for frame in group['frames']:
                     payload=frame['audio']; parts.append(payload)
                     diagnostic={**frame['diagnostics'],'carrier_offset_hz':0,
+                                'animation_links': [(digest, link) for digest, link in
+                                                    self.animation_links.links.items() if link],
                                 'acquisition_start_sample': round(frame['start']*RATE),
                                 'copy_revision': len(payload),
                                 'acquisition_id': (int(frame['diagnostics'].get('receive_session_id', 0)),

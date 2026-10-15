@@ -232,6 +232,7 @@ class CardPreviewAssembler:
         previous_stage = (state.get("card", {}).get("message_type")
                           if state is not None else None)
         changed = (reset_state or self.current_key != key or
+                   incoming_card.get("animation") != (state.get("card", {}).get("animation") if state else None) or
                    (incoming_card.get("message_type") is not None and
                     incoming_card.get("message_type") != previous_stage))
         diagnostics = incoming_card.get("diagnostics") or {}
@@ -377,10 +378,16 @@ class CardAssemblyService:
     """Application-session owner for transport reassembly and live previews."""
 
     def __init__(self, *, max_transport_assemblies=24, max_preview_images=12):
+        from card_animation import LinkCache
+        self.animation_links = LinkCache()
         self.transport = CardTransferReceiver(max_assemblies=max_transport_assemblies)
         self.previews = CardPreviewAssembler(max_images=max_preview_images)
 
     def feed_transport_frame(self, sender: str, frame: bytes):
+        from card_animation import MAGIC, decode_link
+        if frame.startswith(MAGIC):
+            self.animation_links.add(*decode_link(frame))
+            return None, {"animation_metadata_only": True}
         return self.transport.feed(sender, frame)
 
     def merge_preview(self, report):
@@ -389,12 +396,14 @@ class CardAssemblyService:
         if incoming_card:
             evidence = self.assess(incoming)
             incoming_card["exact"] = evidence.verified_complete
+            self.animation_links.attach(incoming)
         snapshot, changed = self.previews.merge(incoming)
         card = snapshot.get("card") or {}
         decision = self.assess(snapshot)
         if card:
             card["exact"] = decision.verified_complete
             card["verification_scope"] = decision.scope
+            self.animation_links.attach(snapshot)
         identity = (self.previews.current_key if
                     card.get("raw_avatar") or card.get("avatar_burst") else None)
         if identity is None and card:

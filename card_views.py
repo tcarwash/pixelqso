@@ -1,9 +1,11 @@
 """Trading-card presentation for the local contact collection."""
-from PySide6.QtCore import Qt, QSize, QRectF
+from PySide6.QtCore import Qt, QSize, QRectF, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPixmap, QIcon, QFont, QImage
 from PySide6.QtWidgets import QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget, QListWidgetItem, QSizePolicy, QStackedWidget
 from ui_theme import COLORS, SPACING
 from snr import snr_lines
+from card_animation import group_events, details as animation_details, frame_details
+import time
 
 
 def incoming_card_text(report, mode_label=None):
@@ -68,6 +70,31 @@ def incoming_card_text(report, mode_label=None):
 def deck_events(entry):
     events = [(direction, card) for direction in ('sent_cards', 'received_cards') for card in entry.get(direction, [])]
     return sorted(events, key=lambda event: int(event[1].get('order', 0)))
+
+
+class AnimationDetailsDialog(QDialog):
+    def __init__(self, report, image_for_card, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Two-frame animation details")
+        self.resize(760, 520)
+        layout = QVBoxLayout(self)
+        duration = report['animation_frames'][1]['card']['animation']['frame_ms']
+        heading = QLabel(f"Two-frame animation · {duration} ms per frame")
+        heading.setObjectName('sectionTitle'); heading.setMaximumHeight(40)
+        layout.addWidget(heading)
+        frames = QHBoxLayout()
+        for number, frame in enumerate(report['animation_frames'], 1):
+            column = QVBoxLayout()
+            thumbnail = QLabel(); image = image_for_card(frame)
+            if image is not None:
+                thumbnail.setPixmap(QPixmap.fromImage(image).scaled(160, 160, Qt.AspectRatioMode.KeepAspectRatio))
+            thumbnail.setAccessibleName(f"Frame {number} artwork")
+            column.addWidget(thumbnail, 0, Qt.AlignmentFlag.AlignCenter)
+            text = QLabel(frame_details(frame, number)); text.setWordWrap(True)
+            text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            column.addWidget(text); frames.addLayout(column)
+        layout.addLayout(frames, 1)
+        close = QPushButton("Close"); close.clicked.connect(self.accept); layout.addWidget(close)
 
 
 def stage_label(card):
@@ -215,6 +242,13 @@ def card_art(image, title, subtitle='', size=QSize(240, 300), stacked=False):
 
 
 class ArtworkView(QLabel):
+    clicked = Signal()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
+
     def __init__(self):
         super().__init__()
         self.original = None
@@ -241,7 +275,11 @@ class DeckDialog(QDialog):
     def __init__(self, entry, image_for_card, add_received_card=None, parent=None,
                  export_contact=None, export_card=None):
         super().__init__(parent)
-        self.events = deck_events(entry); self.image_for_card = image_for_card
+        self.events = group_events(deck_events(entry), entry.get('animation_candidates', ()))
+        self.image_for_card = image_for_card
+        self.animation_timer = QTimer(self)
+        self.animation_timer.timeout.connect(self._advance_animation)
+        self.animation_frames = []
         self.add_received_card = add_received_card
         self.export_contact = export_contact
         self.export_card = export_card
@@ -275,13 +313,19 @@ class DeckDialog(QDialog):
         self.card_faces.addWidget(self.card_back)
         layout.addWidget(self.card_faces, 1)
         self.details = QLabel(); self.details.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.details.setWordWrap(True)
         self.details.setAccessibleDescription(
             "Direction, message stage, recorded time, and signal report for the selected card.")
         layout.addWidget(self.details)
         self.flip_button = QPushButton("Flip card")
         self.flip_button.setAccessibleName("Flip selected QSO card to its receive details")
         self.flip_button.clicked.connect(self.flip_card)
+        self.art.clicked.connect(self.flip_card)
         layout.addWidget(self.flip_button, 0, Qt.AlignmentFlag.AlignCenter)
+        self.pause_animation_button = QPushButton('Pause animation')
+        self.pause_animation_button.setCheckable(True)
+        self.pause_animation_button.toggled.connect(self._pause_animation)
+        layout.addWidget(self.pause_animation_button, 0, Qt.AlignmentFlag.AlignCenter)
         row = QHBoxLayout(); self.previous = QPushButton('← Previous'); self.next = QPushButton('Next →')
         self.previous.clicked.connect(lambda: self.strip.setCurrentRow(self.strip.currentRow()-1))
         self.next.clicked.connect(lambda: self.strip.setCurrentRow(self.strip.currentRow()+1))
@@ -300,9 +344,9 @@ class DeckDialog(QDialog):
             if received_archive else
             "Chronological list of cards in this contact. Select a card to view its details.")
         for direction, card in self.events:
-            label = stage_label(card)
+            label = 'TWO-FRAME ANIMATION' if card.get('animation_frames') else stage_label(card)
             direction_label = 'Sent' if direction == 'sent_cards' else 'Received'
-            provisional = direction == 'received_cards' and not bool(card.get('exact'))
+            provisional = direction == 'received_cards' and not bool((card.get('card') or {}).get('exact'))
             duplicate = direction == 'received_cards' and bool(card.get('duplicate_receipt'))
             item = QListWidgetItem(direction_label + (' · Duplicate receipt' if duplicate else '') +
                                    (' · Provisional' if provisional else ''))
@@ -349,6 +393,10 @@ class DeckDialog(QDialog):
             self.share_status.setText(f"Couldn't copy contact PNG: {exc}")
 
     def flip_card(self):
+        index = self.strip.currentRow()
+        if 0 <= index < len(self.events) and self.events[index][1].get('animation_frames'):
+            AnimationDetailsDialog(self.events[index][1], self.image_for_card, self).exec()
+            return
         show_back = self.card_faces.currentWidget() is self.art
         self.card_faces.setCurrentWidget(self.card_back if show_back else self.art)
         self.flip_button.setText("Show card front" if show_back else "Flip card")
@@ -387,11 +435,24 @@ class DeckDialog(QDialog):
     def show_card(self, index):
         if not 0 <= index < len(self.events): return
         direction, card = self.events[index]; meta = card.get('card') or {}
+        self.animation_timer.stop()
+        self.animation_frames = []
+        self.pause_animation_button.setChecked(False)
+        self.pause_animation_button.setVisible(bool(card.get('animation_frames')))
         self.art.set_artwork(card_art(self.image_for_card(card), meta.get('callsign', 'Unknown'), stage_label(card), QSize(320, 400)))
         self.card_faces.setCurrentWidget(self.art)
         self.flip_button.setText("Flip card")
         self.flip_button.setEnabled(True)
         self.flip_button.setAccessibleName("Flip selected QSO card to its details")
+        if card.get('animation_frames'):
+            self.animation_frames = [card_art(self.image_for_card(frame), meta.get('callsign', 'Unknown'),
+                                      'TWO-FRAME ANIMATION', QSize(320, 400))
+                                     for frame in card['animation_frames']]
+            self.animation_frame_ms = meta['animation']['frame_ms']
+            self.animation_timer.start(min(100, self.animation_frame_ms))
+            self.art.set_artwork(self.animation_frames[0])
+            self.flip_button.setText("Animation details · both frames")
+            self.flip_button.setAccessibleName("Show details of both animation frames")
         detail = ('Sent by you' if direction == 'sent_cards' else 'Received')
         if direction == 'received_cards' and card.get('duplicate_receipt'):
             detail += ' · Duplicate receipt'
@@ -424,6 +485,11 @@ class DeckDialog(QDialog):
             *snr_lines(meta, sent=direction == 'sent_cards'),
             f"Received: {card.get('logged_at') or 'time not recorded'}",
         )))
+        animation_text = animation_details(card)
+        if animation_text:
+            self.card_back.setText(self.card_back.text() + '\n\n' + animation_text)
+            self.details.setText(self.details.text() + ' · ' +
+                                 ('Two-frame animation' if card.get('animation_frames') else animation_text))
         self.add_button.setVisible(
             direction == 'received_cards' and bool(meta.get('exact')) and
             self.add_received_card is not None)
@@ -431,3 +497,14 @@ class DeckDialog(QDialog):
         self.add_button.setEnabled(True)
         self.counter.setText(f'{index+1} / {len(self.events)}')
         self.previous.setEnabled(index > 0); self.next.setEnabled(index+1 < len(self.events))
+
+    def _advance_animation(self):
+        if self.animation_frames and self.isVisible() and self.card_faces.currentWidget() is self.art:
+            self.art.set_artwork(self.animation_frames[int(time.monotonic()*1000/self.animation_frame_ms) % 2])
+
+    def _pause_animation(self, paused):
+        self.pause_animation_button.setText('Resume animation' if paused else 'Pause animation')
+        if paused:
+            self.animation_timer.stop()
+        elif self.animation_frames:
+            self.animation_timer.start(100)

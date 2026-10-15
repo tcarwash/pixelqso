@@ -35,6 +35,8 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QListWidget
 
 import cardmodem as modem
 from card_ids import allocate_card_id
+from card_animation import (artwork_digest, validate_link, partner as animation_partner,
+                            details as animation_details)
 from snr import set_measured_snr, snr_lines
 from backend_adapters import (AdapterKind, DATA2G_ADAPTER, DecodeFailure,
                               DecodeFailureKind, DecodeOutcome,
@@ -56,7 +58,7 @@ from data2g_runtime import (data2g_audio_device_selector,
                             validate_data2g_ports)
 from on_air import SessionRecorder, card_reference, decoded_reference
 from card_views import (DeckDialog, card_art, deck_events, deck_image,
-                        incoming_card_text, single_card_image)
+                        incoming_card_text, single_card_image, AnimationDetailsDialog)
 from webserver import CompanionServer
 from ui_theme import (COLORS, SPACING, build_app_stylesheet, palette_swatch_style,
                       semantic_text_style, status_label_style)
@@ -83,7 +85,7 @@ def normalize_card_palette(card):
         if len(color) != 3:
             return modem.Card(card.callsign, card.grid, list(PALETTE),
                               [0] * (card.width * card.height), card.card_id,
-                              card.width, card.height)
+                              card.width, card.height, copy.deepcopy(card.animation))
         source.append(tuple(
             max(0, min(15, round(int(channel) / 17) if int(channel) > 15 else int(channel)))
             for channel in color))
@@ -96,7 +98,7 @@ def normalize_card_palette(card):
             range(len(PALETTE)),
             key=lambda target: sum((rgb[k] - PALETTE[target][k]) ** 2 for k in range(3))))
     return modem.Card(card.callsign, card.grid, list(PALETTE), mapped_pixels,
-                      card.card_id, card.width, card.height)
+                      card.card_id, card.width, card.height, copy.deepcopy(card.animation))
 
 CW_MORSE = {
     "A": ".-", "B": "-...", "C": "-.-.", "D": "-..", "E": ".",
@@ -717,6 +719,9 @@ class LiveDecodeWorker(QRunnable):
                               self.capture_start_utc+scan_start/self.sample_rate)
                     found=find_copies(audio[scan_start:scan_end],self.sample_rate,
                                       capture_start_utc=scan_utc)
+                    with self.copy_cache.lock:
+                        for digest, link in getattr(found, 'animation_links', ()):
+                            self.copy_cache.animation_links.add(digest, link)
                     for copy in found:
                         copy.start+=scan_start
                         copy.end+=scan_start
@@ -2084,6 +2089,10 @@ class MainWindow(QMainWindow):
         more_menu = QMenu(self)
         duplicate = more_menu.addAction("Duplicate card")
         duplicate.triggered.connect(self.duplicate_library_card)
+        animation = more_menu.addAction("Make selected card frame 2…")
+        animation.triggered.connect(self.link_library_animation)
+        unlink = more_menu.addAction("Remove animation reference")
+        unlink.triggered.connect(self.unlink_library_animation)
         delete = more_menu.addAction("Delete card…")
         delete.triggered.connect(self.delete_library_card)
         more = QPushButton("More"); more.setMenu(more_menu); more.setToolTip("More card actions")
@@ -2259,7 +2268,7 @@ class MainWindow(QMainWindow):
             {"my": 0, "sent": 1, "starter": 2}[entry[1]], entry[0].name.casefold()))
         for path, kind in card_sources:
             try:
-                data = json.loads(path.read_text()); card = modem.Card(data["callsign"], data["grid"], [tuple(c) for c in data["palette"]], data["pixels"], data.get("card_id", 0xC0DE), data.get("width", 32), data.get("height", 32))
+                data = json.loads(path.read_text()); card = modem.Card(data["callsign"], data["grid"], [tuple(c) for c in data["palette"]], data["pixels"], data.get("card_id", 0xC0DE), data.get("width", 32), data.get("height", 32), copy.deepcopy(data.get("animation")))
                 preview = QImage(card.width, card.height, QImage.Format.Format_RGB32)
                 for i, index in enumerate(card.pixels): preview.setPixelColor(i % card.width, i // card.width, QColor(*(int(v)*17 for v in card.palette[index])))
                 section = {"my": "My card", "sent": "Sent card", "starter": "Starter card"}[kind]
@@ -2271,7 +2280,10 @@ class MainWindow(QMainWindow):
                     f"{section} · {path.stem} · {card.callsign or 'No call sign'} · "
                     f"{card.grid or 'No grid'} · {card.width}×{card.height} · "
                     f"{len(card.palette)} colors{origin}")
-                item = QListWidgetItem(f"{section} · {path.stem}")
+                animation_note = (f" · Animation frame 2 of {card.animation['first_card_id']:04X}"
+                                  if card.animation else '')
+                card_details += animation_note
+                item = QListWidgetItem(f"{section} · {path.stem}{animation_note}")
                 item.setToolTip(card_details)
                 item.setData(Qt.ItemDataRole.AccessibleTextRole, card_details)
                 item.setIcon(QIcon(card_art(preview, card.callsign, card.grid, QSize(190, 238))))
@@ -2374,7 +2386,8 @@ class MainWindow(QMainWindow):
         self.library_search.setFocus()
 
     def editor_signature(self):
-        return (self.call.text(), self.grid.text(), self.canvas.snapshot())
+        return (self.call.text(), self.grid.text(), self.canvas.snapshot(),
+                json.dumps(self.card.animation, sort_keys=True))
 
     def _set_editor_title(self, title):
         self.editor_dialog.setProperty("pixelqsoBaseTitle", title)
@@ -2439,7 +2452,7 @@ class MainWindow(QMainWindow):
             self.card.validate()
             self.quick_reply_card = modem.Card(self.card.callsign, self.card.grid,
                 list(self.card.palette), list(self.card.pixels), self.card.card_id,
-                self.card.width, self.card.height)
+                self.card.width, self.card.height, copy.deepcopy(self.card.animation))
             self.quick_draw_active = False
             self.editor_dialog.accept()
             if self._reply_stage(self.reply_report):
@@ -2478,7 +2491,7 @@ class MainWindow(QMainWindow):
         pixels = list(card.pixels)
         data = {"callsign": card.callsign, "grid": card.grid, "palette": card.palette,
                 "pixels": pixels, "card_id": card.card_id, "width": card.width,
-                "height": card.height, "base_pixels": pixels, "stamp_layers": [],
+                "height": card.height, "animation": copy.deepcopy(card.animation), "base_pixels": pixels, "stamp_layers": [],
                 "archive_reason": "quick_draw_transmission"}
         serialized = json.dumps(data, indent=2) + "\n"
         target.write_text(serialized)
@@ -2528,7 +2541,7 @@ class MainWindow(QMainWindow):
                     [tuple(color) for color in data["palette"]],
                     [int(pixel) for pixel in data["pixels"]],
                     int(data.get("card_id", 0xC0DE)), int(data.get("width", 32)),
-                    int(data.get("height", 32)))
+                    int(data.get("height", 32)), copy.deepcopy(data.get("animation")))
                 card.validate()
                 image = QImage(card.width, card.height, QImage.Format.Format_RGB32)
                 for index, color_index in enumerate(card.pixels):
@@ -2640,7 +2653,7 @@ class MainWindow(QMainWindow):
             data = json.loads(source.read_text())
             modem.Card(data["callsign"], data["grid"], [tuple(c) for c in data["palette"]],
                        data["pixels"], data.get("card_id", 0xC0DE),
-                       data.get("width", 32), data.get("height", 32)).validate()
+                       data.get("width", 32), data.get("height", 32), copy.deepcopy(data.get("animation"))).validate()
             stem = f"{source.stem}-copy"
             target = source.with_name(stem + source.suffix)
             suffix = 2
@@ -2663,9 +2676,113 @@ class MainWindow(QMainWindow):
         except (OSError, ValueError, KeyError, TypeError) as exc:
             QMessageBox.warning(self, "Couldn't duplicate card", str(exc))
 
+    def link_library_animation(self):
+        item, _ = self._selected_library_item()
+        if item is None:
+            return
+        path = Path(item.data(Qt.ItemDataRole.UserRole))
+        if path.parent != DATA / "cards":
+            QMessageBox.information(self, "Choose a card in My Cards",
+                                    "Open or copy this card into My Cards before making it frame 2.")
+            return
+        try:
+            second = json.loads(path.read_text())
+            choices = []
+            for candidate in sorted((DATA / "cards").glob("*.json")):
+                if candidate == path:
+                    continue
+                try:
+                    first = json.loads(candidate.read_text())
+                    if (str(first.get("callsign", "")).upper() != str(second.get("callsign", "")).upper()
+                            or first.get("card_id") == second.get("card_id") or first.get("animation")
+                            or (first.get("width", 32), first.get("height", 32)) !=
+                            (second.get("width", 32), second.get("height", 32))):
+                        continue
+                    choices.append((candidate, first, artwork_digest(first)))
+                except (OSError, ValueError, TypeError, KeyError, IndexError):
+                    continue
+            if not choices:
+                raise ValueError("Save another card with the same callsign and dimensions, a different card ID, and no animation reference first.")
+            dialog = QDialog(self); dialog.setWindowTitle("Make a two-frame animation")
+            layout = QVBoxLayout(dialog)
+            help_text = QLabel(f"Frame 2: {path.stem}\nChoose the first card. Send each card normally; receivers animate after both are verified.")
+            help_text.setWordWrap(True); layout.addWidget(help_text)
+            form = QFormLayout(); selector = QComboBox()
+            for candidate, first, digest in choices:
+                selector.addItem(f"{candidate.stem} · {int(first['card_id']):04X}")
+            form.addRow("Frame 1", selector)
+            duration = QSpinBox(); duration.setRange(100, 10000); duration.setSingleStep(100)
+            duration.setSuffix(" ms per frame")
+            current = second.get("animation") or {}
+            duration.setValue(current.get("frame_ms", 500)); form.addRow("Timing", duration)
+            for i, (_, first, _) in enumerate(choices):
+                if first['card_id'] == current.get('first_card_id'):
+                    selector.setCurrentIndex(i)
+            layout.addLayout(form)
+            preview = QLabel(); preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            preview.setFixedSize(320, 220); layout.addWidget(preview, 0, Qt.AlignmentFlag.AlignCenter)
+            timer = QTimer(dialog); state = [0]
+            def draw_preview():
+                first = choices[selector.currentIndex()][1]
+                selected = first if state[0] == 0 else second
+                image = self.card_image({"card": selected, "pixels": selected['pixels']})
+                if image is not None:
+                    preview.setPixmap(QPixmap.fromImage(image).scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio))
+                preview.setAccessibleName(f"Animation preview · frame {state[0]+1}")
+                state[0] ^= 1
+            timer.timeout.connect(draw_preview)
+            duration.valueChanged.connect(timer.setInterval)
+            selector.currentIndexChanged.connect(lambda _: draw_preview())
+            timer.start(duration.value()); draw_preview()
+            actions = QHBoxLayout(); save = QPushButton("Save animation reference")
+            cancel = QPushButton("Cancel"); save.clicked.connect(dialog.accept); cancel.clicked.connect(dialog.reject)
+            actions.addWidget(save); actions.addWidget(cancel); layout.addLayout(actions)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            _, first, digest = choices[selector.currentIndex()]
+            second['animation'] = validate_link(dict(first_card_id=int(first['card_id']),
+                first_digest=digest, frame_ms=duration.value()), int(second['card_id']))
+            if current and current != second['animation']:
+                second['card_id'] = self._new_card_id()
+            self._write_library_animation(path, second)
+            self.library_status.setText("Animation saved · send frame 1 and frame 2 normally, in either order")
+        except (OSError, ValueError, TypeError, KeyError, IndexError) as exc:
+            QMessageBox.warning(self, "Couldn't link animation", str(exc))
+
+    def _write_library_animation(self, path, data):
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, suffix=".tmp", delete=False) as handle:
+                temporary = Path(handle.name)
+                handle.write(json.dumps(data, indent=2) + "\n")
+            os.replace(temporary, path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        if self.card_path == path:
+            self.card.animation = copy.deepcopy(data.get('animation'))
+            self.card.card_id = data['card_id']
+            self._update_editor_saved_state()
+        self.refresh_card_library()
+
+    def unlink_library_animation(self):
+        item, _ = self._selected_library_item()
+        if item is None:
+            return
+        path = Path(item.data(Qt.ItemDataRole.UserRole))
+        if path.parent != DATA / "cards":
+            return
+        try:
+            data = json.loads(path.read_text())
+            data.pop('animation', None)
+            self._write_library_animation(path, data)
+            self.library_status.setText("Animation reference removed · this is now an ordinary card")
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Couldn't remove animation reference", str(exc))
+
     def _load_card_path(self, path):
         d = json.loads(path.read_text())
-        self.card = modem.Card(d["callsign"], d["grid"], [tuple(c) for c in d["palette"]], d["pixels"], d.get("card_id", 0xC0DE), d.get("width", 32), d.get("height", 32))
+        self.card = modem.Card(d["callsign"], d["grid"], [tuple(c) for c in d["palette"]], d["pixels"], d.get("card_id", 0xC0DE), d.get("width", 32), d.get("height", 32), copy.deepcopy(d.get("animation")))
         self.card = normalize_card_palette(self.card)
         self.card.validate(); self.card_path = path
         self.canvas.set_card(self.card, d.get("base_pixels", self.card.pixels), d.get("stamp_layers", []))
@@ -2863,7 +2980,7 @@ class MainWindow(QMainWindow):
             data = json.loads(Path(item.data(Qt.ItemDataRole.UserRole)).read_text())
             card = modem.Card(data["callsign"], data.get("grid", ""),
                               [tuple(color) for color in data["palette"]], data["pixels"],
-                              data.get("card_id", 0xC0DE), data.get("width", 32), data.get("height", 32))
+                              data.get("card_id", 0xC0DE), data.get("width", 32), data.get("height", 32), copy.deepcopy(data.get("animation")))
             card.validate()
             image = self.card_image({"card": data, "pixels": data["pixels"]})
             QApplication.clipboard().setImage(image)
@@ -2894,7 +3011,7 @@ class MainWindow(QMainWindow):
             card = modem.Card(str(data["callsign"]), str(data.get("grid", "")),
                               [tuple(map(int, color)) for color in data["palette"]],
                               list(map(int, data["pixels"])), int(data.get("card_id", 0xC0DE)),
-                              int(data.get("width", 32)), int(data.get("height", 32)))
+                              int(data.get("width", 32)), int(data.get("height", 32)), copy.deepcopy(data.get("animation")))
             card.validate()
             default_name = f"{source.stem}.png"
             target_name, file_filter = QFileDialog.getSaveFileName(
@@ -2979,6 +3096,7 @@ class MainWindow(QMainWindow):
         except (OSError, ValueError): return
         if not deck_events(entry):
             self.log_status.setText("This contact has no saved image cards yet."); return
+        entry = {**entry, 'animation_candidates': self._saved_animation_candidates()}
         provenance = path if path is not None else Path(
             f"received-{entry.get('peer_callsign', 'unknown')}")
         add_received = lambda card: self.add_received_card_to_library(card, provenance)
@@ -3766,7 +3884,7 @@ class MainWindow(QMainWindow):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(json.dumps({"callsign": self.card.callsign, "grid": self.card.grid,
                 "palette": self.card.palette, "pixels": self.card.pixels, "card_id": self.card.card_id,
-                "width": self.card.width, "height": self.card.height,
+                "width": self.card.width, "height": self.card.height, "animation": copy.deepcopy(self.card.animation),
                 "base_pixels": self.canvas.base_pixels, "stamp_layers": self.canvas.layer_data()}, indent=2))
             self.card_path = target
             self.editor_baseline = self.editor_signature()
@@ -5821,6 +5939,9 @@ class MainWindow(QMainWindow):
             self.on_air.emit("host_rx_frame", frame_ref, binary=frame)
         try:
             _assembly, metadata = self.card_assembly.feed_transport_frame("PIXELQSO", frame)
+            if metadata.get("animation_metadata_only"):
+                self._refresh_animation_references()
+                return
             pixels = metadata.pop("pixels")
             palette_id = int(metadata["palette_id"])
             palette = [list(color) for color in modem.AVATAR_PALETTES[palette_id]]
@@ -6011,7 +6132,7 @@ class MainWindow(QMainWindow):
                     str(data.get("grid", self.station_grid.text())).strip().upper(),
                     [tuple(int(v) for v in color) for color in data["palette"]],
                     [int(v) for v in data["pixels"]], int(time.time_ns() & 0xffff),
-                    int(data.get("width", 32)), int(data.get("height", 32)))
+                    int(data.get("width", 32)), int(data.get("height", 32)), copy.deepcopy(data.get("animation")))
                 card.validate()
                 self.quick_reply_card = card
                 request["result"] = {"loaded": True, "card_id": card.card_id}
@@ -6546,7 +6667,7 @@ class MainWindow(QMainWindow):
             data = json.loads(Path(path).read_text())
             card = modem.Card(data["callsign"], data["grid"], [tuple(c) for c in data["palette"]],
                               list(data["pixels"]), data.get("card_id", 0xC0DE),
-                              data.get("width", 32), data.get("height", 32))
+                              data.get("width", 32), data.get("height", 32), copy.deepcopy(data.get("animation")))
         self.transmit_exchange(card_override=card)
 
     def _send_quick_draw_card(self):
@@ -6794,7 +6915,7 @@ class MainWindow(QMainWindow):
             else:
                 symbols, profile = self._card_tx_symbols(card)
                 from modem_envelope import HEADER_SECONDS
-                total_seconds = len(symbols) / profile.baud + 2*HEADER_SECONDS*self.repeat_count.value()
+                total_seconds = len(symbols) / profile.baud + (4 if card.animation else 2)*HEADER_SECONDS*self.repeat_count.value()
                 if self.cwid_enabled.isChecked():
                     station_call = self.station_call.text().strip().upper()
                     cwid_text = self.cwid_message.text().strip().upper()
@@ -7056,18 +7177,18 @@ class MainWindow(QMainWindow):
         if selected_path:
             data = json.loads(Path(selected_path).read_text())
             card = modem.Card(data["callsign"], data["grid"], [tuple(c) for c in data["palette"]],
-                              list(data["pixels"]), data.get("card_id", 0xC0DE), data.get("width", 32), data.get("height", 32))
+                              list(data["pixels"]), data.get("card_id", 0xC0DE), data.get("width", 32), data.get("height", 32), copy.deepcopy(data.get("animation")))
             card = normalize_card_palette(card)
         else:
             card = modem.Card(self.call.text().strip().upper(), self.grid.text().strip().upper(),
                               list(self.card.palette), list(self.card.pixels), self.card.card_id,
-                              self.card.width, self.card.height)
+                              self.card.width, self.card.height, copy.deepcopy(self.card.animation))
         card.validate()
         return card
 
     def _remember_tx_card(self, card):
         self.tx_card = modem.Card(card.callsign, card.grid, list(card.palette), list(card.pixels),
-                                  card.card_id, card.width, card.height)
+                                  card.card_id, card.width, card.height, copy.deepcopy(card.animation))
         quick = self.quick_reply_card
         self.tx_quick_draw_card = (self.tx_card if quick is not None and not self.auto_armed
                                    and self.exchange_mode.currentIndex() == 0
@@ -8845,6 +8966,11 @@ class MainWindow(QMainWindow):
             card_face.setIconSize(QSize(132, 132))
             card_face.setStyleSheet("QPushButton { background:#101a17; border:1px solid #43564d; border-radius:7px; padding:4px; } QPushButton:checked { background:#18251f; color:#e2eee6; border-color:#70927d; font-size:10px; font-weight:600; text-align:left; }")
             def flip_card(show_back, button=card_face):
+                if show_back and getattr(button, '_animation_report', None):
+                    with QSignalBlocker(button):
+                        button.setChecked(False)
+                    AnimationDetailsDialog(button._animation_report, self.card_image, self).exec()
+                    return
                 button.setIcon(QIcon() if show_back else button._front_icon)
                 button.setText(button._back_text if show_back else "")
                 button.setAccessibleName(button._accessible_label +
@@ -8860,6 +8986,13 @@ class MainWindow(QMainWindow):
         card_face._front_icon = icon
         card_face._back_text = back_text
         card_face._accessible_label = accessible_label
+        card_face._ordinary_icon = icon
+        card_face._ordinary_back = back_text
+        card_face._ordinary_label = accessible_label
+        card_face._report = copy.deepcopy(report)
+        card_face._report.setdefault('logged_at', time.strftime('%Y-%m-%d %H:%M:%S'))
+        card_face._report.setdefault('frequency_hz', frequency_hz)
+        card_face._report.setdefault('receive_profile', profile)
         item.setToolTip(accessible_label)
         item.setData(Qt.ItemDataRole.AccessibleTextRole, accessible_label)
         card_face.setToolTip(accessible_label + " · click to flip for receive details")
@@ -8873,6 +9006,123 @@ class MainWindow(QMainWindow):
             card_face.setAccessibleName(accessible_label + " · card front; activate to read receive details")
         self.session_wall_empty.hide()
         self.session_wall.show()
+        self._update_wall_animations()
+
+    def _saved_animation_candidates(self):
+        """Read saved receptions across sessions, caching unchanged archive files."""
+        cache = getattr(self, '_animation_archive_cache', {})
+        current, reports = {}, []
+        for path in self.qso_log_dir.glob('*.json'):
+            try:
+                stat = path.stat(); stamp = (stat.st_mtime_ns, stat.st_size)
+                old = cache.get(path)
+                cards = old[1] if old and old[0] == stamp else json.loads(path.read_text()).get('received_cards', [])
+                current[path] = (stamp, cards); reports.extend(cards)
+            except (OSError, ValueError, TypeError, AttributeError):
+                continue
+        self._animation_archive_cache = current
+        return reports
+
+    def _refresh_animation_references(self):
+        """Late sidecars upgrade metadata without inventing another reception."""
+        links = self.card_assembly.animation_links
+        for _item, button in self.session_wall_items.values():
+            if hasattr(button, '_report'):
+                links.attach(button._report)
+        entries = []
+        if self.active_qso_log is not None:
+            entries.append((self.active_qso_log, self._active_qso_path))
+        entries.extend(getattr(self, 'passive_received_logs', {}).values())
+        active_paths = {path for _, path in entries}
+        for path in self.qso_log_dir.glob('*.json'):
+            if path not in active_paths:
+                try:
+                    entries.append((json.loads(path.read_text()), path))
+                except (OSError, ValueError):
+                    continue
+        for entry, path in entries:
+            changed = False
+            for report in entry.get('received_cards', []):
+                before = copy.deepcopy((report.get('card') or {}).get('animation'))
+                links.attach(report)
+                changed |= before != (report.get('card') or {}).get('animation')
+            if changed and path is not None:
+                temporary = None
+                try:
+                    with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, suffix='.tmp', delete=False) as handle:
+                        temporary = Path(handle.name); handle.write(json.dumps(entry, indent=2) + '\n')
+                    os.replace(temporary, path)
+                except OSError as exc:
+                    self.rx_status.setText(f'Animation reference received; could not save it: {exc}')
+                finally:
+                    if temporary is not None:
+                        temporary.unlink(missing_ok=True)
+        self._update_wall_animations()
+
+    def _update_wall_animations(self):
+        tiles = [(item, button) for item, button in self.session_wall_items.values()
+                 if hasattr(button, '_report')]
+        reports = [button._report for _, button in tiles]
+        candidates = self._saved_animation_candidates() + reports
+        for item, button in tiles:
+            item.setHidden(False)
+            button._animation_report = None
+            button._animation_icons = []
+            button._front_icon = button._ordinary_icon
+            button._back_text = button._ordinary_back
+            button._accessible_label = button._ordinary_label
+            button.setToolTip(button._ordinary_label + ' · click to flip for receive details')
+            button.setAccessibleName(button._ordinary_label)
+            waiting = animation_details(button._report)
+            if waiting:
+                button._back_text += '\n' + waiting
+                button.setToolTip(button._ordinary_label + ' · ' + waiting)
+            if not button.isChecked():
+                button.setIcon(button._front_icon)
+            else:
+                button.setText(button._back_text)
+        for _item, button in tiles:
+            second = button._report
+            first = animation_partner(second, candidates)
+            if first is None:
+                continue
+            combined = {**second, 'animation_frames': [first, second]}
+            button._animation_report = combined
+            button._animation_ms = second['card']['animation']['frame_ms']
+            button._animation_icons = [QIcon(card_art(self.card_image(frame),
+                f'Frame {i+1} / 2', 'ANIMATION', QSize(132, 132))) for i, frame in enumerate((first, second))]
+            button._back_text = animation_details(combined)
+            button._accessible_label = button._ordinary_label + ' · two-frame animation; activate for both frames’ details'
+            button.setToolTip(button._accessible_label)
+            button.setAccessibleName(button._accessible_label)
+            with QSignalBlocker(button):
+                button.setChecked(False)
+            button.setText(''); button.setIcon(button._animation_icons[0])
+            for first_item, first_button in tiles:
+                candidate = first_button._report
+                if candidate is first:
+                    first_item.setHidden(True)
+                elif (candidate.get('card') or {}).get('card_id') == second['card']['animation']['first_card_id']:
+                    try:
+                        if artwork_digest(candidate) == second['card']['animation']['first_digest']:
+                            first_item.setHidden(True)
+                    except (ValueError, KeyError, TypeError, IndexError):
+                        pass
+        if not hasattr(self, '_animation_wall_timer'):
+            self._animation_wall_timer = QTimer(self)
+            self._animation_wall_timer.timeout.connect(self._advance_wall_animations)
+        if any(getattr(button, '_animation_icons', ()) for _, button in tiles):
+            self._animation_wall_timer.start(100)
+        else:
+            self._animation_wall_timer.stop()
+
+    def _advance_wall_animations(self):
+        now = time.monotonic()*1000
+        for _item, button in self.session_wall_items.values():
+            icons = getattr(button, '_animation_icons', ())
+            if icons and button.isVisible() and not button.isChecked():
+                button._front_icon = icons[int(now/button._animation_ms) % 2]
+                button.setIcon(button._front_icon)
 
     def _reset_receive_window(self, *, preserve_preview=False):
         self._clear_rx_bytes()
@@ -9013,6 +9263,7 @@ class MainWindow(QMainWindow):
         return {"card": {"callsign": card.callsign, "grid": card.grid, "card_id": card.card_id,
                           "width": card.width, "height": card.height,
                           "palette": [list(color) for color in card.palette],
+                          "animation": copy.deepcopy(card.animation),
                           "message_type": {"report73": "73", "final73": "73"}.get(message_type, message_type),
                           "snr_db": snr_db}, "pixels": pixels}
 

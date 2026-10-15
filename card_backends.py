@@ -225,8 +225,12 @@ class Data2GHostBackend:
         per_codeword = ((mode.seconds_at_max - mode.seconds_at_one) /
                         max(1, mode.max_codewords - 1))
         estimate = 0.0
-        for offset in range(0, len(packed), app_bytes):
-            frame_bytes = TRANSFER_HEADER.size + min(app_bytes, len(packed) - offset)
+        frame_sizes = [TRANSFER_HEADER.size + min(app_bytes, len(packed)-offset)
+                       for offset in range(0, len(packed), app_bytes)]
+        if card.animation:
+            from card_animation import encode_link
+            frame_sizes.insert(0, len(encode_link(card)))
+        for frame_bytes in frame_sizes:
             # Data2G's broadcast stream adds a two-byte frame length before
             # coding. Reserve the host's maximum four control codewords; ACKMODE
             # serialization gives each PixelQSO frame its own burst.
@@ -507,7 +511,7 @@ def _with_copy_header(cls):
     def estimate(self, card, repeats):
         from modem_envelope import HEADER_SECONDS
         repeat_waveform(np.empty(0), repeats)
-        return repeats * (estimate_payload(self, card, 1) + 2*HEADER_SECONDS)
+        return repeats * (estimate_payload(self, card, 1) + (4 if card.animation else 2)*HEADER_SECONDS)
     cls.encode, cls.decode, cls.estimate_seconds = encode, decode, estimate
     cls.decode_payload = decode_payload
     return cls
@@ -542,7 +546,7 @@ class GroupedFSKBackend:
         from modem_envelope import HEADER_SECONDS
         repeat_waveform(np.empty(0), repeats)
         weak.packet(card)
-        return HEADER_SECONDS + repeats * burst.seconds(GROUPED_MODES[self.key])
+        return (3 if card.animation else 1)*HEADER_SECONDS + repeats * burst.seconds(GROUPED_MODES[self.key])
 
     def minimum_audio_seconds(self):
         from modem_envelope import HEADER_SECONDS

@@ -1,5 +1,35 @@
 # Next steps: Pixel QSO UI/UX
 
+## Two-frame animations — 2026-10-14
+
+Implemented the one-way frame-2 reference. My Cards → More → Make selected card
+frame 2… selects a same-station, same-size first card and previews the frame timing.
+Frame 1 stays ordinary; frame 2 stores its ID and artwork fingerprint. Save/load,
+duplication, TX snapshots, quick-draw archives and JSON exports preserve the reference.
+Changing an existing pairing/timing assigns a new second-card ID; local unlinking is
+available from More. Verified pairs render as one animated wall/deck item, including
+partners saved in earlier sessions. Clicking shows both thumbnails and each reception's
+identity, time, mode, frequency and measured/reported SNR. Deck playback can be paused.
+Original records remain independent, and incomplete/mismatched pairs remain static.
+
+Optional checked sidecars carry the reference without changing ordinary image headers
+or raster fragments: Data2G uses a separate 29-byte PQAN frame, and local audio uses
+common-header version 5 outside the existing payload boundaries. Incremental header
+scans retain references in the bounded copy cache. Late Data2G sidecars update saved
+QSO metadata without inventing another reception attempt. Airtime estimates include
+sidecars. See [the usage and wire format](docs/TWO-FRAME-ANIMATIONS.md).
+
+Validation: 120 focused checks and two subtests passed across animation, transport,
+backend adapters, protected headers, palette normalization, previews and transfer UI.
+The 17 animation cases include full ordinary/grouped/interlaced audio roundtrips,
+an older-header-reader simulation, unchanged Data2G image fragments, reverse arrival,
+late metadata, saved-session pairing, persistence, animation playback and artwork clicks.
+Two existing transfer UI tests were deselected after reproducing both failures against
+the original HEAD app source: advanced-controls visibility and the removed getting-started
+dialog. Offscreen deck/details renders were inspected; diff checks pass.
+No running app/container was restarted or synchronized. Live audio/RF, CAT/PTT, a separate
+older installed client and a live two-host Data2G animation remain unverified.
+
 ## Default chip cards and stamps — 2026-10-14
 
 Added four E-major chip cards to the starter gallery and eight opaque pixel stamps

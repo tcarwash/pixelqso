@@ -173,7 +173,9 @@ class Data2GFrameAdapter:
             raise ValueError(
                 "Data2G frame capacity cannot fit the Pixel QSO header and image data")
         packed = modem.minimal_avatar_payload(card)
-        return [card_fragment(card, packed, offset,
+        from card_animation import encode_link
+        sidecar = encode_link(card)
+        return ([sidecar] if sidecar else []) + [card_fragment(card, packed, offset,
                               packed[offset:offset + chunk_size],
                               message_type, snr_db)
                 for offset in range(0, len(packed), chunk_size)]

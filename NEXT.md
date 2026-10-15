@@ -1,9 +1,40 @@
 # Next steps: Pixel QSO UI/UX
 
+## Current checkpoint — 2026-10-14
+
+Animation work is committed as `d3a2bb0`; provisional reply/report support is committed as `c67f613`.
+The follow-up work below is in the working tree and remains uncommitted.
+
+Provisional receive cards now coalesce in station and session decks by protected card identity,
+including across partial-to-complete updates and session reloads. Receive reports are deep-copied
+when archived so later updates do not mutate saved history. The exchange panel now has a separate,
+amber **SENDING** preview: serial modes reveal actual raster checkpoints, coded bursts use a whole-card
+progress fade, and Data2G reveals only host-confirmed outgoing fragments. Playback progress is labeled
+local; it does not claim remote receipt. Stop/complete restores the receive workspace.
+
+E-major previous-pass evidence is retained across receive-window/reply transitions while explicit
+Discard still clears it. A two-window replay from the recorded `7bea033c775437e68966489d215c88f0`
+card recovered an unverified first pass and a whole-card-verified second pass with two retained copies.
+This supports the cache-lifecycle fix; it does not resolve the separate captured card that failed to
+verify after three passes, and sample-slip recovery remains limited.
+
+E-major now also sends an optional protected block-CRC table in common-envelope sidecars. The 64-byte
+table has 16 CRC16 values over 64-pixel blocks, bound to the existing whole-card identity and protected
+by table CRC32 plus the existing RS/CRC header markers. Four 16-byte pieces appear before and after all repeated copies in a send. This costs about 12.8 seconds per send at the common-header rate, regardless of copy count. Updated receivers merge matching blocks across passes and keep the whole-card digest
+as the final verification gate. The extension keeps the existing mode ID and native tone sequence;
+older receivers skip the new optional marker versions. Images over 1024 pixels omit the table.
+See [E-major block CRC sidecar format](docs/MUSICAL-BLOCK-CRC.md).
+
+Validation so far: nine focused outgoing-preview/deck checks passed, including rendering and state
+direction; 160 focused protocol/reply/deck checks and two subtests passed in the prior checkpoint.
+The recorded two-window audio replay completed as described above. Python source compilation passes
+for the touched implementation modules. No RF transmission, CAT/PTT, container restart or live
+hardware validation was performed. Full send/receive behavior with the new CRC sidecar remains to be
+verified against recorded audio and an updated peer.
+
 ## Provisional replies and reception reports — 2026-10-14
 
-Animation work is committed as `d3a2bb0` on `animations`. The following reply/report
-changes are a separate, uncommitted checkpoint.
+Animation work is committed as `d3a2bb0` and reply/report support as `c67f613` on `animations`.
 
 Identified provisional cards now expose the manual reply action. Both **Send Exchange**
 and **Send RR73 with report** include the current card's received-pixel count, CRC-passed

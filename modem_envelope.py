@@ -11,6 +11,7 @@ import json
 import math
 import struct
 import zlib
+import copy
 import numpy as np
 from scipy.fft import fft, ifft, next_fast_len
 from scipy.signal import hilbert, resample_poly, find_peaks
@@ -63,8 +64,13 @@ GROUP_PAYLOAD_SAMPLES = {'experimental_8fsk_grouped': 240240,
                          'experimental_16fsk_grouped': 270720}
 
 
-def metadata_header_count(card):
+def metadata_header_count(card, key=None):
     return 2*bool(card.animation) + 4*bool(card.reception_report)
+
+
+def block_crc_header_count(card, key=None):
+    return (8 if key == 'experimental_8fsk_musical_25' and
+            0 < card.width*card.height <= 1024 else 0)
 
 
 def group_version(key):
@@ -179,7 +185,7 @@ def animation_audio(key, card):
     return resample_poly(np.pad(audio, (round(GUARD*RATE),)*2), 6, 1).astype(np.float32)
 
 
-def _metadata_framed(key, card, audio, message_type, snr_db):
+def _metadata_framed(key, card, audio, message_type, snr_db, *, include_block_crc=True):
     markers = [animation_audio(key, card)]
     if card.reception_report is not None and message_type in ('exchange', '73'):
         from card_feedback import encode_report
@@ -190,8 +196,29 @@ def _metadata_framed(key, card, audio, message_type, snr_db):
             encoded = pixel.synthesize(_protected_symbols(body), sample_rate=RATE, profile=PROFILE)
             markers.append(resample_poly(np.pad(encoded, (round(GUARD*RATE),)*2), 6, 1).astype(np.float32))
     marker = np.concatenate(markers)
-    if not len(marker):
+    if len(marker):
+        rms = np.sqrt(np.mean(np.asarray(audio, float)**2))
+        marker *= rms / max(np.sqrt(np.mean(marker.astype(float)**2)), 1e-12)
+        audio = np.concatenate((marker, audio, marker))
+    if include_block_crc:
+        audio = _block_crc_framed(key, card, audio, message_type, snr_db)
+    return audio
+
+
+def _block_crc_framed(key, card, audio, message_type, snr_db):
+    from musical_crc import MODE, VERSIONS, encode_table
+    if key != MODE:
         return audio
+    frame = encode_table(card, content_id(key, card, message_type, snr_db))
+    if frame is None:
+        return audio
+    token = int.from_bytes(frame[-4:], 'big')
+    markers = []
+    for index, version in enumerate(VERSIONS):
+        body = BODY.pack(b'PQCH', version, MODE_IDS[key], token, frame[16*index:16*(index+1)])
+        encoded = pixel.synthesize(_protected_symbols(body), sample_rate=RATE, profile=PROFILE)
+        markers.append(resample_poly(np.pad(encoded, (round(GUARD*RATE),)*2), 6, 1).astype(np.float32))
+    marker = np.concatenate(markers)
     rms = np.sqrt(np.mean(np.asarray(audio, float)**2))
     marker *= rms / max(np.sqrt(np.mean(marker.astype(float)**2)), 1e-12)
     return np.concatenate((marker, audio, marker))
@@ -214,7 +241,9 @@ def transmit(key, card, payload, copies, message_type='card', snr_db=None):
     rms = np.sqrt(np.mean(np.asarray(payload, float)**2))
     for marker in (prefix, suffix):
         marker *= rms / max(np.sqrt(np.mean(marker.astype(float)**2)), 1e-12)
-    return np.tile(_metadata_framed(key, card, np.concatenate((prefix, payload, suffix)), message_type, snr_db), int(copies))
+    cycle = _metadata_framed(key, card, np.concatenate((prefix, payload, suffix)),
+                             message_type, snr_db, include_block_crc=False)
+    return _block_crc_framed(key, card, np.tile(cycle, int(copies)), message_type, snr_db)
 
 
 def transmit_interlaced(key, card, copies, payload_for_copy, message_type='card', snr_db=None):
@@ -237,8 +266,9 @@ def transmit_interlaced(key, card, copies, payload_for_copy, message_type='card'
         rms = np.sqrt(np.mean(payload.astype(float)**2))
         for marker in (prefix, suffix):
             marker *= rms / max(np.sqrt(np.mean(marker.astype(float)**2)), 1e-12)
-        frames.append(_metadata_framed(key, card, np.concatenate((prefix, payload, suffix)), message_type, snr_db))
-    return np.concatenate(frames)
+        frames.append(_metadata_framed(key, card, np.concatenate((prefix, payload, suffix)),
+                                       message_type, snr_db, include_block_crc=False))
+    return _block_crc_framed(key, card, np.concatenate(frames), message_type, snr_db)
 
 
 def transmit_group(key, card, payload, copies, message_type='card', snr_db=None):
@@ -309,6 +339,10 @@ def decode_header(metrics, *, soft=False):
     if zlib.crc32(body) != crc:
         raise ValueError('copy header checksum failed')
     magic, version, mode, samples, identity = BODY.unpack(body)
+    from musical_crc import MODE, VERSIONS
+    if magic == b'PQCH' and version in VERSIONS and ID_MODES.get(mode) == MODE:
+        return dict(mode=MODE, version=version,
+                    block_crc_part=(MODE, samples, version-VERSIONS[0], identity.hex()))
     if magic == b'PQCH' and version in REPORT_VERSIONS and mode in ID_MODES:
         return dict(mode=ID_MODES[mode], version=version,
                     feedback_part=(ID_MODES[mode], samples, version-REPORT_VERSIONS[0], identity.hex()))
@@ -424,8 +458,9 @@ class AnnouncedCopy:
 
 
 class AnnouncedCopies(list):
-    def __init__(self, copies=(), animation_links=(), feedback_parts=()):
+    def __init__(self, copies=(), animation_links=(), feedback_parts=(), block_crc_parts=()):
         super().__init__(copies)
+        self.block_crc_parts = list(block_crc_parts)
         self.animation_links = list(animation_links)
         self.feedback_parts = list(feedback_parts)
 
@@ -558,11 +593,18 @@ def find_copies(audio, sample_rate, *, capture_start_utc=None, grid_window=.1):
     feedback = FeedbackCache()
     for part in parts:
         feedback.add_part(*part)
+    from musical_crc import TableCache
+    tables = TableCache()
+    crc_parts = [header['block_crc_part'] for _, header, _, _ in sorted(markers, key=lambda m: m[0])
+                 if 'block_crc_part' in header]
+    for part in crc_parts:
+        tables.add_part(*part)
     copies = []
     for start, header, score, offset in markers:
-        if 'animation_link' in header or 'feedback_part' in header:
+        if 'animation_link' in header or 'feedback_part' in header or 'block_crc_part' in header:
             continue
-        header = {**header, 'animation_links': links, 'reception_reports': feedback.frames()}
+        header = {**header, 'animation_links': links, 'reception_reports': feedback.frames(),
+                  'block_crc_tables': tables.frames()}
         header = {**header, 'estimated_snr_db_2500': header_snr_db(analytic, start, offset)}
         payload_length = header['payload_samples'] * RATE / 48000
         boundary = (start - GUARD*RATE if header['trailer'] else
@@ -593,7 +635,7 @@ def find_copies(audio, sample_rate, *, capture_start_utc=None, grid_window=.1):
         copies.append(AnnouncedCopy(header['mode'], header['identity'], original_first,
                     original_last, {**header, 'acquisition_score': score,
                     'carrier_offset_hz': offset}))
-    return AnnouncedCopies(sorted(copies, key=lambda c: c.start)[:MAX_COPIES], links, parts)
+    return AnnouncedCopies(sorted(copies, key=lambda c: c.start)[:MAX_COPIES], links, parts, crc_parts)
 
 
 def groups(copies, key):
@@ -619,6 +661,13 @@ def decode_capture(key, audio, sample_rate, decoder, copies=None, copy_decoder=N
             feedback.add(bytes.fromhex(frame), fallback=True)
         for digest, link in copy.diagnostics.get('animation_links', ()):
             animation_links.add(digest, link)
+    from musical_crc import TableCache, ADMITTED_TABLE
+    tables = TableCache()
+    for part in getattr(announced, 'block_crc_parts', ()):
+        tables.add_part(*part)
+    for item in announced:
+        for frame in item.diagnostics.get('block_crc_tables', ()):
+            tables.add(bytes.fromhex(frame))
     matched = groups(announced, key)
     if not announced:
         if key in GROUP_MODES or key in COMPRESSED_MODES:
@@ -650,6 +699,7 @@ def decode_capture(key, audio, sample_rate, decoder, copies=None, copy_decoder=N
             payloads.append(np.pad(signal, (round(.05*sample_rate),)*2))
         pooled = np.concatenate(payloads)
         token = ADMITTED_IDENTITY.set((key, group[0].identity))
+        table_token = ADMITTED_TABLE.set(tables.get(group[0].identity))
         try:
             report = (announced_decoder(payloads,sample_rate,group) if announced_decoder is not None else
                       copy_decoder(payloads, sample_rate) if copy_decoder is not None else
@@ -661,7 +711,7 @@ def decode_capture(key, audio, sample_rate, decoder, copies=None, copy_decoder=N
                 coverage = card.get('pixel_coverage') or []
                 pixels = report.get('pixels') or []
                 expected_pixels = int(card.get('width', 32)) * int(card.get('height', 32))
-                if complete_payload and len(pixels) == expected_pixels:
+                if (complete_payload or all(card.get('received_blocks') or [False])) and len(pixels) == expected_pixels:
                     matches_identity = report_content_id(key, report).hex() == group[0].identity
                     if matches_identity:
                         received_coverage = list(coverage) if coverage else [True] * expected_pixels
@@ -687,10 +737,18 @@ def decode_capture(key, audio, sample_rate, decoder, copies=None, copy_decoder=N
                             'checksum inconclusive with missing pixels · unverified')
                 else:
                     card['content_checksum_valid'] = None
+                    checked_blocks = sum(card.get('received_blocks') or [])
+                    total_blocks = card.get('total_blocks') or 0
+                    if total_blocks:
+                        card['color_stage'] = (
+                            f'{checked_blocks}/{total_blocks} blocks CRC verified · '
+                            f'{sum(bool(value) for value in coverage)}/{expected_pixels} pixels · '
+                            'whole-card verification pending')
         except ValueError as exc:
             error = exc
             continue
         finally:
+            ADMITTED_TABLE.reset(table_token)
             ADMITTED_IDENTITY.reset(token)
         card = report.get('card') or {}
         animation_links.attach(report)
@@ -731,6 +789,8 @@ class CopyCaptureCache:
     def __init__(self, max_bytes=256*1024*1024, max_groups=4):
         from card_animation import LinkCache
         self.animation_links = LinkCache()
+        from musical_crc import TableCache
+        self.block_crc_tables = TableCache()
         from card_feedback import FeedbackCache
         self.feedback = FeedbackCache()
         from threading import RLock
@@ -741,10 +801,33 @@ class CopyCaptureCache:
     def clear(self):
         with self.lock:
             self.animation_links.links.clear()
+            self.block_crc_tables.parts.clear()
+            self.block_crc_tables.tables.clear()
             self.feedback.reports.clear()
             self.feedback.parts.clear()
             self.entries.clear()
             self.header_scan_sample=None
+
+    def next_window(self):
+        """Retain immutable prior copies with a fresh scan/sample coordinate space.
+
+        Closed-window captures get negative relative positions. New audio starts
+        at zero, so it cannot extend or replace those captures, and new protected
+        acquisitions still take priority. Forking isolates stale receiver workers.
+        """
+        with self.lock:
+            result = type(self)(max_bytes=self.max_bytes, max_groups=self.max_groups)
+            shift = max((frame['start'] + len(frame['audio'])/RATE
+                         for group in self.entries.values() for frame in group['frames']), default=0) + 1
+            result.entries = {key: {**group, 'frames': [
+                {**frame, 'start': frame['start']-shift,
+                 'diagnostics': copy.deepcopy(frame['diagnostics'])}
+                for frame in group['frames']]} for key, group in self.entries.items()}
+            result.serial = self.serial
+            result.animation_links = copy.deepcopy(self.animation_links)
+            result.block_crc_tables = copy.deepcopy(self.block_crc_tables)
+            result.feedback = copy.deepcopy(self.feedback)
+            return result
 
     def header_scan_ranges(self, capture_start_sample, sample_count, sample_rate,
                            *, max_chunk_seconds=8.0):
@@ -816,11 +899,15 @@ class CopyCaptureCache:
 
     def update(self, audio, sample_rate, copies, capture_start_sample=0):
         with self.lock:
+            for part in getattr(copies, 'block_crc_parts', ()):
+                self.block_crc_tables.add_part(*part)
             for part in getattr(copies, 'feedback_parts', ()):
                 self.feedback.add_part(*part)
             for digest, link in getattr(copies, 'animation_links', ()):
                 self.animation_links.add(digest, link)
             for copy in copies:
+                for frame in copy.diagnostics.get('block_crc_tables', ()):
+                    self.block_crc_tables.add(bytes.fromhex(frame))
                 for frame in copy.diagnostics.get('reception_reports', ()):
                     self.feedback.add(bytes.fromhex(frame), fallback=True)
                 for digest, link in copy.diagnostics.get('animation_links', ()):
@@ -884,6 +971,7 @@ class CopyCaptureCache:
                     payload=frame['audio']; parts.append(payload)
                     diagnostic={**frame['diagnostics'],'carrier_offset_hz':0,
                                 'reception_reports': self.feedback.frames(),
+                                'block_crc_tables': self.block_crc_tables.frames(),
                                 'animation_links': [(digest, link) for digest, link in
                                                     self.animation_links.links.items() if link],
                                 'acquisition_start_sample': round(frame['start']*RATE),

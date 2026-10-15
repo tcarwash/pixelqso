@@ -38,6 +38,7 @@ from card_ids import allocate_card_id
 from card_animation import (artwork_digest, validate_link, partner as animation_partner,
                             details as animation_details)
 from card_feedback import make_report as make_reception_report, report_lines as reception_report_lines
+from transmit_preview import LocalTransmitPreview, Data2GTransmitPreview
 from snr import set_measured_snr, snr_lines
 from backend_adapters import (AdapterKind, DATA2G_ADAPTER, DecodeFailure,
                               DecodeFailureKind, DecodeOutcome,
@@ -186,6 +187,22 @@ def received_card_key(report):
 def session_wall_card_key(report):
     """Stable identity for one card while provisional snapshots improve."""
     return received_card_key(report)
+
+
+def same_received_card(left, right):
+    """Match improving provisional snapshots without merging known new artwork."""
+    if received_card_key(left) != received_card_key(right):
+        return False
+    a, b = left.get('card') or {}, right.get('card') or {}
+    if (a.get('width', 32), a.get('height', 32)) != (b.get('width', 32), b.get('height', 32)):
+        return False
+    first = a.get('image_id') or a.get('image_crc32')
+    second = b.get('image_id') or b.get('image_crc32')
+    if first is not None and second is not None:
+        return first == second
+    if a.get('exact') and b.get('exact') and left.get('pixels') is not None and right.get('pixels') is not None:
+        return left['pixels'] == right['pixels']
+    return True
 
 
 class ReceiveStatusLabel(QLabel):
@@ -483,7 +500,8 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
         if copy_cache is not None:
             copy_cache.update(audio,sample_rate,copies,capture_start_sample)
             cached_audio,cached_copies=copy_cache.materialize()
-            if cached_copies:
+            if cached_copies and any(copy.diagnostics.get('acquisition_start_sample', 0) >= 0
+                                     for copy in cached_copies):
                 audio,sample_rate,copies=cached_audio,8000,cached_copies
         if copies:
             for copy in copies:
@@ -2909,9 +2927,8 @@ class MainWindow(QMainWindow):
                     "latest_received_at": report.get("logged_at") or entry.get("started_at", ""),
                     "status": "Received archive", "deck_type": "received_archive",
                     "sent_cards": [], "received_cards": []})
-                key = self._received_archive_key(report)
                 existing = next((item for item in group["received_cards"]
-                                if self._received_archive_key(item) == key), None)
+                                if same_received_card(item, report)), None)
                 logged_at = report.get("logged_at") or entry.get("started_at", "")
                 if not group["started_at"] or (logged_at and logged_at < group["started_at"]):
                     group["started_at"] = logged_at
@@ -4344,6 +4361,12 @@ class MainWindow(QMainWindow):
         left = QWidget(); left.setLayout(left_panel); left.setMaximumWidth(410)
 
         right_panel = QVBoxLayout()
+        self.traffic_preview = QStackedWidget()
+        self.receive_workspace = QWidget()
+        received_layout = QVBoxLayout(self.receive_workspace)
+        received_layout.setContentsMargins(0, 0, 0, 0)
+        self.traffic_preview.addWidget(self.receive_workspace)
+        right_panel.addWidget(self.traffic_preview, 1)
         view_heading = QHBoxLayout()
         view_heading.addWidget(QLabel("Cards heard this session"), 1)
         self.listen_indicator = QLabel("● STARTING")
@@ -4351,7 +4374,7 @@ class MainWindow(QMainWindow):
         self.listen_indicator.setStyleSheet(status_label_style("muted"))
         self._refresh_listen_indicator_width()
         view_heading.addWidget(self.listen_indicator)
-        right_panel.addLayout(view_heading)
+        received_layout.addLayout(view_heading)
         self.incoming_card_details = QLabel()
         self.incoming_card_details.setTextFormat(Qt.TextFormat.PlainText)
         self.incoming_card_details.setWordWrap(True)
@@ -4359,7 +4382,7 @@ class MainWindow(QMainWindow):
         self.incoming_card_details.setAccessibleName("Incoming card metadata")
         self.incoming_card_details.setStyleSheet(semantic_text_style("soft", padding="4px"))
         self.incoming_card_details.hide()
-        right_panel.addWidget(self.incoming_card_details)
+        received_layout.addWidget(self.incoming_card_details)
         self.rx_waterfall = RxAudioWaterfall()
         self.rx_visual_stack = QStackedWidget()
         self.rx_waterfall_unavailable = QLabel(
@@ -4368,7 +4391,7 @@ class MainWindow(QMainWindow):
         self.rx_waterfall_unavailable.setObjectName("receiveWaterfallUnavailable")
         self.rx_visual_stack.addWidget(self.rx_waterfall)
         self.rx_visual_stack.addWidget(self.rx_waterfall_unavailable)
-        right_panel.addWidget(self.rx_visual_stack)
+        received_layout.addWidget(self.rx_visual_stack)
         self.receive_stack = QStackedWidget()
         self.session_wall_page = QWidget()
         wall_layout = QHBoxLayout(self.session_wall_page); wall_layout.setContentsMargins(0, 0, 0, 0); wall_layout.setSpacing(SPACING["sm"])
@@ -4438,7 +4461,8 @@ class MainWindow(QMainWindow):
         self.receive_preview_box.hide()
         wall_layout.addWidget(self.receive_preview_box, 0)
         self.receive_stack.setCurrentWidget(self.session_wall_page)
-        right_panel.addWidget(self.receive_stack, 1)
+        received_layout.addWidget(self.receive_stack, 1)
+        self.traffic_preview.addWidget(self._make_transmit_preview())
         self.rx_status = ReceiveStatusLabel("Ready to receive")
         self.rx_status.setObjectName("receiveStatus")
         self.rx_status.setWordWrap(True)
@@ -6926,7 +6950,7 @@ class MainWindow(QMainWindow):
                 symbols, profile = self._card_tx_symbols(card)
                 from modem_envelope import HEADER_SECONDS, metadata_header_count
                 card = self._prepare_outgoing_card(card, self._outgoing_message_type())
-                total_seconds = len(symbols) / profile.baud + (2+metadata_header_count(card))*HEADER_SECONDS*self.repeat_count.value()
+                total_seconds = len(symbols) / profile.baud + (2+metadata_header_count(card, mode))*HEADER_SECONDS*self.repeat_count.value()
                 if self.cwid_enabled.isChecked():
                     station_call = self.station_call.text().strip().upper()
                     cwid_text = self.cwid_message.text().strip().upper()
@@ -6957,6 +6981,106 @@ class MainWindow(QMainWindow):
                         "Choose a card and burst type to see estimated send time.",
                         self.selected_adapter().capabilities.kind is AdapterKind.FRAME_TRANSPORT)
 
+    def _make_transmit_preview(self):
+        self.tx_preview_box = QGroupBox('↑ SENDING · outgoing card')
+        self.tx_preview_box.setObjectName('transmitPreview')
+        self.tx_preview_box.setAccessibleName('Outgoing transmission preview')
+        self.tx_preview_box.setStyleSheet(
+            'QGroupBox#transmitPreview { border:2px solid #c69a54; border-radius:9px; '
+            'background:#201c16; margin-top:14px; padding:12px; } '
+            'QGroupBox#transmitPreview::title { color:#ffd48a; font-weight:800; }')
+        layout = QVBoxLayout(self.tx_preview_box)
+        self.tx_preview_identity = QLabel(); self.tx_preview_identity.setWordWrap(True)
+        self.tx_preview_identity.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.tx_preview_identity)
+        self.tx_preview_phase = QLabel('Preparing outgoing card')
+        self.tx_preview_phase.setWordWrap(True)
+        self.tx_preview_phase.setStyleSheet('color:#ffd48a; font-weight:700;')
+        layout.addWidget(self.tx_preview_phase)
+        self.tx_preview_view = QLabel(); self.tx_preview_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tx_preview_view.setMinimumSize(194, 194)
+        self.tx_preview_view.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
+        self.tx_preview_view.setAccessibleName('Artwork being sent')
+        layout.addWidget(self.tx_preview_view, 1)
+        self.tx_preview_progress = QProgressBar(); self.tx_preview_progress.setRange(0, 1000)
+        self.tx_preview_progress.setAccessibleName('Outgoing transmission progress')
+        layout.addWidget(self.tx_preview_progress)
+        self.tx_preview_detail = QLabel(); self.tx_preview_detail.setWordWrap(True)
+        layout.addWidget(self.tx_preview_detail)
+        notice = QLabel('LOCAL SEND PROGRESS · remote reception unconfirmed')
+        notice.setWordWrap(True); notice.setObjectName('supportingText'); layout.addWidget(notice)
+        return self.tx_preview_box
+
+    def _begin_transmit_preview(self, model, mode_label, stage):
+        if model is None:
+            return
+        self._active_tx_preview = model
+        self._tx_preview_last_update = -float('inf')
+        self._tx_preview_total_audio_samples = len(getattr(self, 'tx_bytes', b''))//2
+        card = model.report['card']
+        stage_label = {'cq': 'CQ', 'exchange': 'Exchange', 'report73': 'RR73 · report',
+                       'final73': '73 · final'}.get(stage, 'Card')
+        if stage == '73':
+            stage_label = 'RR73 · report' if getattr(self.tx_card, 'reception_report', None) else '73 · final'
+        self.tx_preview_identity.setText(
+            f"{card['callsign']} · {card.get('grid', '')} · Card {card['card_id']:04X} · {stage_label} · {mode_label}")
+        title = ('↑ SENDING TEST AUDIO · outgoing card' if isinstance(model, LocalTransmitPreview)
+                 and self.audio_test_mode.isChecked() else '↑ SENDING · outgoing card')
+        self.tx_preview_box.setTitle(title)
+        self.traffic_preview.setCurrentWidget(self.tx_preview_box)
+        self._render_transmit_preview(model.state(0) if isinstance(model, LocalTransmitPreview) else model.state())
+
+    def _render_transmit_preview(self, state):
+        report = {**state['report'], 'card': {**state['report']['card']}}
+        if state['coverage'] is not None:
+            report['card']['pixel_coverage'] = state['coverage']
+        image = self.card_image(report)
+        if image is not None:
+            if state.get('opacity', 1) < 1:
+                faded = QImage(image.size(), QImage.Format.Format_RGB32); faded.fill(QColor('#201c16'))
+                painter = QPainter(faded); painter.setOpacity(state['opacity']); painter.drawImage(0, 0, image); painter.end()
+                image = faded
+            size = QSize(max(194, self.tx_preview_view.width()), max(194, self.tx_preview_view.height()))
+            self.tx_preview_view.setPixmap(QPixmap.fromImage(image).scaled(size,
+                Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation))
+        self.tx_preview_view.setAccessibleName('Outgoing artwork · ' + state['phase'])
+        self.tx_preview_phase.setText(f"Copy {state['copy']} · {state['phase']}")
+        self.tx_preview_detail.setText(state['detail'])
+        percent = max(0, min(1000, round(state['progress']*1000)))
+        self.tx_preview_progress.setValue(percent)
+        label = 'host-confirmed frames' if isinstance(getattr(self, '_active_tx_preview', None), Data2GTransmitPreview) else 'audio playback'
+        self.tx_preview_progress.setFormat(f'{percent/10:.0f}% · {label}')
+
+    def _update_local_transmit_preview(self, *, force=False):
+        model = getattr(self, '_active_tx_preview', None)
+        if not isinstance(model, LocalTransmitPreview):
+            return
+        now = time.monotonic()
+        if not force and now-self._tx_preview_last_update < .1:
+            return
+        self._tx_preview_last_update = now
+        if self.test_link_enabled and self.audio_test_mode.isChecked():
+            samples = self.tx_offset//2
+        elif self.tx_audio is not None:
+            samples = min(self.tx_offset//2, round(self.tx_audio.processedUSecs()*modem.SAMPLE_RATE/1e6))
+        else:
+            samples = 0
+        state = model.state(samples)
+        if samples >= round(model.seconds*modem.SAMPLE_RATE) and self._tx_preview_total_audio_samples > samples:
+            state['phase'] = 'Sending CW identification'
+        state['progress'] = min(1, samples/max(1, self._tx_preview_total_audio_samples))
+        self._render_transmit_preview(state)
+
+    def _end_transmit_preview(self, completed=False):
+        if getattr(self, '_active_tx_preview', None) is None:
+            return
+        if completed:
+            self.tx_preview_progress.setValue(1000)
+            self.tx_preview_progress.setFormat('100% · local send complete')
+        self.tx_preview_phase.setText('Local send complete' if completed else 'Stopped · outgoing card')
+        self._active_tx_preview = None
+        self.traffic_preview.setCurrentWidget(self.receive_workspace)
+
     def _card_tx_audio(self, card, *, beacon=False):
         if self.selected_mode() == LEGACY_MODE_KEY:
             raise ValueError(
@@ -6966,6 +7090,7 @@ class MainWindow(QMainWindow):
         wire_type = {"report73": "73", "final73": "73"}.get(stage, stage)
         snr_db = self.tx_snr_db if stage in {"exchange", "report73"} else None
         backend = self.selected_backend()
+        self._prepared_tx_preview = None
         adapter = self.selected_adapter()
         if adapter.capabilities.kind is AdapterKind.FRAME_TRANSPORT:
             raise ValueError(
@@ -6974,13 +7099,19 @@ class MainWindow(QMainWindow):
         if backend is not None:
             if adapter.capabilities.kind is not AdapterKind.LOCAL_IMAGE_MODEM:
                 raise ValueError(f"Selected modem adapter {adapter.key!r} cannot encode local audio")
-            return adapter.encode(backend, card, self.repeat_count.value(), wire_type, snr_db,
-                                  interlaced=self.interlaced_copies.isChecked())
+            audio = adapter.encode(backend, card, self.repeat_count.value(), wire_type, snr_db,
+                                   interlaced=self.interlaced_copies.isChecked())
+            self._prepared_tx_preview = LocalTransmitPreview(card, self.selected_mode(), backend,
+                self.repeat_count.value(), wire_type, snr_db, len(audio))
+            return audio
         encode_legacy = getattr(adapter, "encode_legacy", None)
         if not callable(encode_legacy):
             raise ValueError(f"Selected modem adapter {adapter.key!r} does not support legacy packet encoding")
-        return encode_legacy(card, self.repeat_count.value(), wire_type, snr_db,
-                             self.selected_mode(), self.selected_profile(), beacon=beacon)
+        audio = encode_legacy(card, self.repeat_count.value(), wire_type, snr_db,
+                              self.selected_mode(), self.selected_profile(), beacon=beacon)
+        self._prepared_tx_preview = LocalTransmitPreview(card, self.selected_mode(), None,
+            self.repeat_count.value(), wire_type, snr_db, len(audio))
+        return audio
 
     def _append_cwid_audio(self, audio):
         """Append the configured CW ID to locally generated modem audio."""
@@ -7140,6 +7271,7 @@ class MainWindow(QMainWindow):
             if self.tx_timer.isActive(): self.tx_timer.stop()
             if self.tx_audio: self.tx_audio.stop()
             self.tx_audio = None; self.tx_device = None
+            self._end_transmit_preview(completed=False)
             self.stop_tx_btn.setEnabled(False)
             self.exchange_log.append("CAT disconnected during transmission. Audio stopped; verify the radio is unkeyed manually.")
         if connected: self.read_rig()
@@ -7283,7 +7415,7 @@ class MainWindow(QMainWindow):
         self.auto_receive_timer.stop()
         self._stop_local_receive_capture()
         self.card_assembly.begin_receive_window()
-        self.copy_capture_cache = self.copy_capture_cache.__class__()
+        self.copy_capture_cache = self.copy_capture_cache.next_window()
         self.rx_capture_sample_offset = 0
         self._clear_exact_live_preview()
         self._clear_rx_bytes()
@@ -7616,6 +7748,9 @@ class MainWindow(QMainWindow):
             self.data2g_tx_total = len(self.data2g_tx_frames)
             self.tx_card = card
             self.tx_message_type = wire_type
+            self.data2g_tx_waiting_frame = None
+            self._begin_transmit_preview(Data2GTransmitPreview(card, len(frames), self.data2g_tx_total),
+                                         backend.mode_name, message_type)
             if wire_type == "cq":
                 self.last_cq_snapshot = self._local_card_snapshot(card, wire_type, snr_db)
             elif not beacon:
@@ -7662,6 +7797,11 @@ class MainWindow(QMainWindow):
         try:
             DATA2G_ADAPTER.submit_frame(self.data2g_session, tag, frame)
             self.data2g_tx_waiting = tag
+            self.data2g_tx_waiting_frame = frame
+            if isinstance(getattr(self, '_active_tx_preview', None), Data2GTransmitPreview):
+                self._active_tx_preview.phase = ('Channel busy · waiting for host transmission'
+                                                if self.data2g_channel_busy else 'Waiting for host transmission')
+                self._render_transmit_preview(self._active_tx_preview.state())
             if self.on_air:
                 self.on_air.emit("host_tx_frame_queued", {
                     "port": DATA2G_ADAPTER.group_port(self.data2g_session), "tag": tag.hex(),
@@ -7684,6 +7824,12 @@ class MainWindow(QMainWindow):
                 self.data2g_tx_waiting is None or tag != self.data2g_tx_waiting):
             return
         self.data2g_ack_timer.stop()
+        model = getattr(self, '_active_tx_preview', None)
+        frame = getattr(self, 'data2g_tx_waiting_frame', None)
+        if isinstance(model, Data2GTransmitPreview) and frame is not None:
+            model.acknowledge(frame)
+            self._render_transmit_preview(model.state())
+        self.data2g_tx_waiting_frame = None
         self.data2g_tx_waiting = None
         self.data2g_tx_sent += 1
         if self.on_air:
@@ -7700,6 +7846,8 @@ class MainWindow(QMainWindow):
                 transmission_complete=True)
 
     def _finish_data2g_transmission(self, message, *, transmission_complete=False):
+        self._end_transmit_preview(completed=transmission_complete)
+        self.data2g_tx_waiting_frame = None
         self.data2g_ack_timer.stop()
         sent_count = self.data2g_tx_sent
         total_count = self.data2g_tx_total
@@ -8042,6 +8190,7 @@ class MainWindow(QMainWindow):
             self._update_active_send_control(True)
             self._refresh_operate_primary_action()
             self.tx_timer.start()
+            self._begin_transmit_preview(getattr(self, '_prepared_tx_preview', None), self.selected_mode(), self.tx_message_type)
             self._record_on_air_tx()
             self.exchange_log.append(f"TX started: {self.tx_label}, local software audio link, {len(self.tx_bytes)//2} samples. CAT/PTT bypassed.")
             return
@@ -8067,6 +8216,7 @@ class MainWindow(QMainWindow):
         self._update_active_send_control(True)
         self._refresh_operate_primary_action()
         self.tx_timer.start()
+        self._begin_transmit_preview(getattr(self, '_prepared_tx_preview', None), self.selected_mode(), self.tx_message_type)
         self._record_on_air_tx()
         self.stop_tx_btn.setText(
             "Stop audio" if self.audio_test_mode.isChecked() else "Stop transmission")
@@ -8074,6 +8224,7 @@ class MainWindow(QMainWindow):
                                  ("Audio-only test; PTT disabled." if self.audio_test_mode.isChecked() else "PTT asserted."))
 
     def _pump_tx(self):
+        self._update_local_transmit_preview()
         if self.test_link_enabled and self.audio_test_mode.isChecked() and self.test_tx_socket is not None:
             if time.monotonic() - self.tx_started > self.tx_deadline:
                 self._finish_tx("Transmit timed out; stopping local audio."); return
@@ -8088,6 +8239,7 @@ class MainWindow(QMainWindow):
                     self._finish_tx("Local audio link failed."); return
                 self.test_tx_sequence += 1
                 self.tx_offset += count
+                self._update_local_transmit_preview()
             elif time.monotonic() - self.tx_started >= len(self.tx_bytes) / (2 * modem.SAMPLE_RATE):
                 self.test_tx_socket.writeDatagram(
                     self.test_tx_sequence.to_bytes(4, "big") + b"EOF!",
@@ -8108,6 +8260,8 @@ class MainWindow(QMainWindow):
             self._finish_tx("Transmit complete; releasing PTT.")
 
     def _finish_tx(self, message):
+        self._update_local_transmit_preview(force=True)
+        self._end_transmit_preview(completed=message in {'Transmit complete; releasing PTT.', 'Audio playback complete.'})
         if self.on_air and self.on_air_tx_id:
             self.on_air.emit("tx_end", {"tx_event_id": self.on_air_tx_id, "message": message,
                                        "submitted_samples": self.tx_offset // 2})
@@ -8295,6 +8449,7 @@ class MainWindow(QMainWindow):
         try:
             self.update_identity()
             card = self._chosen_card()
+            self._remember_tx_card(card)
             audio = self._append_cwid_audio(self._card_tx_audio(card, beacon=True))
             self.tx_bytes = pcm16_audio_bytes(audio)
             self.tx_offset = 0
@@ -8537,7 +8692,7 @@ class MainWindow(QMainWindow):
             self.test_rx_expected = None
             self.test_rx_pending = {}
         self.card_assembly.begin_receive_window()
-        self.copy_capture_cache = self.copy_capture_cache.__class__()
+        self.copy_capture_cache = self.copy_capture_cache.next_window()
         self.rx_capture_sample_offset = 0
         self._clear_exact_live_preview()
         self._clear_rx_bytes()
@@ -9214,7 +9369,7 @@ class MainWindow(QMainWindow):
         self.live_decode_samples = 0
         self.live_decode_final = False
         self.card_assembly.begin_receive_window()
-        self.copy_capture_cache = self.copy_capture_cache.__class__()
+        self.copy_capture_cache = self.copy_capture_cache.next_window()
         self.rx_capture_sample_offset = 0
         if not preserve_preview:
             self._clear_exact_live_preview()
@@ -9274,13 +9429,16 @@ class MainWindow(QMainWindow):
 
     def _append_qso_card(self, bucket, card_data):
         if self.active_qso_log is None: self._begin_qso_log()
+        if bucket == 'received_cards':
+            card_data = copy.deepcopy(card_data)
         new_card = card_data.get("card") or {}
         attempts_key = "transmission_attempts" if bucket == "sent_cards" else "receive_attempts"
         duplicate = next((item for item in self.active_qso_log[bucket]
                           if (item.get("card") or {}).get("card_id") == new_card.get("card_id")
                           and (item.get("card") or {}).get("callsign") == new_card.get("callsign")
                           and (item.get("card") or {}).get("message_type", "card") == new_card.get("message_type", "card")
-                          and (item.get("card") or {}).get("snr_db") == new_card.get("snr_db")
+                          and (bucket == 'received_cards' or (item.get("card") or {}).get("snr_db") == new_card.get("snr_db"))
+                          and (bucket != 'received_cards' or same_received_card(item, card_data))
                           and bool(item.get("duplicate_receipt")) == bool(card_data.get("duplicate_receipt"))
                           and new_card.get("card_id") is not None), None)
         if duplicate is not None:

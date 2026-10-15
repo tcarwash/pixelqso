@@ -81,8 +81,9 @@ EXPERIMENTAL_MODE_DESCRIPTIONS = {
         "pilot timing and whole-card CRC32. Fixed tones 450–2550 Hz; new experimental wire format.",
     "experimental_8fsk_musical_25": "Experimental musical 8-FSK at 25 baud. The eight palette indices map directly "
         "to the E-major scale E4–E5 (330, 370, 415, 440, 494, 554, 622, 659 Hz), so each image pixel selects a note "
-        "lasting about 40 ms. Raw pixel tones make the image audible as a note pattern; pixel data has no FEC or "
-        "whole-card checksum, so incomplete or corrupted pixels are not promoted as verified.",
+        "lasting about 40 ms. Raw pixel tones make the image audible as a note pattern. An optional protected "
+        "sidecar carries per-block CRC16 checks so receivers can keep good blocks across passes; the normal "
+        "whole-card identity remains the final verification gate. The raster itself has no FEC.",
     **{key: "8-tone FSK with shortened Reed–Solomon RS(63,61), bounded soft-decision "
        "Chase recovery, and per-block CRC16. Provisional pixels appear before block verification."
        for key in ("resilient_100", "resilient_50", "resilient_25", "fast_avatar_fec")},
@@ -511,9 +512,11 @@ def _with_copy_header(cls):
                               copy_decoder=(lambda xs, rate: self.decode_payload_copies(xs, rate))
                               if hasattr(self, 'decode_payload_copies') else None)
     def estimate(self, card, repeats):
-        from modem_envelope import HEADER_SECONDS, metadata_header_count
+        from modem_envelope import HEADER_SECONDS, metadata_header_count, block_crc_header_count
         repeat_waveform(np.empty(0), repeats)
-        return repeats * (estimate_payload(self, card, 1) + (2+metadata_header_count(card))*HEADER_SECONDS)
+        return (repeats * (estimate_payload(self, card, 1) +
+                           (2+metadata_header_count(card, self.key))*HEADER_SECONDS) +
+                block_crc_header_count(card, self.key)*HEADER_SECONDS)
     cls.encode, cls.decode, cls.estimate_seconds = encode, decode, estimate
     cls.decode_payload = decode_payload
     return cls
@@ -548,7 +551,7 @@ class GroupedFSKBackend:
         from modem_envelope import HEADER_SECONDS, metadata_header_count
         repeat_waveform(np.empty(0), repeats)
         weak.packet(card)
-        return (1+metadata_header_count(card))*HEADER_SECONDS + repeats * burst.seconds(GROUPED_MODES[self.key])
+        return (1+metadata_header_count(card, self.key))*HEADER_SECONDS + repeats * burst.seconds(GROUPED_MODES[self.key])
 
     def minimum_audio_seconds(self):
         from modem_envelope import HEADER_SECONDS

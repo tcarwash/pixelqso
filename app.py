@@ -869,6 +869,7 @@ class CardCanvas(QWidget):
         self.keyboard_stroke_changed = False
         self.keyboard_count = ""
         self.keyboard_g_pending = False
+        self.keyboard_command = None
         self.undo_stack = []
         self.redo_stack = []
         self.base_pixels = list(card.pixels)
@@ -904,7 +905,8 @@ class CardCanvas(QWidget):
             f"Keyboard cursor at column {x + 1}, row {y + 1}; selected palette color "
             f"{self.color_index + 1}. Tab to focus, use arrows or hjkl to move. Hold "
             "Space or i while moving to draw a stroke; Escape cancels i mode. Number "
-            "counts repeat movement; 0/$ jump to row ends, gg/G to column ends. "
+            "counts repeat movement; 0/A jump to row start, $/a to row end, gg/G to "
+            "column ends. :wq saves and closes; :q closes with the usual unsaved-change prompt. "
             "n/N cycles colors forward/backward, "
             "f fills the selection or connected region, u undoes, U redoes, and x deletes "
             "the pixel under the cursor. Enter applies "
@@ -1045,6 +1047,27 @@ class CardCanvas(QWidget):
 
     def keyPressEvent(self, event):
         key_text = event.text().lower()
+        if self.keyboard_command is not None:
+            if event.key() == Qt.Key.Key_Escape:
+                self.keyboard_command = None
+            elif event.key() == Qt.Key.Key_Backspace:
+                self.keyboard_command = self.keyboard_command[:-1]
+            elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                command = self.keyboard_command
+                self.keyboard_command = None
+                owner = self.window().parent()
+                if command == "wq" and hasattr(owner, "save_and_close_editor"):
+                    owner.save_and_close_editor()
+                elif command == "q" and hasattr(self.window(), "reject"):
+                    self.window().reject()
+            elif event.text() and event.text().isprintable():
+                self.keyboard_command += event.text()
+            event.accept(); return
+        if event.text() == ":" and not (event.modifiers() & (Qt.KeyboardModifier.ControlModifier |
+                                                                  Qt.KeyboardModifier.AltModifier |
+                                                                  Qt.KeyboardModifier.MetaModifier)):
+            self.keyboard_command = ""
+            event.accept(); return
         if key_text == "u" and not (event.modifiers() & (Qt.KeyboardModifier.ControlModifier |
                                                            Qt.KeyboardModifier.AltModifier |
                                                            Qt.KeyboardModifier.MetaModifier)):
@@ -1111,9 +1134,10 @@ class CardCanvas(QWidget):
             self._move_keyboard_steps(dx, dy, count)
             event.accept()
             return
-        if key_text in ("0", "$", "g") or event.key() == Qt.Key.Key_G:
+        if key_text in ("0", "$", "a", "g") or event.key() == Qt.Key.Key_G:
             count = self._take_keyboard_count()
-            destination_x = 0 if key_text == "0" else self.card.width - 1 if key_text == "$" else self.keyboard_cursor[0]
+            destination_x = (0 if key_text == "0" or event.text() == "A" else
+                             self.card.width - 1 if key_text in ("$", "a") else self.keyboard_cursor[0])
             destination_y = self.card.height - 1 if event.key() == Qt.Key.Key_G else self.keyboard_cursor[1]
             self._move_keyboard_steps(destination_x-self.keyboard_cursor[0], destination_y-self.keyboard_cursor[1], count or 1)
             event.accept(); return
@@ -3507,7 +3531,9 @@ class MainWindow(QMainWindow):
             "rectangular selection, y copies it, d deletes it (or the pixel under the cursor), "
             "and p places an image from the clipboard at the cursor. Uppercase HJKL nudges "
             "a selection. f fills a selection or the connected region under the cursor. "
-            "0/$ jump to row ends, gg/G to column ends, and a number repeats movement. "
+            "0/A jump to row start, $/a to row end, gg/G to column ends, and a number "
+            "repeats movement. Type :wq then Enter to save and close, or :q then Enter "
+            "to close with the usual unsaved-change prompt. "
             "Hold Space or press i to draw while moving; Escape cancels i mode. "
             "n/N cycles colors forward/backward, u undoes, U redoes, x deletes the pixel, "
             "and Enter applies "

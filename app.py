@@ -1034,6 +1034,45 @@ class CardCanvas(QWidget):
             p.drawRect(cursor_rect.adjusted(2, 2, -2, -2))
 
     def keyPressEvent(self, event):
+        key_text = event.text().lower()
+        vim_directions = {"h": (-1, 0), "j": (0, 1), "k": (0, -1), "l": (1, 0)}
+        if event.text() in ("H", "J", "K", "L") and not self.selection_rect.isNull():
+            dx, dy = vim_directions[key_text]
+            self.move_selection(dx, dy)
+            event.accept(); return
+        if key_text in vim_directions:
+            dx, dy = vim_directions[key_text]
+            self._move_keyboard_cursor(dx, dy)
+            event.accept()
+            return
+        if key_text == "v":
+            if self.selection_origin is None:
+                x, y = self.keyboard_cursor
+                self.selection_origin = (x, y)
+                self.selection_rect = QRect(x, y, 1, 1)
+            else:
+                self.selection_origin = None
+            self.changed.emit(); self.update(); event.accept(); return
+        if key_text == "y" and not self.selection_rect.isNull():
+            self.copy_selection_to_clipboard()
+            event.accept(); return
+        if key_text == "d":
+            self.delete_selection_or_pixel()
+            event.accept(); return
+        if key_text == "p":
+            image = QApplication.clipboard().image()
+            if not image.isNull():
+                if image.width() > self.card.width or image.height() > self.card.height:
+                    image = image.scaled(self.card.width, self.card.height,
+                                         Qt.AspectRatioMode.KeepAspectRatio,
+                                         Qt.TransformationMode.FastTransformation)
+                self.add_stamp(image)
+                layer = self.stamp_layers[self.selected_layer]
+                x, y = self.keyboard_cursor
+                layer["x"] = min(x, self.card.width-layer["width"])
+                layer["y"] = min(y, self.card.height-layer["height"])
+                self._render_layers()
+            event.accept(); return
         directions = {
             Qt.Key.Key_Left: (-1, 0), Qt.Key.Key_Right: (1, 0),
             Qt.Key.Key_Up: (0, -1), Qt.Key.Key_Down: (0, 1),
@@ -1052,15 +1091,7 @@ class CardCanvas(QWidget):
                 self.update_accessible_description()
                 event.accept()
                 return
-            x, y = self.keyboard_cursor
-            self.keyboard_cursor = (min(max(0, x + dx), self.card.width - 1),
-                                    min(max(0, y + dy), self.card.height - 1))
-            if self.tool == "select" and self.selection_origin is not None:
-                ax, ay = self.selection_origin; bx, by = self.keyboard_cursor
-                self.selection_rect = QRect(min(ax, bx), min(ay, by), abs(ax-bx)+1, abs(ay-by)+1)
-                self.changed.emit()
-            self.update_accessible_description()
-            self.update()
+            self._move_keyboard_cursor(dx, dy)
             event.accept()
             return
         if event.key() == Qt.Key.Key_Escape and not self.selection_rect.isNull():
@@ -1120,6 +1151,57 @@ class CardCanvas(QWidget):
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def _move_keyboard_cursor(self, dx, dy):
+        x, y = self.keyboard_cursor
+        self.keyboard_cursor = (min(max(0, x + dx), self.card.width - 1),
+                                min(max(0, y + dy), self.card.height - 1))
+        if self.selection_origin is not None:
+            ax, ay = self.selection_origin; bx, by = self.keyboard_cursor
+            self.selection_rect = QRect(min(ax, bx), min(ay, by), abs(ax-bx)+1, abs(ay-by)+1)
+            self.changed.emit()
+        self.update_accessible_description()
+        self.update()
+
+    def copy_selection_to_clipboard(self):
+        rect = self.selection_rect.intersected(QRect(0, 0, self.card.width, self.card.height))
+        if rect.isEmpty():
+            return
+        image = QImage(rect.width(), rect.height(), QImage.Format.Format_ARGB32)
+        for y in range(rect.height()):
+            for x in range(rect.width()):
+                value = self.card.pixels[(rect.y()+y)*self.card.width+rect.x()+x]
+                image.setPixelColor(x, y, QColor(*(channel*17 for channel in self.card.palette[value])))
+        QApplication.clipboard().setImage(image)
+
+    def move_selection(self, dx, dy):
+        index = self.lift_selection()
+        if index is None:
+            return
+        layer = self.stamp_layers[index]
+        x = min(max(0, layer["x"] + dx), self.card.width-layer["width"])
+        y = min(max(0, layer["y"] + dy), self.card.height-layer["height"])
+        if (x, y) != (layer["x"], layer["y"]):
+            self.remember_edit()
+            layer["x"], layer["y"] = x, y
+            self.keyboard_cursor = (x, y)
+            self._render_layers()
+
+    def delete_selection_or_pixel(self):
+        rect = self.selection_rect.intersected(QRect(0, 0, self.card.width, self.card.height))
+        if rect.isEmpty():
+            x, y = self.keyboard_cursor
+            rect = QRect(x, y, 1, 1)
+        self.remember_edit()
+        for y in range(rect.top(), rect.bottom()+1):
+            for x in range(rect.left(), rect.right()+1):
+                self.base_pixels[y*self.card.width+x] = 0
+                for layer in self.stamp_layers:
+                    sx, sy = x-layer["x"], y-layer["y"]
+                    if 0 <= sx < layer["width"] and 0 <= sy < layer["height"]:
+                        layer["pixels"][sy*layer["width"]+sx] = None
+        self.selection_rect = QRect(); self.selection_handle = QRect(); self.selection_origin = None
+        self._render_layers()
 
     def focusInEvent(self, event):
         super().focusInEvent(event)
@@ -3276,7 +3358,10 @@ class MainWindow(QMainWindow):
         drawing.addLayout(tools)
         self.canvas = CardCanvas(self.card)
         self.canvas.setToolTip(
-            "Keyboard: focus the canvas; arrows move the cursor and Space/Enter applies "
+            "Keyboard: focus the canvas; arrows or hjkl move the cursor; v starts/ends a "
+            "rectangular selection, y copies it, d deletes it (or the pixel under the cursor), "
+            "and p places an image from the clipboard at the cursor. Uppercase HJKL nudges "
+            "a selection. Space/Enter applies "
             "Draw, Erase, Fill, or Pick. In Move stamp mode, Space/Enter selects a stamp, "
             "arrows move it, and Escape deselects. Mouse: drag stamps; hover a placed "
             "stamp to reveal its resize and remove controls.")

@@ -1153,7 +1153,7 @@ class CardCanvas(QWidget):
             self.copy_selection_to_clipboard()
             event.accept(); return
         if key_text == "d":
-            self.delete_selection_or_pixel()
+            self.delete_selection_or_pixel(copy_to_clipboard=True)
             event.accept(); return
         if key_text == "p":
             image = QApplication.clipboard().image()
@@ -1356,11 +1356,18 @@ class CardCanvas(QWidget):
             self.keyboard_cursor = (x, y)
             self._render_layers()
 
-    def delete_selection_or_pixel(self):
+    def delete_selection_or_pixel(self, copy_to_clipboard=False):
         rect = self.selection_rect.intersected(QRect(0, 0, self.card.width, self.card.height))
         if rect.isEmpty():
             x, y = self.keyboard_cursor
             rect = QRect(x, y, 1, 1)
+        if copy_to_clipboard:
+            image = QImage(rect.width(), rect.height(), QImage.Format.Format_ARGB32)
+            for y in range(rect.height()):
+                for x in range(rect.width()):
+                    value = self.card.pixels[(rect.y()+y)*self.card.width+rect.x()+x]
+                    image.setPixelColor(x, y, QColor(*(channel*17 for channel in self.card.palette[value])))
+            QApplication.clipboard().setImage(image)
         self.remember_edit()
         for y in range(rect.top(), rect.bottom()+1):
             for x in range(rect.left(), rect.right()+1):

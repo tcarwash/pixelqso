@@ -23,7 +23,7 @@ for _thread_env in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"
     os.environ[_thread_env] = os.environ.get("PIXELQSO_DSP_THREADS", "1")
 
 import numpy as np
-from PySide6.QtCore import Qt, QRect, QSize, QObject, QTimer, QRunnable, QThreadPool, Signal, QStandardPaths, QMimeData, QPoint, QUrl, QSortFilterProxyModel, QBuffer, QByteArray, QIODevice, QSettings, QSignalBlocker
+from PySide6.QtCore import Qt, QRect, QSize, QObject, QTimer, QEvent, QRunnable, QThreadPool, Signal, QStandardPaths, QMimeData, QPoint, QUrl, QSortFilterProxyModel, QBuffer, QByteArray, QIODevice, QSettings, QSignalBlocker
 from PySide6.QtGui import QAction, QColor, QPainter, QPen, QImage, QPixmap, QFont, QIcon, QKeySequence, QShortcut, QDrag, QStandardItem, QStandardItemModel
 from PySide6.QtNetwork import QTcpSocket, QUdpSocket, QHostAddress
 from PySide6.QtMultimedia import QAudio, QAudioDevice, QAudioFormat, QAudioSink, QAudioSource, QMediaDevices
@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QListWidget
     QFormLayout, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QInputDialog,
     QMessageBox, QPushButton, QSpinBox, QTabWidget, QTextEdit, QDialog,
     QVBoxLayout, QWidget, QButtonGroup, QScrollArea, QTableView, QAbstractItemView, QFrame, QCheckBox, QGroupBox,
-    QStackedWidget, QProgressBar, QMenu, QSizePolicy)
+    QStackedWidget, QProgressBar, QMenu, QSizePolicy, QSplitter)
 
 import cardmodem as modem
 from card_ids import allocate_card_id
@@ -1991,6 +1991,35 @@ class CanvasListenDialog(QDialog):
             self.play.setEnabled(True); self.stop_button.setEnabled(False)
 
 
+class ContentScrollArea(QScrollArea):
+    """Let splitters shrink vertically, but never crop a form's horizontal minimum."""
+    def _sync_content_width(self):
+        if self.widget() is not None:
+            width = (self.widget().minimumSizeHint().width() +
+                     self.verticalScrollBar().sizeHint().width() + 2*self.frameWidth())
+            if self.minimumWidth() != width:
+                self.setMinimumWidth(width)
+
+    def resizeEvent(self, event):
+        self._sync_content_width()
+        super().resizeEvent(event)
+
+    def event(self, event):
+        result = super().event(event)
+        if event.type() in (QEvent.Type.LayoutRequest, QEvent.Type.StyleChange,
+                            QEvent.Type.FontChange):
+            self._sync_content_width()
+        return result
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        if self.widget() is not None:
+            width = (self.widget().minimumSizeHint().width() +
+                     self.verticalScrollBar().sizeHint().width() + 2*self.frameWidth())
+            hint.setWidth(max(hint.width(), width))
+        return hint
+
+
 class EditorDialog(QDialog):
     def reject(self):
         if self.parent().confirm_editor_close():
@@ -2295,12 +2324,18 @@ class MainWindow(QMainWindow):
         self.passive_received_logs = {}
         self.qso_log_dir = DATA / "qso-log"
         root = QWidget(); layout = QVBoxLayout(root)
-        layout.setContentsMargins(SPACING["xl"], SPACING["lg"], SPACING["xl"], SPACING["lg"])
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(SPACING["lg"])
         self.tabs = QTabWidget()
         editor_content = self.make_card_tab()
         self.editor_dialog = EditorDialog(self)
-        editor_layout = QVBoxLayout(self.editor_dialog); editor_layout.addWidget(editor_content)
+        editor_layout = QVBoxLayout(self.editor_dialog)
+        editor_layout.setContentsMargins(24, 20, 24, 20); editor_layout.setSpacing(16)
+        studio_heading = QLabel("Make something worth sharing."); studio_heading.setObjectName("pageTitle")
+        studio_caption = QLabel("THE PIXEL STUDIO  ·  Draw, stamp, and bring your cards to life.")
+        studio_caption.setObjectName("supportingText")
+        editor_layout.addWidget(studio_heading); editor_layout.addWidget(studio_caption)
+        editor_layout.addWidget(editor_content, 1)
         self.animation_author.attach_shortcuts(self.editor_dialog)
         self.editor_done_button = QPushButton("Save and close"); self.editor_done_button.setObjectName("primaryAction")
         self.editor_done_button.clicked.connect(self.editor_primary_action); editor_layout.addWidget(self.editor_done_button)
@@ -2317,7 +2352,10 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.make_qso_log_tab(), "QSO Log")
         self.tabs.setTabText(0, "Operate")
         self.tabs.setTabText(2, "Contacts")
-        layout.addWidget(self.tabs)
+        self.tabs.tabBar().hide()
+        self.tabs.tabBar().setFixedHeight(0)
+        self.tabs.setObjectName("workspacePages")
+        layout.addWidget(self._make_desktop_shell(self.tabs))
         self.setCentralWidget(root)
         view_menu = self.menuBar().addMenu("View")
         self.advanced_controls_action = QAction("Advanced controls", self)
@@ -2347,6 +2385,97 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(0, self.connect_rig)
             QTimer.singleShot(250, self._ensure_session_receive)
             QTimer.singleShot(0, self._ensure_data2g_background_monitor)
+
+    def _configure_workspace_splitter(self, splitter, key, sizes):
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(10)
+        splitter.setAccessibleName(key.replace('_', ' ').title() + " columns")
+        splitter.setSizes(sizes)
+        saved = self.settings.value("ui/" + key + "/splitter")
+        if isinstance(saved, QByteArray):
+            splitter.restoreState(saved)
+        splitter.splitterMoved.connect(
+            lambda *_: self.settings.setValue("ui/" + key + "/splitter", splitter.saveState()))
+        for index in range(1, splitter.count()):
+            handle = splitter.handle(index)
+            handle.setToolTip("Drag to resize columns")
+            handle.setAccessibleName("Resize columns")
+
+    def _make_desktop_shell(self, pages):
+        """Navigation is presentation only; existing page and action owners stay intact."""
+        shell = QWidget(); shell_layout = QHBoxLayout(shell)
+        shell_layout.setContentsMargins(0, 0, 0, 0); shell_layout.setSpacing(0)
+        rail = QFrame(); rail.setObjectName("navigationRail"); rail.setFixedWidth(172)
+        rail_layout = QVBoxLayout(rail); rail_layout.setContentsMargins(18, 28, 18, 22)
+        rail_layout.setSpacing(12)
+        brand = QLabel("▦  pixelqso"); brand.setObjectName("brandName")
+        rail_layout.addWidget(brand)
+        tagline = QLabel("SMALL ART.\nREAL CONNECTIONS."); tagline.setObjectName("eyebrow")
+        rail_layout.addWidget(tagline); rail_layout.addSpacing(32)
+        self.workspace_navigation = QButtonGroup(self)
+        for index, label in enumerate(("Operate", "My Cards", "Contacts")):
+            button = QPushButton(label); button.setCheckable(True)
+            button.setObjectName("navigationItem"); button.setMinimumHeight(48)
+            button.setAccessibleName(f"Open {label}")
+            button.clicked.connect(lambda _checked=False, i=index: pages.setCurrentIndex(i))
+            self.workspace_navigation.addButton(button, index); rail_layout.addWidget(button)
+        rail_layout.addSpacing(12)
+        studio = QPushButton("＋  Create a card"); studio.setObjectName("studioShortcut")
+        studio.clicked.connect(self.create_library_card); rail_layout.addWidget(studio)
+        rail_layout.addStretch(1)
+        caption = QLabel("YOUR STATION\nYour art, on the air."); caption.setObjectName("railCaption")
+        rail_layout.addWidget(caption)
+        settings = QPushButton("Station settings"); settings.clicked.connect(self.open_station_settings)
+        rail_layout.addWidget(settings)
+        shell_layout.addWidget(rail)
+        body = QWidget(); body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(24, 22, 24, 18); body_layout.setSpacing(16)
+        header = QHBoxLayout()
+        words = QVBoxLayout(); words.setSpacing(4)
+        self.workspace_eyebrow = QLabel(); self.workspace_eyebrow.setObjectName("eyebrow")
+        self.workspace_title = QLabel(); self.workspace_title.setObjectName("workspaceTitle"); self.workspace_title.setWordWrap(True)
+        self.workspace_description = QLabel(); self.workspace_description.setObjectName("supportingText")
+        self.workspace_description.setWordWrap(True)
+        words.addWidget(self.workspace_eyebrow); words.addWidget(self.workspace_title)
+        words.addWidget(self.workspace_description); header.addLayout(words, 1)
+        body_layout.addLayout(header); body_layout.addWidget(pages, 1)
+        shell_layout.addWidget(body, 1)
+        def select_page(index):
+            copy = (("ON THE AIR", "A little art. A real connection.", "Choose a card, listen for a friend, and start an exchange."),
+                    ("YOUR COLLECTION", "A world in little squares.", "Create, collect, and find the next card you want to share."),
+                    ("YOUR CONTACTS", "Every card has a story.", "Revisit the people and artwork you have met on the air."))[index]
+            self.workspace_eyebrow.setText(copy[0]); self.workspace_title.setText(copy[1])
+            self.workspace_description.setText(copy[2]); self.workspace_navigation.button(index).setChecked(True)
+        pages.currentChanged.connect(select_page); select_page(pages.currentIndex())
+        return shell
+
+    def _refresh_send_workspace(self):
+        if not hasattr(self, "outgoing_art") or not hasattr(self, "stage_picker"):
+            return
+        stage = self._outgoing_message_type()
+        index = self.stage_picker.findData(stage)
+        with QSignalBlocker(self.stage_picker):
+            self.stage_picker.setCurrentIndex(index)
+        for name, row in self.stage_rows.items():
+            row.setVisible(True)
+        self.stage_picker.setEnabled(not self.auto_armed)
+        try:
+            card = self._chosen_card()
+            signature = (card.callsign, card.grid, card.width, card.height,
+                         tuple(card.palette), tuple(card.pixels))
+            if signature == getattr(self, "_outgoing_art_signature", None):
+                return
+            self._outgoing_art_signature = signature
+            image = QImage(card.width, card.height, QImage.Format.Format_RGB32)
+            for i, value in enumerate(card.pixels):
+                image.setPixelColor(i % card.width, i // card.width,
+                                   QColor(*(int(c)*17 for c in card.palette[value])))
+            self.outgoing_art.setPixmap(card_art(image, card.callsign or "Your card",
+                f"{card.width} × {card.height} · {len(card.palette)} colors", QSize(152, 190)))
+            self.outgoing_art.setAccessibleName(f"Selected outgoing card: {card.callsign or 'current drawing'}")
+        except (ValueError, OSError, KeyError, IndexError, TypeError):
+            self._outgoing_art_signature = None
+            self.outgoing_art.clear(); self.outgoing_art.setText("Choose a valid card to preview")
 
     def _show_about(self):
         QMessageBox.about(
@@ -2381,22 +2510,24 @@ class MainWindow(QMainWindow):
     def make_library_tab(self):
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(SPACING["lg"])
         heading = QHBoxLayout()
-        title = QLabel("Card library"); title.setObjectName("pageTitle")
+        title = QLabel("MY CARDS"); title.setObjectName("eyebrow")
         heading.addWidget(title, 1)
-        create = QPushButton("Create card"); create.clicked.connect(self.create_library_card); heading.addWidget(create)
+        create = QPushButton("＋ Create card"); create.setObjectName("primaryAction"); create.clicked.connect(self.create_library_card); heading.addWidget(create)
         self.create_library_button = create
         starter = QPushButton("Use starter card…"); starter.clicked.connect(self.open_starter_card_picker); heading.addWidget(starter)
         self.starter_library_button = starter
         open_button = QPushButton("Open selected"); open_button.clicked.connect(self._open_library_item); heading.addWidget(open_button)
         self.open_library_button = open_button
+        selection_actions = QHBoxLayout(); selection_actions.addStretch(1)
+        heading.removeWidget(open_button); selection_actions.addWidget(open_button)
         self.export_card_button = QPushButton("Export selected…")
         self.export_card_button.setEnabled(False)
         self.export_card_button.clicked.connect(self.export_selected_card)
-        heading.addWidget(self.export_card_button)
+        selection_actions.addWidget(self.export_card_button)
         self.copy_card_button = QPushButton("Copy PNG")
         self.copy_card_button.clicked.connect(self.copy_selected_card)
         self.copy_card_button.setEnabled(False)
-        heading.addWidget(self.copy_card_button)
+        selection_actions.addWidget(self.copy_card_button)
         more_menu = QMenu(self)
         duplicate = more_menu.addAction("Duplicate card")
         duplicate.triggered.connect(self.duplicate_library_card)
@@ -2407,9 +2538,10 @@ class MainWindow(QMainWindow):
         delete = more_menu.addAction("Delete card…")
         delete.triggered.connect(self.delete_library_card)
         more = QPushButton("More"); more.setMenu(more_menu); more.setToolTip("More card actions")
-        heading.addWidget(more)
+        selection_actions.addWidget(more)
         self.more_card_button = more
         layout.addLayout(heading)
+        layout.addLayout(selection_actions)
         library_controls = QHBoxLayout()
         self.library_search = QLineEdit(); self.library_search.setPlaceholderText("Find a card…")
         self.library_search.setAccessibleName("Search cards by name or station")
@@ -2436,6 +2568,7 @@ class MainWindow(QMainWindow):
         self.library_list = QListWidget(); self.library_list.setViewMode(QListWidget.ViewMode.IconMode)
         self.library_list.setIconSize(QSize(190, 238)); self.library_list.setGridSize(QSize(218, 288))
         self.library_list.setMovement(QListWidget.Movement.Static); self.library_list.setSpacing(SPACING["lg"])
+        self.library_list.setObjectName("collectionGallery")
         self.library_list.setAccessibleName("Card library")
         self.library_list.setToolTip(
             "Use the arrow keys to browse cards; press Enter to open the selected card.")
@@ -2567,7 +2700,9 @@ class MainWindow(QMainWindow):
         selected = self.card_combo.currentData() if hasattr(self, "card_combo") else None
         stage_selected = {stage: combo.currentData() or self.settings.value("transfer/card_" + stage)
                           for stage, combo in getattr(self, "stage_card_combos", {}).items()}
-        for combo in getattr(self, "stage_card_combos", {}).values(): combo.clear()
+        stage_blockers = [QSignalBlocker(combo) for combo in self.stage_card_combos.values()]
+        for combo in getattr(self, "stage_card_combos", {}).values():
+            combo.clear(); combo.addItem("Current drawing", None)
         if hasattr(self, "card_combo"):
             self.card_combo.clear()
             self.card_combo.addItem("Current drawing", None)
@@ -2631,6 +2766,7 @@ class MainWindow(QMainWindow):
             if combo is not None and path:
                 index = combo.findData(path)
                 if index >= 0: combo.setCurrentIndex(index)
+        del stage_blockers
         self.filter_card_library()
         self._refresh_transfer_summary()
 
@@ -3523,15 +3659,21 @@ class MainWindow(QMainWindow):
 
     def make_card_tab(self):
         w = QWidget(); outer = QHBoxLayout(w)
-        drawing = QVBoxLayout(); outer.addLayout(drawing, 3)
-        tools = QHBoxLayout(); self.tool_buttons = {}
+        self.editor_splitter = QSplitter(Qt.Orientation.Horizontal)
+        outer.addWidget(self.editor_splitter)
+        drawing_widget = QWidget(); drawing = QVBoxLayout(drawing_widget)
+        drawing.setContentsMargins(0, 0, 12, 0)
+        self.editor_splitter.addWidget(drawing_widget)
+        tools = QGridLayout(); self.tool_buttons = {}
         self.tool_group = QButtonGroup(self); self.tool_group.setExclusive(True)
         for title, tool in (("Draw", "draw"), ("Erase", "erase"), ("Fill", "fill"), ("Pick", "pick"), ("Move stamp", "move"), ("Box select", "select")):
             button = QPushButton(title); button.setCheckable(True)
             button.setAccessibleName(f"{title} tool")
             button.setAccessibleDescription(CardCanvas.TOOL_HELP[tool])
             button.clicked.connect(lambda _checked=False, value=tool: self.set_editor_tool(value))
-            self.tool_group.addButton(button); self.tool_buttons[tool] = button; tools.addWidget(button)
+            self.tool_group.addButton(button); self.tool_buttons[tool] = button
+            index = len(self.tool_buttons) - 1
+            tools.addWidget(button, index // 3, index % 3)
         self.tool_buttons["draw"].setChecked(True)
         drawing.addLayout(tools)
         self.canvas = CardCanvas(self.card)
@@ -3567,10 +3709,12 @@ class MainWindow(QMainWindow):
             shortcut = QShortcut(QKeySequence(key), w); shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut); shortcut.activated.connect(callback)
 
         sidebar = QWidget(); side = QVBoxLayout(sidebar); side.setContentsMargins(4, 0, 4, 0)
-        sidebar_scroll = QScrollArea(); sidebar_scroll.setWidgetResizable(True); sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        sidebar_scroll.setWidget(sidebar); sidebar_scroll.setMinimumWidth(350); sidebar_scroll.setMaximumWidth(440)
-        outer.addWidget(sidebar_scroll, 2)
+        sidebar_scroll = ContentScrollArea(); sidebar_scroll.setWidgetResizable(True); sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        sidebar_scroll.setWidget(sidebar); sidebar_scroll.setMinimumWidth(400)
+        self.editor_splitter.addWidget(sidebar_scroll)
+        self.editor_splitter.setStretchFactor(0, 3); self.editor_splitter.setStretchFactor(1, 2)
+        self._configure_workspace_splitter(self.editor_splitter, "editor", [680, 380])
         form = QFormLayout()
         self.call = QLineEdit(self.card.callsign); self.grid = QLineEdit(self.card.grid)
         self.call.textChanged.connect(self._update_card_identity_hint)
@@ -3691,6 +3835,7 @@ class MainWindow(QMainWindow):
         self.call.textChanged.connect(self.animation_author.changed)
         self.grid.textChanged.connect(self.animation_author.changed)
         self.canvas.image_dropped.connect(self.place_stamp_image)
+        self.canvas.changed.connect(self._refresh_send_workspace)
         self.canvas.changed.connect(self._sync_editor_controls)
         self.canvas.changed.connect(self._update_editor_saved_state)
         self.canvas.placed_stamp_removed.connect(self._on_placed_stamp_removed)
@@ -4308,7 +4453,7 @@ class MainWindow(QMainWindow):
         self.station_identity.setAccessibleDescription("Current station callsign and grid square.")
         top.addWidget(self.station_identity)
         self._refresh_station_identity()
-        self.rig_status = QLabel("CAT disconnected")
+        self.rig_status = QLabel("CAT disconnected"); self.rig_status.setWordWrap(True)
         self.rig_status.setAccessibleDescription(
             "Reports the current CAT rig-control connection and radio readback state.")
         self.rig_status.setStyleSheet(
@@ -4542,7 +4687,7 @@ class MainWindow(QMainWindow):
         manual_card_layout.setContentsMargins(0, 0, 0, 0); manual_card_layout.addWidget(self.card_combo)
         mode_form.addRow("Card", self.manual_card_widget)
         self.manual_card_label = mode_form.labelForField(self.manual_card_widget)
-        self.auto_stage_group = QGroupBox("Contact cards")
+        self.auto_stage_group = QGroupBox("Your contact · four stages")
         # Use explicit horizontal rows for the send actions. QFormLayout treats
         # its first column as label content and can collapse widget labels
         # (notably QPushButtons) after the settings dialog rebuilds the app
@@ -4553,11 +4698,19 @@ class MainWindow(QMainWindow):
         self.stage_card_combos = {}
         self.stage_send_buttons = {}
         self.stage_select_buttons = {}
+        self.stage_rows = {}
+        self.stage_picker = QComboBox()
+        self.stage_picker.setAccessibleName("Outgoing message stage")
+        for key, label in (("cq", "CQ · start a contact"), ("exchange", "Exchange · share a card"), ("report73", "RR73 · reception report"), ("final73", "73 · final card")):
+            self.stage_picker.addItem(label, key)
+        self.stage_picker.setCurrentIndex(1)
+        self.stage_picker.currentIndexChanged.connect(lambda _index: self._select_manual_stage(self.stage_picker.currentData()))
+        self.stage_picker.hide()  # Kept as a synchronized selection model; stages stay visible.
         self.manual_stage_group = QButtonGroup(self); self.manual_stage_group.setExclusive(True)
         self.manual_stage_buttons = {}
-        for stage, title in (("cq", "CQ"), ("exchange", "Exchange"),
-                              ("report73", "RR73 · report"), ("final73", "73 · final")):
-            combo = QComboBox(); combo.setIconSize(QSize(48, 48))
+        for stage, title in (("cq", "CQ"), ("exchange", "response"),
+                              ("report73", "signal report"), ("final73", "73 goodbye")):
+            combo = QComboBox(); combo.setIconSize(QSize(24, 24))
             combo.currentIndexChanged.connect(self._save_auto_stage_cards)
             combo.currentIndexChanged.connect(
                 lambda _index, s=stage: self._select_manual_stage(s))
@@ -4583,11 +4736,16 @@ class MainWindow(QMainWindow):
             row = QHBoxLayout()
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(8)
-            button.setMinimumWidth(112)
-            row.addWidget(button)
+            button.setMinimumWidth(124)
+            select_button.setText(str(len(self.stage_send_buttons)))
+            select_button.setFixedWidth(28)
+            select_button.setObjectName("stageNumber")
             row.addWidget(select_button)
+            row.addWidget(button)
             row.addWidget(combo, 1)
-            auto_stage_layout.addLayout(row)
+            row_widget = QWidget(); row_widget.setLayout(row)
+            self.stage_rows[stage] = row_widget
+            auto_stage_layout.addWidget(row_widget)
         self.manual_stage_buttons["exchange"].setChecked(True)
         self.manual_stage_group.buttonToggled.connect(self._refresh_transfer_summary)
         self.role_widget = QWidget(); role_form = QFormLayout(self.role_widget); role_form.setContentsMargins(0, 0, 0, 0)
@@ -4598,8 +4756,10 @@ class MainWindow(QMainWindow):
         self.frequency.setToolTip("Read-only frequency reported by the connected radio.")
         f = QFormLayout(); f.addRow("Rig frequency", self.frequency)
         self.frequency_controls = QWidget(); self.frequency_controls.setLayout(f)
-        transfer_group = QGroupBox("Send a card")
-        transfer_form = QFormLayout(transfer_group); transfer_form.addRow("Send type", self.exchange_mode)
+        transfer_group = QGroupBox("Send details")
+        transfer_form = QFormLayout(transfer_group)
+        transfer_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        transfer_form.addRow("Send type", self.exchange_mode)
         self.advanced_exchange_label = transfer_form.labelForField(self.exchange_mode)
         transfer_form.addRow(mode_form)
         transfer_form.addRow(self.role_widget); transfer_form.addRow(self.auto_stage_group)
@@ -4630,10 +4790,10 @@ class MainWindow(QMainWindow):
         self.stop_tx_btn.setToolTip(self.stop_tx_btn.accessibleDescription())
         self.stop_tx_btn.setEnabled(False); self.stop_tx_btn.setVisible(False)
         self.stop_tx_btn.clicked.connect(self._stop_current_transmit)
-        # Stage buttons and Quick draw are the card send actions. Keep the
-        # central transmit control as an internal/API state object only.
-        self.tx_btn.setVisible(False)
-        tx_row = QHBoxLayout(); tx_row.addWidget(self.stop_tx_btn)
+        self.tx_btn.hide()
+        self.tx_btn.setMinimumHeight(46)
+        self.stop_tx_btn.setMinimumHeight(46)
+        tx_row = QVBoxLayout(); tx_row.addWidget(self.tx_btn); tx_row.addWidget(self.stop_tx_btn)
         self.manual_tx_controls = QWidget()
         manual_tx_layout = QVBoxLayout(self.manual_tx_controls)
         manual_tx_layout.setContentsMargins(0, 0, 0, 0)
@@ -4717,8 +4877,14 @@ class MainWindow(QMainWindow):
         receive_layout.addWidget(self.receive_status_hint, 1)
         receive_layout.addWidget(wav_button)
 
-        left_panel = QVBoxLayout(); left_panel.setContentsMargins(0, 0, 0, 0); left_panel.addWidget(transfer_group)
-        left = QWidget(); left.setLayout(left_panel); left.setMaximumWidth(410)
+        left_panel = QVBoxLayout(); left_panel.setContentsMargins(0, 0, 0, 0); left_panel.setSpacing(12)
+        self.outgoing_art = QLabel(); self.outgoing_art.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.outgoing_art.setMinimumHeight(190)
+        outgoing_label = QLabel("YOUR OUTGOING CARD"); outgoing_label.setObjectName("eyebrow")
+        left_panel.addWidget(outgoing_label); left_panel.addWidget(self.outgoing_art)
+        choose = QPushButton("Browse collection"); choose.clicked.connect(lambda: self.tabs.setCurrentIndex(1))
+        left_panel.addWidget(choose); left_panel.addWidget(transfer_group)
+        left = QWidget(); left.setLayout(left_panel)
 
         right_panel = QVBoxLayout()
         self.traffic_preview = QStackedWidget()
@@ -4728,7 +4894,8 @@ class MainWindow(QMainWindow):
         self.traffic_preview.addWidget(self.receive_workspace)
         right_panel.addWidget(self.traffic_preview, 1)
         view_heading = QHBoxLayout()
-        view_heading.addWidget(QLabel("Cards heard this session"), 1)
+        session_title = QLabel("The receiving room"); session_title.setObjectName("sectionTitle")
+        view_heading.addWidget(session_title, 1)
         self.listen_indicator = QLabel("● STARTING")
         self.listen_indicator.setAccessibleDescription("Current receiver activity state.")
         self.listen_indicator.setStyleSheet(status_label_style("muted"))
@@ -4757,7 +4924,12 @@ class MainWindow(QMainWindow):
         wall_layout = QHBoxLayout(self.session_wall_page); wall_layout.setContentsMargins(0, 0, 0, 0); wall_layout.setSpacing(SPACING["sm"])
         wall_list_panel = QWidget()
         wall_list_layout = QVBoxLayout(wall_list_panel); wall_list_layout.setContentsMargins(0, 0, 0, 0)
-        self.session_wall_empty = QLabel("Your session wall is empty.\nReceived cards appear here while they are still provisional and after verification.")
+        self.session_wall_empty = QLabel(
+            '<div style="font-size:54px; color:#bda5f8">▦</div><br>'
+            '<div style="font-size:24px; font-weight:600; color:#f5f1e9">A space for your next connection.</div><br>'
+            '<div>Cards will appear here as they arrive.<br>'
+            'Partial cards stay marked provisional until verified.</div>')
+        self.session_wall_empty.setWordWrap(True)
         self.session_wall_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.session_wall_empty.setObjectName("receiverEmpty")
         self.session_wall_empty.setAccessibleName("No cards received this session yet")
@@ -4880,16 +5052,34 @@ class MainWindow(QMainWindow):
         self.exchange_log = QTextEdit(); self.exchange_log.setReadOnly(True); self.exchange_log.setPlaceholderText("Exchange activity")
         self.exchange_log.setMinimumHeight(64); self.exchange_log.setMaximumHeight(140)
         self.exchange_log.document().setMaximumBlockCount(2000)
+        activity_toggle = QPushButton("Show exchange activity"); activity_toggle.setCheckable(True)
+        activity_toggle.setObjectName("activityDisclosure")
+        activity_toggle.toggled.connect(self.exchange_log.setVisible)
+        activity_toggle.toggled.connect(lambda expanded: activity_toggle.setText("Hide exchange activity" if expanded else "Show exchange activity"))
+        right_panel.addWidget(activity_toggle); self.exchange_log.hide()
         right_panel.addWidget(self.exchange_log)
         right = QWidget(); right.setLayout(right_panel)
         left_scroll = QScrollArea(); left_scroll.setWidgetResizable(True); left_scroll.setWidget(left)
-        left_scroll.setFrameShape(QFrame.Shape.NoFrame); left_scroll.setMinimumWidth(400); left_scroll.setMaximumWidth(440)
-        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll.setFrameShape(QFrame.Shape.NoFrame); left_scroll.setMinimumWidth(300)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        sender = QWidget(); sender.setObjectName("senderWorkspace")
+        sender_layout = QVBoxLayout(sender); sender_layout.setContentsMargins(12, 12, 12, 12)
+        sender_layout.addWidget(left_scroll, 1)
+        transfer_form.removeWidget(self.auto_stage_group)
+        sender_layout.addWidget(self.auto_stage_group)
         for controls in (self.manual_tx_controls, self.auto_controls, self.cq_controls, self.beacon_controls):
-            transfer_form.removeWidget(controls); left_panel.addWidget(controls)
+            transfer_form.removeWidget(controls); sender_layout.addWidget(controls)
         left_panel.addStretch(1)
-        content = QHBoxLayout(); content.addWidget(left_scroll); content.addWidget(right, 1)
-        root.addLayout(content, 1)
+        self.operate_splitter = QSplitter(Qt.Orientation.Horizontal)
+        sender.setMinimumWidth(370); right.setMinimumWidth(300)
+        receive_scroll = ContentScrollArea(); receive_scroll.setWidgetResizable(True)
+        receive_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        receive_scroll.setWidget(right)
+        receive_scroll.setMinimumWidth(320)
+        self.operate_splitter.addWidget(sender); self.operate_splitter.addWidget(receive_scroll)
+        self.operate_splitter.setStretchFactor(0, 0); self.operate_splitter.setStretchFactor(1, 1)
+        self._configure_workspace_splitter(self.operate_splitter, "operate", [390, 740])
+        root.addWidget(self.operate_splitter, 1)
         self.combine = QLineEdit(str(DATA / f"receive-session-v{modem.VERSION}.json")); self.combine.setVisible(False)
         self._update_exchange_controls()
         self.audio_test_mode_changed(self.audio_test_mode.isChecked())
@@ -6706,8 +6896,7 @@ class MainWindow(QMainWindow):
                            self.backend_combo.currentData() == "data2g")
         local_audio_test = self.audio_test_mode.isChecked() and not data2g_selected
         self.tx_btn.setVisible(False)
-        if not getattr(self, "_active_send_control", None):
-            self.stop_tx_btn.setVisible(False)
+        self.stop_tx_btn.setVisible(self.stop_tx_btn.isEnabled())
         self.cq_controls.setVisible(not beacon and not (automatic and self.auto_armed))
         self._refresh_contact_stage_indicator()
         host_mode = (self.selected_adapter().capabilities.kind is
@@ -7161,6 +7350,7 @@ class MainWindow(QMainWindow):
             return
         button.setChecked(True)
         self._refresh_transfer_summary()
+        self._update_send_button_label()
 
     def _auto_stage_card_combo(self):
         stage = self._outgoing_message_type()
@@ -7210,7 +7400,7 @@ class MainWindow(QMainWindow):
         if control is None:
             return
         if hasattr(self, "stop_tx_btn"):
-            self.stop_tx_btn.setVisible(not transmitting and self.stop_tx_btn.isEnabled())
+            self.stop_tx_btn.setVisible(transmitting and self.stop_tx_btn.isEnabled())
         control.setText("Stop TX" if transmitting else
                         ("Send quick draw" if control is self.quick_draw_send_button else
                          f"Send {control.property('stage_title')}"))
@@ -7406,6 +7596,7 @@ class MainWindow(QMainWindow):
     def _refresh_transfer_summary(self, *_):
         if not hasattr(self, "transfer_summary"):
             return
+        self._refresh_send_workspace()
         def set_summary(text, data2g=False):
             if data2g and self.data2g_ptt_failed:
                 text += " · PTT fault pending: verify radio is unkeyed before transmitting"
@@ -7808,7 +7999,7 @@ class MainWindow(QMainWindow):
                        if self.exchange_mode.currentIndex() == 1 else
                        self.stage_card_combos.get(self._outgoing_message_type()))
         selected_path = stage_combo.currentData() if stage_combo is not None else None
-        if not selected_path and hasattr(self, "card_combo"):
+        if stage_combo is None and hasattr(self, "card_combo"):
             selected_path = self.card_combo.currentData()
         if selected_path:
             data = json.loads(Path(selected_path).read_text())

@@ -203,3 +203,13 @@ committing to a navigation redesign. Keep the first change reversible and focuse
 This file describes the full design direction. The initial theme/shared-card pass is now
 implemented and rendered; the broader layout redesign remains proposed. See `../NEXT.md`
 for exact validation results and remaining work. The active PixelQSO app was not restarted.
+
+## Implemented workspace follow-up
+
+The navigation rail, Operate outgoing preview, collection hierarchy, editor studio header,
+activity disclosure, and persistent native splitters are implemented. The user explicitly
+retained the four-stage radio workflow: CQ → response → signal report → 73 goodbye.
+All four explicit send actions and their card assignments remain visible together. Numbered
+selectors and card choices never transmit. Stage actions and Stop remain outside the outgoing
+scroll area. Column minimum widths follow content, including larger interface text. Refer to
+`NEXT.md` for current evidence, exclusions, and remaining live validation.

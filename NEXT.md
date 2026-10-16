@@ -1,5 +1,30 @@
 # Next steps: Pixel QSO UI/UX
 
+## Desktop workspace redesign — 2026-10-16
+
+Implemented the broader PixelChat-inspired layout on `pixelchat-inspired-ui`:
+- Persistent branded navigation rail, page hierarchy, collection action grouping, and studio header.
+- Outgoing card preview and a dedicated receive workspace with an honest provisional/verified empty state.
+- All four stages stay visible together: Send CQ, Send response, Send signal report, Send 73 goodbye.
+  Each keeps its assigned card; numbered controls select/preview only. Card selection never sends.
+- Stage actions and Stop are docked outside the outgoing-details scroll area. The exchange log is
+  expandable. Native splitters resize Operate and editor columns and persist their widths.
+- Form minimum widths react to font/layout changes, and shorter windows scroll instead of cropping.
+- Library refresh blocks selection signals while rebuilding card choices. Explicit Current drawing
+  no longer falls through to a stale generic manual-card choice.
+
+Validation: 35 tests passed across workspace/transfer controls/animation/transmit preview before
+adding the final larger-text width check; the final 8-test column/workspace/editor-fit run passed,
+including saved splitter restoration, visibility of all four stage buttons, no transmit on selection,
+correct per-stage card dispatch, dedicated Stop visibility, and 115% text form fit. Three pre-existing
+excluded tests remain documented in the preceding checkpoint. Offscreen renders inspected at
+1440x1000 and compact ~1120x800; editor at 1200x900 and 115% interface text. Renders use isolated
+temporary settings and bundled starter artwork, not an active station. `git diff --check` passes.
+
+The active app was not restarted. Hardware/RF operation and packaged desktop execution remain
+unverified. No PR or remote publication performed. Mobile PixelChat completion continues separately
+in `/home/tyler/dev/pixelchat`; desktop four-stage radio workflow is intentionally retained here.
+
 ## PixelChat-inspired visual pass — 2026-10-16
 
 Branch: `pixelchat-inspired-ui`. Design handoff: `docs/PIXELCHAT-STYLE-GUIDE.md`.

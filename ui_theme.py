@@ -111,6 +111,25 @@ def build_app_stylesheet(text_scale=1.0):
     empty_title_size = max(1, round(22 * scale))
     progress_size = max(1, round(10 * scale))
     return f"""
+        QSplitter::handle {{ background: {c['border']}; border: 3px solid {c['window']}; border-radius: 4px; }}
+        QSplitter::handle:hover {{ background: {c['accent']}; }}
+        QFrame#navigationRail {{ background: {c['surface_tab']}; border-right: 1px solid {c['border']}; }}
+        QFrame#navigationRail QLabel {{ background: transparent; }}
+        QLabel#brandName {{ color: {c['text_bright']}; font-size: 22px; font-weight: 800; }}
+        QLabel#eyebrow {{ color: {c['text_muted']}; font-size: 11px; font-weight: 700; letter-spacing: 1px; }}
+        QLabel#railCaption {{ color: {c['text_muted']}; font-size: 11px; padding: 12px 0; }}
+        QLabel#workspaceTitle {{ color: {c['text_bright']}; font-size: {type_size['title']}px; font-weight: 750; }}
+        QPushButton#navigationItem {{ text-align: left; border: 0; background: transparent; padding: 12px; font-weight: 600; }}
+        QPushButton#navigationItem:hover {{ background: {c['surface_hover']}; }}
+        QPushButton#navigationItem:checked {{ background: {c['surface_tab_selected']}; color: {c['accent']}; }}
+        QPushButton#navigationItem:focus {{ border: 2px solid {c['focus_ring']}; }}
+        QPushButton#studioShortcut {{ color: {c['text_soft']}; text-align: left; padding: 12px 6px; background: transparent; border: 0; }}
+        QTabWidget#workspacePages::pane {{ border: 0; }}
+        QWidget#senderWorkspace {{ border: 1px solid {c['border']}; border-radius: 18px; }}
+        QListWidget#collectionGallery {{ background: {c['window']}; border: 0; padding: 4px; }}
+        QPushButton#stageNumber {{ padding: 8px 0; color: {c['text_soft']}; background: transparent; border: 0; }}
+        QPushButton#stageNumber:focus {{ border: 2px solid {c['focus_ring']}; }}
+        QPushButton#activityDisclosure {{ text-align: left; color: {c['text_muted']}; background: transparent; border: 0; }}
         QMainWindow, QWidget {{ background: {c['window']}; color: {c['text']}; }}
         QTabWidget::pane {{ border: 1px solid {c['border']}; border-radius: {r['panel']}px; top: -1px; }}
         QTabBar::tab {{ background: {c['surface_tab']}; color: {c['text_muted']}; padding: 12px 22px; margin-right: 6px; border-radius: {r['button']}px; }}

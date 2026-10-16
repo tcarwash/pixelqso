@@ -30,6 +30,17 @@ class CardTransferTests(unittest.TestCase):
         rx.feed("AG7SU", frames[0])
         self.assertEqual(len(rx.assemblies), 1)
 
+    def test_one_bit_monochrome_card_fragment_round_trip(self):
+        card = SimpleNamespace(card_id=72, width=4, height=2,
+                               palette=[(0, 0, 0), (15, 15, 15)],
+                               callsign="AG7SU", grid="CN85")
+        packed = bytes((0b10010011,))
+        assembly, metadata = CardTransferReceiver().feed(
+            "AG7SU", fragment(card, packed, 0, packed))
+        self.assertTrue(assembly.exact)
+        self.assertEqual(metadata["bits_per_pixel"], 1)
+        self.assertEqual(metadata["pixels"], [1, 0, 0, 1, 0, 0, 1, 1])
+
     def test_interleaved_images_and_senders_stay_separate(self):
         rx = CardTransferReceiver()
         other = bytes(reversed(self.packed))

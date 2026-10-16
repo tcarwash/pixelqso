@@ -19,8 +19,8 @@ VERSION = 1
 HEADER = struct.Struct(">4sBBHBBBBb12s8sIII8s")
 MESSAGE_CODES = {"card": 0, "cq": 1, "exchange": 2, "73": 3}
 MESSAGE_NAMES = {v: k for k, v in MESSAGE_CODES.items()}
-PALETTE_BITS = {8: 0, 16: 1, 32: 2}
-BITS_PER_PALETTE = (3, 4, 5)
+PALETTE_BITS = {8: 0, 16: 1, 32: 2, 2: 3}
+BITS_PER_PALETTE = (3, 4, 5, 1)
 
 
 def fragment(card, packed: bytes, offset: int, chunk: bytes, message_type="card", snr_db=None) -> bytes:
@@ -121,7 +121,7 @@ class CardTransferReceiver:
          call, grid, offset, total, crc, image_id) = HEADER.unpack_from(frame)
         if (magic != MAGIC or version != VERSION or flags != 0 or
                 not 1 <= width <= 64 or not 1 <= height <= 64 or
-                palette_id not in (0, 1, 2) or kind not in MESSAGE_NAMES):
+                palette_id not in (0, 1, 2, 3) or kind not in MESSAGE_NAMES):
             raise ValueError("unsupported or malformed PixelQSO transfer header")
         bits = BITS_PER_PALETTE[palette_id]
         expected = (width * height * bits + 7) // 8

@@ -57,6 +57,7 @@ MODE_IDS = {
     'experimental_8fsk_compressed': 16, 'experimental_16fsk_compressed': 17, 'experimental_16fsk_grid': 18,
     'experimental_4fsk_orthogonal': 19, 'experimental_8fsk_orthogonal': 20,
     'experimental_8fsk_musical_25': 21,
+    'experimental_8fsk_mono_fast': 22,
 }
 ID_MODES = {v: k for k, v in MODE_IDS.items()}
 # Fixed native LDPC payload sizes are part of the grouped v2 specification.

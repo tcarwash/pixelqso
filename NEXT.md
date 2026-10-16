@@ -170,6 +170,14 @@ Receive wall and multi-station decks: same-raster message-stage changes now refr
 
 Preview discard follow-up: the live preview panel now has a **Discard preview** action. It clears the active card assembly, matching Data2G transport fragments, cached repeated-copy captures, and buffered live audio so the next transmission starts a fresh preview, while preserving completed session-wall cards and saved receptions. Source implementation is complete; rendered UI behavior and live receive behavior are unverified.
 
+## Data2G local receive waterfall — 2026-10-14
+
+The managed local Data2G host now mirrors its already-open RX capture (left channel and sample rate) over a loopback-only UDP tap to the existing waterfall. This avoids a competing second audio-device open and does not route samples through another decoder. Data2G mode shows the waterfall while that local host is running; remote-host waterfall audio is not available. Packet conversion regression and syntax checks pass; live device rendering is unverified.
+
+## 2026-10-14 — Staged backend settings visibility
+
+Changing the Transfer backend in Station Settings immediately switches the visible audio/CAT configuration to the staged destination, even while a Data2G host remains connected. Experimental CAT connection actions stay disabled until the pending handoff is applied, while its configuration fields are editable. Focused Qt settings tests pass; physical CAT handoff remains unverified.
+
 Interlaced copies: the persistent **Interlace repeated copies** option sits beside **Copies per card** in Station settings → Advanced and follows Apply/Cancel. It is implemented for the equalized QPSK and local burst-FSK families, including the new orthogonal 4/8-FSK profiles. A v4 protected header carries each copy index; FSK copies rotate coded blocks, QPSK copies rotate the coded-bit permutation, and receivers restore order before soft combining. Existing non-interlaced waveforms keep their prior headers and bytes. Syntax compilation and diff checks pass; decoder roundtrips, UI rendering, audio-path, and RF behavior remain unverified. Orthogonal modes are source-implemented but not yet performance-benchmarked.
 
 2026-10-13 interlaced TX/settings fix: the protected-copy wrapper now forwards the interlaced option to supported burst encoders, and the Station Settings checkbox remains enabled so the saved preference can be turned off even when the current mode ignores it or copies are set to one. Regression tests cover wrapper dispatch and unchecking the setting. Fresh waveform/RF validation remains open.
@@ -362,6 +370,10 @@ At KC2G's request, card-data discovery and the mode catalog exclude `ack-*` and 
 
 ## 2026-10-14 — Hide standalone automatic exchange; stop responding
 
+# 2026-10-14 — Fast monochrome cards and QR codes
+
+Added an experimental protected 8-FSK black-and-white mode that thresholds color art to two tones and encodes the 32×32 raster at one bit per pixel. QR code… in the card editor creates a centered monochrome QR card; verified receive previews offer Read QR code. The card transfer format now handles one-bit palettes for Data2G as well. New mode and QR support require updated Pixel QSO software at both ends. Focused waveform round-trip, QR generation/decode, card-transfer and mode-policy tests pass; RF and Windows frozen-package validation remain open.
+
 The unfinished Automatic exchange choice is hidden from the send-type popup and disabled for keyboard selection; existing internal indices and CQ/Reply sequencing remain intact. A visible **Stop responding to CALL** action beside received-card reply controls cancels the current peer exchange, invalidates pending delayed sends, stops local TX or cancels queued Data2G transmissions through the existing stop path, clears reply/quick-draw context, and resumes listening. Cards from that peer no longer recreate a reply prompt during this session; other peers remain available. A host frame already in flight retains the existing cancellation limitation.
 
 Two focused UI tests pass: cancellation prevents a scheduled transmit, clears timers/state, suppresses the stopped peer prompt, and allows a new peer; existing reply-sequence coverage still passes. An offscreen render confirmed the full Stop responding to K1ABC label is readable; live window placement remains unverified. Running instances/container have not been restarted; physical audio/PTT and host-frame cancellation are unverified.
@@ -397,3 +409,13 @@ RX-only receive-all and preferred-decoder controls stay behind Advanced. When re
 ## 2026-10-14 — Keep the audio waterfall in the standard receiver view
 
 The receive progress/status line above Quick Draw now follows the Advanced controls toggle. The audio waterfall stays visible for local audio modem modes in the standard view; Data2G continues to omit it because that backend receives decoded frames from its host. Static diff check only; no tests or runtime UI check were run.
+
+## 2026-10-14 — Background Data2G receive monitoring
+
+Experimental mode now keeps a Data2G session as a receive-only monitor while retaining Experimental CAT authority. A local Data2G host follows the selected Experimental audio input. On a valid Data2G card frame, the receiver offers **Data2G card detected · Switch to Data2G**; clicking it switches backends and releases Experimental CAT control to Data2G. The audio waterfall remains shown for Experimental while the Data2G-only backend has no local waterfall. The host can reconnect after a disconnect. Source syntax compilation and `git diff --check` passed; no UI, shared-audio-device, CAT-handoff, container, or RF test was run.
+
+## 2026-10-15 — Resolve animations / bw-modem merge
+
+Resolved desktop-release workflow, backend descriptions/timing, and packaging conflicts while retaining animation/block-CRC support and monochrome/QR support. Release publication retains ZIP attachment and release creation with write permission. Pending backend selection in Station settings now uses the destination backend capabilities rather than the previous mode's adapter, preserving staged settings behavior.
+
+Focused modem, copy-header, animation, transfer, preview, mode-policy and Data2G checks initially passed 139 tests plus four subtests; missing QR dependencies were installed and both QR tests then passed. After correcting pending-backend controls, all 72 live-preview, backend-adapter and QR tests plus two subtests passed. The musical transmit-preview coverage assertion also fails on the original animations HEAD and remains open. Workflow YAML parsing, Python compilation, offline lock consistency and diff checks passed. No live GUI, packaged release, audio/PTT or RF validation was performed; no running instance was restarted.

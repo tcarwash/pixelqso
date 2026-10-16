@@ -1,5 +1,41 @@
 # Two-frame animations
 
+## Drawing an animation
+
+Open or create a card in the editor and choose **Animate this card**. The current
+drawing becomes frame 1; frame 2 starts as an editable copy, including placed stamps.
+
+- Click either frame thumbnail or **Flip ⇄** to switch the drawing canvas. **Alt+Left**
+  and **Alt+Right** also flip frames while drawing. Each frame retains its own Undo/Redo,
+  selected stamp, box selection and palette color.
+- **Onion skin** overlays the other frame as a faint alignment guide. Use the opacity
+  slider to adjust it. The guide never becomes part of saved or exported artwork.
+- Use the existing **Box select** and **Move stamp** tools to move and resize artwork.
+  **Copy selection → other frame** copies a box selection or selected stamp and switches
+  to the destination. The copy is a movable stamp; drag it or nudge it with the arrow
+  keys. Transparent stamp pixels stay transparent. Undo on the destination removes it.
+- **Copy whole frame → other** replaces the other drawing, retaining editable stamps.
+  Undo on that frame restores the previous drawing.
+- The live framed preview updates as you draw. **Pause/Play** controls its playback;
+  the timing control sets the shared duration of both frames, from 100 to 10000 ms.
+
+**Save both frames** saves two normal card JSON files with the existing frame-2
+reference. The first save asks for the first file's name and creates a separate
+`-frame-2.json` file beside it, avoiding existing companion filenames. Both drawings,
+editable stamp layers and timing are saved together. Opening either file restores the
+pair when the matching companion is present in the same folder or My Cards. Missing or
+changed companion artwork leaves the opened card as a single card with its reference
+preserved. For an existing animation, editing on-air artwork or the pairing assigns new
+affected card IDs and updates the reference. Canvas format controls are locked while
+authoring a pair; choose the desired dimensions and palette before starting.
+
+**Export GIF…** exports the live draft as a looping 320×400 animated GIF, including
+the card border, callsign and animation caption. It uses the current timing and both
+frames' artwork, without the onion skin, selection handles or grid. Saving the cards
+first is optional. GIF timing has 10 ms resolution. PNG exports remain static.
+
+## Linking two existing cards
+
 In **My Cards**, select the second card, then choose **More → Make selected card frame 2…**.
 Choose the first card from the native dropdown and preview the timing (100–10000 ms per
 frame, default 500 ms). Both cards must have the same callsign and dimensions, different
@@ -11,7 +47,7 @@ tile in the receive wall and contact deck. Click the artwork or the deck details
 to see both thumbnails and each card's ID, callsign/grid, receive time, mode, frequency,
 and measured/reported SNR. The deck also has Pause/Resume. Originals remain separate
 reception records; grouping is a presentation operation. PNG export remains a static
-image or contact sheet; animated GIF export is not implemented.
+image or contact sheet; framed animated GIF export is available in the card editor.
 
 Saved received cards can supply the first frame across sessions, including after a
 restart. An incomplete image, missing reference, mismatched artwork, or missing first

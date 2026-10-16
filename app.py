@@ -37,6 +37,7 @@ import cardmodem as modem
 from card_ids import allocate_card_id
 from card_animation import (artwork_digest, validate_link, partner as animation_partner,
                             details as animation_details)
+from animation_editor import AnimationAuthor
 from card_feedback import make_report as make_reception_report, report_lines as reception_report_lines
 from transmit_preview import LocalTransmitPreview, Data2GTransmitPreview
 from snr import set_measured_snr, snr_lines
@@ -853,6 +854,8 @@ class CardCanvas(QWidget):
         self.tool = "draw"
         self.keyboard_cursor = (0, 0)
         self.show_grid = True
+        self.onion_image = None
+        self.onion_opacity = 0.3
         self.last_paint_pixel = None
         self.undo_stack = []
         self.redo_stack = []
@@ -946,6 +949,12 @@ class CardCanvas(QWidget):
                 rgb = self.card.palette[self.card.pixels[y * self.card.width + x]]
                 p.fillRect(QRect(int(ox+x*cell), int(oy+y*cell), int(cell+1), int(cell+1)),
                            QColor(*(v * 17 for v in rgb)))
+        if self.onion_image is not None:
+            p.save()
+            p.setOpacity(self.onion_opacity)
+            p.drawImage(QRect(round(ox), round(oy), round(cell*self.card.width), round(cell*self.card.height)),
+                        self.onion_image)
+            p.restore()
         p.setPen(QPen(QColor(COLORS["editor_grid"]), 0.5))
         for x in range(self.card.width+1) if self.show_grid else ():
             p.drawLine(int(ox+x*cell), int(oy), int(ox+x*cell), int(oy+cell*self.card.height))
@@ -1130,6 +1139,9 @@ class CardCanvas(QWidget):
                                       "width": width, "height": height, "pixels": values})
         self.selected_layer = None
         self.selection_rect = QRect(); self.selection_handle = QRect()
+        self.selection_origin = None
+        self.hover_layer = self.resize_layer = None
+        self.hover_remove_rect = QRect(); self.hover_convert_rect = QRect(); self.hover_resize_rect = QRect()
         self.drag_layer = None
         self.undo_stack.clear(); self.redo_stack.clear()
         self._render_layers()
@@ -2013,6 +2025,7 @@ class MainWindow(QMainWindow):
         editor_content = self.make_card_tab()
         self.editor_dialog = EditorDialog(self)
         editor_layout = QVBoxLayout(self.editor_dialog); editor_layout.addWidget(editor_content)
+        self.animation_author.attach_shortcuts(self.editor_dialog)
         self.editor_done_button = QPushButton("Save and close"); self.editor_done_button.setObjectName("primaryAction")
         self.editor_done_button.clicked.connect(self.editor_primary_action); editor_layout.addWidget(self.editor_done_button)
         self.editor_baseline = self.editor_signature()
@@ -2407,6 +2420,8 @@ class MainWindow(QMainWindow):
         self.library_search.setFocus()
 
     def editor_signature(self):
+        if hasattr(self, 'animation_author') and self.animation_author.frames:
+            return (self.call.text(), self.grid.text(), self.animation_author.signature())
         return (self.call.text(), self.grid.text(), self.canvas.snapshot(),
                 json.dumps(self.card.animation, sort_keys=True))
 
@@ -2611,6 +2626,7 @@ class MainWindow(QMainWindow):
             return False
         self.card = card
         self.card_path = None
+        self.animation_author.reset()
         self.canvas.set_card(card, data.get("base_pixels", pixels), data.get("stamp_layers", []))
         self._sync_editor_controls()
         self.call.setText(card.callsign)
@@ -2803,6 +2819,7 @@ class MainWindow(QMainWindow):
 
     def _load_card_path(self, path):
         d = json.loads(path.read_text())
+        self.animation_author.reset()
         self.card = modem.Card(d["callsign"], d["grid"], [tuple(c) for c in d["palette"]], d["pixels"], d.get("card_id", 0xC0DE), d.get("width", 32), d.get("height", 32), copy.deepcopy(d.get("animation")))
         self.card = normalize_card_palette(self.card)
         self.card.validate(); self.card_path = path
@@ -2810,6 +2827,7 @@ class MainWindow(QMainWindow):
         self._sync_editor_controls()
         self.call.setText(self.card.callsign); self.grid.setText(self.card.grid)
         self._set_editor_format(self.card)
+        self.animation_author.load_pair(path, d, DATA / 'cards')
 
     def refresh_qso_log(self, *_):
         if not hasattr(self, "log_gallery"): return
@@ -3367,9 +3385,9 @@ class MainWindow(QMainWindow):
         self.listen_canvas_button.clicked.connect(self.listen_to_canvas)
         side.addWidget(self.listen_canvas_button)
         self.load_stamps()
-        buttons = QHBoxLayout()
-        for label, handler in (("New", self.new_card), ("Open…", self.open_card), ("Save", self.save_card), ("Paste image", self.paste_card_image), ("Export WAV…", self.export_wav)):
-            b = QPushButton(label); b.clicked.connect(handler); buttons.addWidget(b)
+        buttons = QGridLayout()
+        for index, (label, handler) in enumerate((("New", self.new_card), ("Open…", self.open_card), ("Save", self.save_card), ("Paste image", self.paste_card_image), ("Export WAV…", self.export_wav))):
+            b = QPushButton(label); b.clicked.connect(handler); buttons.addWidget(b, index // 3, index % 3)
             if label == "Save":
                 self.editor_save_button = b
                 self.editor_save_button.setAccessibleDescription(
@@ -3378,7 +3396,13 @@ class MainWindow(QMainWindow):
         self._update_card_identity_hint()
         side.addStretch()
         self.status = QLabel("Ready")
+        self.status.setWordWrap(True)
         side.addWidget(self.status)
+        self.animation_author = AnimationAuthor(self)
+        drawing.insertWidget(0, self.animation_author)
+        side.insertWidget(0, self.animation_author.preview_panel)
+        self.call.textChanged.connect(self.animation_author.changed)
+        self.grid.textChanged.connect(self.animation_author.changed)
         self.canvas.image_dropped.connect(self.place_stamp_image)
         self.canvas.changed.connect(self._sync_editor_controls)
         self.canvas.changed.connect(self._update_editor_saved_state)
@@ -3878,6 +3902,7 @@ class MainWindow(QMainWindow):
 
     def new_card(self):
         if hasattr(self, "editor_dialog") and self.editor_dialog.isVisible() and not self.confirm_editor_close(): return
+        self.animation_author.reset()
         self.card = default_card(self.station_call.text().strip().upper() or "N0CALL",
                                  self.station_grid.text().strip().upper() or "AA00",
                                  card_id=self._new_card_id())
@@ -3893,6 +3918,8 @@ class MainWindow(QMainWindow):
     def save_card(self):
         self.update_identity()
         try:
+            if self.animation_author.frames:
+                return self.animation_author.save(DATA / 'cards')
             self.card.validate()
             target = self.card_path
             if target is None:

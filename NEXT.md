@@ -1,5 +1,29 @@
 # Next steps: Pixel QSO UI/UX
 
+## Animation authoring — 2026-10-15
+
+Implemented an animation workspace around the existing card canvas. **Animate this card**
+duplicates the drawing and editable stamp layers into a second frame. Thumbnail controls,
+Flip and Alt+Left/Right switch frames with independent Undo/Redo, selection and color state.
+Onion skin has adjustable opacity and stays out of saved art. A live framed preview has
+Pause/Play and timing controls. Copy a box selection or stamp to the other frame as a movable,
+resizable stamp; copying the whole frame is also undoable on the destination.
+
+Save writes both existing-format card files and updates the frame-2 fingerprint, timing and
+affected IDs. Opening either saved frame finds a matching local companion, including beside
+files saved outside My Cards. Failed/cancelled saves retain the drafts, and a failed second
+file replacement rolls back the first. **Export GIF…** produces a looping 320×400 framed
+animation with callsign and current timing from the live draft. Pillow is included in desktop
+dependencies and the new editor module is included in the package manifest.
+
+Validation: 52 focused checks passed across authoring, GIF readback, file-write rollback,
+ordinary canvas tools, animation protocol/audio roundtrips, pairing/playback, palette and
+card identity, and transfer UI. Two previously documented unrelated transfer UI failures
+(advanced-controls visibility and the removed getting-started guide) were deselected.
+The authoring editor and a sample framed GIF were rendered offscreen for visual inspection
+in `screenshots/animation-authoring.png` and `screenshots/animation-authoring.gif`.
+The running desktop app was not restarted; packaged desktop and live audio/RF remain unverified.
+
 ## Current checkpoint — 2026-10-14
 
 Animation work is committed as `d3a2bb0`; provisional reply/report support is committed as `c67f613`.

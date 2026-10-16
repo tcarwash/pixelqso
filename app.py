@@ -865,6 +865,11 @@ class CardCanvas(QWidget):
         self.onion_image = None
         self.onion_opacity = 0.3
         self.last_paint_pixel = None
+        self.keyboard_space_down = False
+        self.keyboard_stroke_changed = False
+        self.keyboard_count = ""
+        self.keyboard_g_pending = False
+        self.keyboard_command = None
         self.undo_stack = []
         self.redo_stack = []
         self.base_pixels = list(card.pixels)
@@ -898,8 +903,14 @@ class CardCanvas(QWidget):
         self.setAccessibleDescription(
             f"{self.card.width} by {self.card.height} pixel card. {action} "
             f"Keyboard cursor at column {x + 1}, row {y + 1}; selected palette color "
-            f"{self.color_index + 1}. Tab to focus, use arrow keys to move, and press "
-            "Space or Enter to apply the selected tool.")
+            f"{self.color_index + 1}. Tab to focus, use arrows or hjkl to move. Hold "
+            "Space or i while moving to draw a stroke; Escape cancels i mode. Number "
+            "counts repeat movement; 0/A jump to row start, $/a to row end, gg/G to "
+            "column ends. :wq saves and closes; :q closes with the usual unsaved-change prompt. "
+            "n/N cycles colors forward/backward, "
+            "f fills the selection or connected region, u undoes, U redoes, and x deletes "
+            "the pixel under the cursor. Enter applies "
+            "the selected tool.")
 
     def sizeHint(self):
         return QSize(640, 640)
@@ -1027,23 +1038,148 @@ class CardCanvas(QWidget):
             x, y = self.keyboard_cursor
             cursor_rect = QRect(int(ox+x*cell), int(oy+y*cell),
                                 max(1, int(cell)), max(1, int(cell)))
-            p.setPen(QPen(QColor(COLORS["focus_ring"]), 2))
+            cursor_color = QColor(*(v * 17 for v in self.card.palette[self.color_index]))
+            p.setPen(QPen(cursor_color, 2))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRect(cursor_rect.adjusted(1, 1, -1, -1))
             p.setPen(QPen(QColor(COLORS["window"]), 1))
             p.drawRect(cursor_rect.adjusted(2, 2, -2, -2))
 
     def keyPressEvent(self, event):
+        key_text = event.text().lower()
+        if self.keyboard_command is not None:
+            if event.key() == Qt.Key.Key_Escape:
+                self.keyboard_command = None
+            elif event.key() == Qt.Key.Key_Backspace:
+                self.keyboard_command = self.keyboard_command[:-1]
+            elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                command = self.keyboard_command
+                self.keyboard_command = None
+                owner = self.window().parent()
+                if command == "wq" and hasattr(owner, "save_and_close_editor"):
+                    owner.save_and_close_editor()
+                elif command == "q" and hasattr(self.window(), "reject"):
+                    self.window().reject()
+            elif event.text() and event.text().isprintable():
+                self.keyboard_command += event.text()
+            event.accept(); return
+        if event.text() == ":" and not (event.modifiers() & (Qt.KeyboardModifier.ControlModifier |
+                                                                  Qt.KeyboardModifier.AltModifier |
+                                                                  Qt.KeyboardModifier.MetaModifier)):
+            self.keyboard_command = ""
+            event.accept(); return
+        if key_text == "u" and not (event.modifiers() & (Qt.KeyboardModifier.ControlModifier |
+                                                           Qt.KeyboardModifier.AltModifier |
+                                                           Qt.KeyboardModifier.MetaModifier)):
+            (self.undo if event.text() == "u" else self.redo)()
+            event.accept(); return
+        if key_text == "x" and not (event.modifiers() & (Qt.KeyboardModifier.ControlModifier |
+                                                           Qt.KeyboardModifier.AltModifier |
+                                                           Qt.KeyboardModifier.MetaModifier)):
+            self.delete_selection_or_pixel()
+            event.accept(); return
+        if key_text == "n" and not (event.modifiers() & (Qt.KeyboardModifier.ControlModifier |
+                                                           Qt.KeyboardModifier.AltModifier |
+                                                           Qt.KeyboardModifier.MetaModifier)):
+            direction = -1 if event.text() == "N" else 1
+            self.color_index = (self.color_index + direction) % len(self.card.palette)
+            self.update_accessible_description()
+            self.update()
+            self.changed.emit()
+            event.accept(); return
+        if key_text == "f" and not (event.modifiers() & (Qt.KeyboardModifier.ControlModifier |
+                                                           Qt.KeyboardModifier.AltModifier |
+                                                           Qt.KeyboardModifier.MetaModifier)):
+            self.fill_selection_or_region()
+            event.accept(); return
+        if key_text.isdigit() and not event.modifiers() and len(key_text) == 1:
+            if self.keyboard_count or key_text != "0":
+                self.keyboard_count = (self.keyboard_count + key_text)[-3:]
+                event.accept(); return
+        if key_text == "g" and not event.modifiers():
+            if event.text() == "G":
+                self.keyboard_g_pending = False
+            elif self.keyboard_g_pending:
+                self.keyboard_g_pending = False
+                self._move_keyboard_steps(0, -self.keyboard_cursor[1])
+                self.keyboard_count = ""
+                event.accept(); return
+            else:
+                self.keyboard_g_pending = True
+                event.accept(); return
+        if self.keyboard_g_pending:
+            self.keyboard_g_pending = False
+        if key_text == "i" and not event.modifiers():
+            self.keyboard_count = ""
+            self.keyboard_space_down = not self.keyboard_space_down
+            self.keyboard_stroke_changed = False
+            if self.keyboard_space_down and self.tool == "draw":
+                self._paint_keyboard_pixel(remember=True)
+            event.accept(); return
+        if event.key() == Qt.Key.Key_Space and self.tool == "draw":
+            if not self.keyboard_space_down:
+                self.keyboard_space_down = True
+                self.keyboard_stroke_changed = False
+                self._paint_keyboard_pixel(remember=True)
+            event.accept(); return
+        vim_directions = {"h": (-1, 0), "j": (0, 1), "k": (0, -1), "l": (1, 0)}
+        if event.text() in ("H", "J", "K", "L") and not self.selection_rect.isNull():
+            dx, dy = vim_directions[key_text]
+            count = self._take_keyboard_count()
+            self.move_selection(dx * count, dy * count)
+            event.accept(); return
+        if key_text in vim_directions:
+            dx, dy = vim_directions[key_text]
+            count = self._take_keyboard_count()
+            self._move_keyboard_steps(dx, dy, count)
+            event.accept()
+            return
+        if key_text in ("0", "$", "a", "g") or event.key() == Qt.Key.Key_G:
+            count = self._take_keyboard_count()
+            destination_x = (0 if key_text == "0" or event.text() == "A" else
+                             self.card.width - 1 if key_text in ("$", "a") else self.keyboard_cursor[0])
+            destination_y = self.card.height - 1 if event.key() == Qt.Key.Key_G else self.keyboard_cursor[1]
+            self._move_keyboard_steps(destination_x-self.keyboard_cursor[0], destination_y-self.keyboard_cursor[1], count or 1)
+            event.accept(); return
+        if key_text == "v":
+            if self.selection_origin is None:
+                x, y = self.keyboard_cursor
+                self.selection_origin = (x, y)
+                self.selection_rect = QRect(x, y, 1, 1)
+            else:
+                self.selection_origin = None
+            self.changed.emit(); self.update(); event.accept(); return
+        if key_text == "y" and not self.selection_rect.isNull():
+            self.copy_selection_to_clipboard()
+            event.accept(); return
+        if key_text == "d":
+            self.delete_selection_or_pixel(copy_to_clipboard=True)
+            event.accept(); return
+        if key_text == "p":
+            image = QApplication.clipboard().image()
+            if not image.isNull():
+                if image.width() > self.card.width or image.height() > self.card.height:
+                    image = image.scaled(self.card.width, self.card.height,
+                                         Qt.AspectRatioMode.KeepAspectRatio,
+                                         Qt.TransformationMode.FastTransformation)
+                self.add_stamp(image)
+                layer = self.stamp_layers[self.selected_layer]
+                x, y = self.keyboard_cursor
+                layer["x"] = min(x, self.card.width-layer["width"])
+                layer["y"] = min(y, self.card.height-layer["height"])
+                self._render_layers()
+            event.accept(); return
         directions = {
             Qt.Key.Key_Left: (-1, 0), Qt.Key.Key_Right: (1, 0),
             Qt.Key.Key_Up: (0, -1), Qt.Key.Key_Down: (0, 1),
         }
         if event.key() in directions:
             dx, dy = directions[event.key()]
+            count = self._take_keyboard_count()
             if self.tool == "move" and self.selected_layer is not None:
                 layer = self.stamp_layers[self.selected_layer]
-                new_x = min(max(0, layer["x"] + dx), self.card.width - layer["width"])
-                new_y = min(max(0, layer["y"] + dy), self.card.height - layer["height"])
+                new_x = min(max(0, layer["x"] + dx * count), self.card.width - layer["width"])
+                new_y = min(max(0, layer["y"] + dy * count), self.card.height - layer["height"])
                 if (new_x, new_y) != (layer["x"], layer["y"]):
                     self.remember_edit()
                     layer["x"], layer["y"] = new_x, new_y
@@ -1052,20 +1188,17 @@ class CardCanvas(QWidget):
                 self.update_accessible_description()
                 event.accept()
                 return
-            x, y = self.keyboard_cursor
-            self.keyboard_cursor = (min(max(0, x + dx), self.card.width - 1),
-                                    min(max(0, y + dy), self.card.height - 1))
-            if self.tool == "select" and self.selection_origin is not None:
-                ax, ay = self.selection_origin; bx, by = self.keyboard_cursor
-                self.selection_rect = QRect(min(ax, bx), min(ay, by), abs(ax-bx)+1, abs(ay-by)+1)
-                self.changed.emit()
-            self.update_accessible_description()
-            self.update()
+            self._move_keyboard_steps(dx, dy, count)
             event.accept()
             return
         if event.key() == Qt.Key.Key_Escape and not self.selection_rect.isNull():
+            self.keyboard_space_down = False; self.keyboard_count = ""; self.keyboard_g_pending = False
             self.selection_rect = QRect(); self.selection_handle = QRect(); self.selection_origin = None
             self.changed.emit(); self.update(); event.accept(); return
+        if event.key() == Qt.Key.Key_Escape and self.keyboard_space_down:
+            self.keyboard_space_down = False; self.keyboard_stroke_changed = False
+            self.keyboard_count = ""; self.keyboard_g_pending = False
+            self.update(); event.accept(); return
         if event.key() == Qt.Key.Key_Escape and self.selected_layer is not None:
             self.selected_layer = None
             self.update_accessible_description()
@@ -1120,6 +1253,131 @@ class CardCanvas(QWidget):
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key.Key_Space:
+            self.keyboard_space_down = False
+            self.keyboard_stroke_changed = False
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
+    def _paint_keyboard_pixel(self, remember=False):
+        x, y = self.keyboard_cursor
+        index = y * self.card.width + x
+        value = self.color_index
+        if self.base_pixels[index] == value:
+            return
+        if remember:
+            self.remember_edit()
+        self.base_pixels[index] = value
+        self.keyboard_stroke_changed = True
+        self._render_layers()
+
+    def fill_selection_or_region(self):
+        rect = self.selection_rect.intersected(QRect(0, 0, self.card.width, self.card.height))
+        if not rect.isNull() and not rect.isEmpty():
+            indexes = [y * self.card.width + x
+                       for y in range(rect.top(), rect.bottom() + 1)
+                       for x in range(rect.left(), rect.right() + 1)]
+            targets = [i for i in indexes if self.base_pixels[i] != self.color_index]
+            if not targets:
+                return
+            self.remember_edit()
+            for index in targets:
+                self.base_pixels[index] = self.color_index
+            self._render_layers()
+            return
+
+        x, y = self.keyboard_cursor
+        index = y * self.card.width + x
+        target = self.base_pixels[index]
+        if target == self.color_index:
+            return
+        self.remember_edit()
+        pending = [(x, y)]
+        while pending:
+            px, py = pending.pop()
+            if not (0 <= px < self.card.width and 0 <= py < self.card.height):
+                continue
+            position = py * self.card.width + px
+            if self.base_pixels[position] != target:
+                continue
+            self.base_pixels[position] = self.color_index
+            pending.extend(((px-1, py), (px+1, py), (px, py-1), (px, py+1)))
+        self._render_layers()
+
+    def _move_keyboard_cursor(self, dx, dy):
+        x, y = self.keyboard_cursor
+        self.keyboard_cursor = (min(max(0, x + dx), self.card.width - 1),
+                                min(max(0, y + dy), self.card.height - 1))
+        if self.selection_origin is not None:
+            ax, ay = self.selection_origin; bx, by = self.keyboard_cursor
+            self.selection_rect = QRect(min(ax, bx), min(ay, by), abs(ax-bx)+1, abs(ay-by)+1)
+            self.changed.emit()
+        self.update_accessible_description()
+        self.update()
+
+    def _take_keyboard_count(self):
+        count = int(self.keyboard_count) if self.keyboard_count else 1
+        self.keyboard_count = ""
+        return max(1, min(count, max(self.card.width, self.card.height)))
+
+    def _move_keyboard_steps(self, dx, dy, count=1):
+        for _ in range(count):
+            before = self.keyboard_cursor
+            self._move_keyboard_cursor(dx, dy)
+            if self.keyboard_cursor == before:
+                break
+            if self.keyboard_space_down and self.tool == "draw":
+                self._paint_keyboard_pixel(remember=not self.keyboard_stroke_changed)
+
+    def copy_selection_to_clipboard(self):
+        rect = self.selection_rect.intersected(QRect(0, 0, self.card.width, self.card.height))
+        if rect.isEmpty():
+            return
+        image = QImage(rect.width(), rect.height(), QImage.Format.Format_ARGB32)
+        for y in range(rect.height()):
+            for x in range(rect.width()):
+                value = self.card.pixels[(rect.y()+y)*self.card.width+rect.x()+x]
+                image.setPixelColor(x, y, QColor(*(channel*17 for channel in self.card.palette[value])))
+        QApplication.clipboard().setImage(image)
+
+    def move_selection(self, dx, dy):
+        index = self.lift_selection()
+        if index is None:
+            return
+        layer = self.stamp_layers[index]
+        x = min(max(0, layer["x"] + dx), self.card.width-layer["width"])
+        y = min(max(0, layer["y"] + dy), self.card.height-layer["height"])
+        if (x, y) != (layer["x"], layer["y"]):
+            self.remember_edit()
+            layer["x"], layer["y"] = x, y
+            self.keyboard_cursor = (x, y)
+            self._render_layers()
+
+    def delete_selection_or_pixel(self, copy_to_clipboard=False):
+        rect = self.selection_rect.intersected(QRect(0, 0, self.card.width, self.card.height))
+        if rect.isEmpty():
+            x, y = self.keyboard_cursor
+            rect = QRect(x, y, 1, 1)
+        if copy_to_clipboard:
+            image = QImage(rect.width(), rect.height(), QImage.Format.Format_ARGB32)
+            for y in range(rect.height()):
+                for x in range(rect.width()):
+                    value = self.card.pixels[(rect.y()+y)*self.card.width+rect.x()+x]
+                    image.setPixelColor(x, y, QColor(*(channel*17 for channel in self.card.palette[value])))
+            QApplication.clipboard().setImage(image)
+        self.remember_edit()
+        for y in range(rect.top(), rect.bottom()+1):
+            for x in range(rect.left(), rect.right()+1):
+                self.base_pixels[y*self.card.width+x] = 0
+                for layer in self.stamp_layers:
+                    sx, sy = x-layer["x"], y-layer["y"]
+                    if 0 <= sx < layer["width"] and 0 <= sy < layer["height"]:
+                        layer["pixels"][sy*layer["width"]+sx] = None
+        self.selection_rect = QRect(); self.selection_handle = QRect(); self.selection_origin = None
+        self._render_layers()
 
     def focusInEvent(self, event):
         super().focusInEvent(event)
@@ -3276,7 +3534,16 @@ class MainWindow(QMainWindow):
         drawing.addLayout(tools)
         self.canvas = CardCanvas(self.card)
         self.canvas.setToolTip(
-            "Keyboard: focus the canvas; arrows move the cursor and Space/Enter applies "
+            "Keyboard: focus the canvas; arrows or hjkl move the cursor; v starts/ends a "
+            "rectangular selection, y copies it, d deletes it (or the pixel under the cursor), "
+            "and p places an image from the clipboard at the cursor. Uppercase HJKL nudges "
+            "a selection. f fills a selection or the connected region under the cursor. "
+            "0/A jump to row start, $/a to row end, gg/G to column ends, and a number "
+            "repeats movement. Type :wq then Enter to save and close, or :q then Enter "
+            "to close with the usual unsaved-change prompt. "
+            "Hold Space or press i to draw while moving; Escape cancels i mode. "
+            "n/N cycles colors forward/backward, u undoes, U redoes, x deletes the pixel, "
+            "and Enter applies "
             "Draw, Erase, Fill, or Pick. In Move stamp mode, Space/Enter selects a stamp, "
             "arrows move it, and Escape deselects. Mouse: drag stamps; hover a placed "
             "stamp to reveal its resize and remove controls.")

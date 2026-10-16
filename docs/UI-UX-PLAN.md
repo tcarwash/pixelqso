@@ -8,7 +8,7 @@ Beta 1 follow-up: the first-run Getting started guide and Operate → Configure 
 
 Make Pixel QSO approachable to a radio operator who understands callsigns, audio devices, and CQ but does not understand modem framing, KISS ports, or decoder internals. The primary journey is: set up station → listen → call or reply → exchange cards → revisit/share a contact.
 
-Keep the native Qt application. Retain the distinctive pixel artwork and restrained teal accent; give the surrounding interface the spacing, hierarchy, and consistency of a finished desktop product.
+Keep the native Qt application. Retain the distinctive pixel artwork and adopt the PixelChat-inspired lavender/lime palette (see [style guide](PIXELCHAT-STYLE-GUIDE.md)); give the surrounding interface the spacing, hierarchy, and consistency of a finished desktop product.
 
 ## Audit basis
 

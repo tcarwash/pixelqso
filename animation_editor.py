@@ -51,6 +51,15 @@ def export_gif(path, images, frame_ms):
         image = image.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
         frames.append(Image.frombytes('RGBA', (image.width(), image.height()),
                                      bytes(image.constBits()), 'raw', 'RGBA', image.bytesPerLine()).convert('RGB'))
+    # One palette for the whole animation keeps identical frame chrome stable.
+    # Independent GIF quantization can shift lavender antialiasing by one RGB step.
+    atlas = Image.new('RGB', (frames[0].width, sum(frame.height for frame in frames)))
+    y = 0
+    for frame in frames:
+        atlas.paste(frame, (0, y))
+        y += frame.height
+    palette = atlas.quantize(colors=256)
+    frames = [frame.quantize(palette=palette, dither=Image.Dither.NONE) for frame in frames]
     frames[0].save(str(path), format='GIF', save_all=True, append_images=frames[1:],
                    duration=frame_ms, loop=0, disposal=2, optimize=False)
 

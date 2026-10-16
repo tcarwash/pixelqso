@@ -1,5 +1,31 @@
 # Next steps: Pixel QSO UI/UX
 
+## PixelChat-inspired visual pass — 2026-10-16
+
+Branch: `pixelchat-inspired-ui`. Design handoff: `docs/PIXELCHAT-STYLE-GUIDE.md`.
+Implemented the first theme/layout slice: violet-black surfaces, lavender card frames,
+lime actions/selected navigation, cream headings, larger radii and primary-action padding,
+more outer/gallery spacing, matching menus/tooltips, and nearest-neighbor ArtworkView scaling.
+The existing Operate / My Cards / Contacts structure and radio control wiring remain intact.
+Framed export footers use light text on the dark outer background; GIF export now quantizes
+both frames against one shared palette so identical frame chrome does not change color.
+
+Validation: 29 focused tests passed across transfer controls, animation editor/GIF export,
+and transmit preview. Three tests were deselected: two previously documented stale UI
+expectations (advanced-controls visibility and removed getting-started guide), plus
+`test_raw_e_major_preview_uses_palette_symbol_order_and_frozen_artwork`. The latter fails
+with the original HEAD theme/card renderer too (expected one pixel, got zero); no modem or
+preview timing changes are included in this styling pass. The new GIF border regression
+was fixed and its existing export/readback test passes. `git diff --check` passes.
+
+Actual Qt offscreen renders of Operate (1440x1000), My Cards (1440x1000), and editor
+(1200x900) were inspected using isolated temporary settings/data and deferred startup
+callbacks disabled. Preview files: `/home/tyler/Documents/Codex/2026-10-16/tak/outputs/`
+`pixelqso-operate.png`, `pixelqso-collection.png`, and `pixelqso-canvas.png`.
+No active desktop instance was restarted. Live audio/radio, packaged builds, compact-window
+and high-DPI accessibility verification remain open. Further layout simplification and
+hero-card hierarchy are follow-up work, not completed by this initial theme pass.
+
 ## Animation authoring — 2026-10-15
 
 Implemented an animation workspace around the existing card canvas. **Animate this card**

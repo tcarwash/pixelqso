@@ -149,7 +149,7 @@ def deck_image(entry, image_for_card):
     image.fill(QColor(COLORS['card_art_background']))
     painter = QPainter(image)
     try:
-        painter.setPen(QColor(COLORS['card_title']))
+        painter.setPen(QColor(COLORS['text']))
         font = QFont(); font.setPixelSize(24); font.setBold(True); painter.setFont(font)
         painter.drawText(QRectF(24, 16, image.width()-48, 34), Qt.AlignmentFlag.AlignLeft,
                          f"Contact with {entry.get('peer_callsign', 'Unknown')}")
@@ -198,7 +198,7 @@ def single_card_image(direction, report, image_for_card):
         pixmap = card_art(art, str(meta.get('callsign') or 'Unknown station'),
                           stage_label(report), QSize(640, card_height))
         painter.drawPixmap(20, 0, pixmap)
-        painter.setPen(QColor(COLORS['card_title']))
+        painter.setPen(QColor(COLORS['text']))
         font = QFont(); font.setPixelSize(18); font.setBold(True); painter.setFont(font)
         direction_label = 'SENT' if direction == 'sent_cards' else 'RECEIVED'
         painter.drawText(QRectF(24, card_height+6, width-48, 24),
@@ -228,7 +228,7 @@ def card_art(image, title, subtitle='', size=QSize(240, 300), stacked=False):
             p.setPen(QColor(COLORS['card_stack_border'])); p.setBrush(QColor(COLORS['card_stack']))
             p.drawRoundedRect(QRectF(margin-offset/2, margin-offset, width-2*margin, height-2*margin), 13, 13)
     p.setPen(QColor(COLORS['card_frame_border'])); p.setBrush(QColor(COLORS['card_frame']))
-    p.drawRoundedRect(QRectF(margin, margin, width-2*margin, height-2*margin), 12, 12)
+    p.drawRoundedRect(QRectF(margin, margin, width-2*margin, height-2*margin), 18, 18)
     art = QRectF(margin+12, margin+12, width-2*margin-24, height-2*margin-76)
     p.fillRect(art, QColor(COLORS['card_art_background']))
     if image is not None and not image.isNull():
@@ -263,7 +263,7 @@ class ArtworkView(QLabel):
     def resize_artwork(self):
         if self.original is not None:
             self.setPixmap(self.original.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio,
-                                                Qt.TransformationMode.SmoothTransformation))
+                                                Qt.TransformationMode.FastTransformation))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

@@ -2295,6 +2295,8 @@ class MainWindow(QMainWindow):
         self.passive_received_logs = {}
         self.qso_log_dir = DATA / "qso-log"
         root = QWidget(); layout = QVBoxLayout(root)
+        layout.setContentsMargins(SPACING["xl"], SPACING["lg"], SPACING["xl"], SPACING["lg"])
+        layout.setSpacing(SPACING["lg"])
         self.tabs = QTabWidget()
         editor_content = self.make_card_tab()
         self.editor_dialog = EditorDialog(self)
@@ -2433,7 +2435,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(library_controls)
         self.library_list = QListWidget(); self.library_list.setViewMode(QListWidget.ViewMode.IconMode)
         self.library_list.setIconSize(QSize(190, 238)); self.library_list.setGridSize(QSize(218, 288))
-        self.library_list.setMovement(QListWidget.Movement.Static); self.library_list.setSpacing(SPACING["sm"])
+        self.library_list.setMovement(QListWidget.Movement.Static); self.library_list.setSpacing(SPACING["lg"])
         self.library_list.setAccessibleName("Card library")
         self.library_list.setToolTip(
             "Use the arrow keys to browse cards; press Enter to open the selected card.")

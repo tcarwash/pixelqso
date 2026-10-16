@@ -5,59 +5,59 @@ semantic tokens. Add another appearance only after the full surface is audited.
 """
 
 COLORS = {
-    "window": "#11161a",
-    "surface": "#192126",
-    "surface_raised": "#25333b",
-    "surface_hover": "#344a54",
-    "surface_item_hover": "#24343d",
-    "surface_selected": "#30474f",
-    "surface_tab": "#1b252b",
-    "surface_tab_selected": "#304149",
-    "surface_scrollbar": "#141b20",
-    "surface_scrollbar_handle": "#40545c",
-    "surface_header": "#202d25",
-    "surface_disabled": "#1b231e",
-    "surface_primary_disabled": "#26352e",
-    "text": "#e8eee9",
-    "text_bright": "#eff7f1",
-    "text_primary": "#142017",
-    "text_muted": "#9eada3",
-    "text_soft": "#b8d4c0",
-    "text_header": "#c5d5ca",
-    "text_disabled": "#90a097",
-    "text_primary_disabled": "#90a097",
-    "border": "#2e3d45",
-    "border_control": "#35464e",
-    "border_button": "#3c5747",
-    "border_selected": "#729b96",
-    "border_primary_disabled": "#3b5144",
-    "accent": "#a0dfc0",
-    "accent_hover": "#b2df91",
-    "accent_selection": "#52775d",
-    "accent_checked": "#36564e",
-    "accent_checked_border": "#9ed7bd",
-    "accent_checked_text": "#eefff6",
-    "focus_ring": "#a0dfc0",
-    "focus_ring_primary": "#142017",
+    "window": "#101118",
+    "surface": "#242430",
+    "surface_raised": "#292a37",
+    "surface_hover": "#373447",
+    "surface_item_hover": "#302d40",
+    "surface_selected": "#353d2d",
+    "surface_tab": "#191a24",
+    "surface_tab_selected": "#283024",
+    "surface_scrollbar": "#151522",
+    "surface_scrollbar_handle": "#494458",
+    "surface_header": "#252532",
+    "surface_disabled": "#20212b",
+    "surface_primary_disabled": "#30372a",
+    "text": "#f5f1e9",
+    "text_bright": "#f5f1e9",
+    "text_primary": "#20251c",
+    "text_muted": "#aaa8b9",
+    "text_soft": "#d4c8ee",
+    "text_header": "#e5e1ef",
+    "text_disabled": "#92909f",
+    "text_primary_disabled": "#a0aa96",
+    "border": "#383744",
+    "border_control": "#454252",
+    "border_button": "#41414f",
+    "border_selected": "#c5ff88",
+    "border_primary_disabled": "#454d3d",
+    "accent": "#c5ff88",
+    "accent_hover": "#d5ffa9",
+    "accent_selection": "#4a405f",
+    "accent_checked": "#353d2d",
+    "accent_checked_border": "#c5ff88",
+    "accent_checked_text": "#c5ff88",
+    "focus_ring": "#c6ff8a",
+    "focus_ring_primary": "#252039",
     "positive": "#8bd8ae",
     "warning": "#e5b36e",
     "error": "#e4867b",
-    "waterfall_background": "#0b1115",
-    "waterfall_text": "#d0ddd9",
-    "waterfall_text_secondary": "#91a4a5",
-    "waterfall_grid": "#96b4b6",
-    "stamp_canvas_background": "#202820",
-    "stamp_canvas_checker_light": "#364136",
-    "stamp_canvas_checker_dark": "#293329",
-    "stamp_canvas_grid": "#6e826e",
-    "card_frame": "#1e292f",
-    "card_frame_border": "#688570",
-    "card_stack": "#28353c",
-    "card_stack_border": "#4e6958",
-    "card_art_background": "#101b16",
-    "card_title": "#d9efc6",
-    "card_subtitle": "#9fafaa",
-    "editor_grid": "#5a5a5a",
+    "waterfall_background": "#101118",
+    "waterfall_text": "#e5e1ef",
+    "waterfall_text_secondary": "#aaa8b9",
+    "waterfall_grid": "#827a99",
+    "stamp_canvas_background": "#20202c",
+    "stamp_canvas_checker_light": "#363344",
+    "stamp_canvas_checker_dark": "#292735",
+    "stamp_canvas_grid": "#736984",
+    "card_frame": "#bda5f8",
+    "card_frame_border": "#cbb6ff",
+    "card_stack": "#62517f",
+    "card_stack_border": "#947bbd",
+    "card_art_background": "#151522",
+    "card_title": "#252039",
+    "card_subtitle": "#3e3455",
+    "editor_grid": "#6a637b",
     "editor_selection": "#ffdc3c",
     "stamp_remove_border": "#6e0000",
     "stamp_remove_background": "#dc232d",
@@ -68,8 +68,8 @@ COLORS = {
 }
 
 SPACING = {"xs": 4, "sm": 8, "md": 12, "lg": 16, "xl": 24}
-RADIUS = {"control": 7, "button": 8, "panel": 10}
-TYPE_SIZE = {"body": 14, "section": 16, "title": 24}
+RADIUS = {"control": 10, "button": 14, "panel": 16}
+TYPE_SIZE = {"body": 14, "section": 16, "title": 30}
 
 
 def status_label_style(tone, *, bold=True, letter_spaced=True):
@@ -113,11 +113,11 @@ def build_app_stylesheet(text_scale=1.0):
     return f"""
         QMainWindow, QWidget {{ background: {c['window']}; color: {c['text']}; }}
         QTabWidget::pane {{ border: 1px solid {c['border']}; border-radius: {r['panel']}px; top: -1px; }}
-        QTabBar::tab {{ background: {c['surface_tab']}; color: {c['text_muted']}; padding: 10px 18px; margin-right: 4px; border-radius: {r['button']}px {r['button']}px 0 0; }}
-        QTabBar::tab:selected {{ background: {c['surface_tab_selected']}; color: {c['text_bright']}; }}
+        QTabBar::tab {{ background: {c['surface_tab']}; color: {c['text_muted']}; padding: 12px 22px; margin-right: 6px; border-radius: {r['button']}px; }}
+        QTabBar::tab:selected {{ background: {c['surface_tab_selected']}; color: {c['accent']}; }}
         QGroupBox {{ border: 1px solid {c['border']}; border-radius: {r['panel']}px; margin-top: 12px; padding: 12px; font-weight: 600; }}
         QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 6px; color: {c['text_soft']}; }}
-        QLabel#pageTitle {{ font-size: {type_size['title']}px; font-weight: 700; color: {c['text_soft']}; }}
+        QLabel#pageTitle {{ font-size: {type_size['title']}px; font-weight: 700; color: {c['text_bright']}; }}
         QLabel#sectionTitle {{ font-size: {type_size['section']}px; font-weight: 700; color: {c['text']}; }}
         QLabel#gettingStartedStep {{ font-weight: 700; color: {c['text_soft']}; }}
         QLabel#emptyStateTitle {{ font-size: {empty_title_size}px; font-weight: 700; color: {c['text']}; }}
@@ -134,7 +134,7 @@ def build_app_stylesheet(text_scale=1.0):
         QProgressBar#receiveProgress {{ border: 1px solid {c['border_control']}; border-radius: 5px; background: {c['surface_scrollbar']}; color: {c['text']}; text-align: center; font-size: {progress_size}px; }}
         QProgressBar#receiveProgress::chunk {{ background: {c['positive']}; border-radius: 4px; }}
         QLineEdit, QComboBox, QSpinBox, QTextEdit, QTableView, QListWidget {{ background: {c['surface']}; border: 1px solid {c['border_control']}; border-radius: {r['control']}px; padding: 6px; selection-background-color: {c['accent_selection']}; }}
-        QPushButton {{ background: {c['surface_raised']}; border: 1px solid {c['border_button']}; border-radius: {r['button']}px; padding: 8px 12px; }}
+        QPushButton {{ background: {c['surface_raised']}; border: 1px solid {c['border_button']}; border-radius: {r['button']}px; padding: 9px 14px; }}
         QPushButton#stageSelector {{ text-align: left; padding: 6px 9px; }}
         QPushButton#stageSelector:checked {{ background: {c['accent_checked']}; border-color: {c['accent_checked_border']}; color: {c['accent_checked_text']}; }}
         QPushButton:hover {{ background: {c['surface_hover']}; }}
@@ -145,11 +145,14 @@ def build_app_stylesheet(text_scale=1.0):
         QScrollBar:vertical {{ background: {c['surface_scrollbar']}; width: 10px; }}
         QScrollBar::handle:vertical {{ background: {c['surface_scrollbar_handle']}; border-radius: 5px; min-height: 30px; }}
         QPushButton:disabled {{ color: {c['text_disabled']}; background: {c['surface_disabled']}; }}
-        QPushButton#primaryAction {{ background: {c['accent']}; color: {c['text_primary']}; font-weight: 700; border: 0; padding: 10px 16px; }}
+        QPushButton#primaryAction {{ background: {c['accent']}; color: {c['text_primary']}; font-weight: 700; border: 0; padding: 12px 20px; }}
         QPushButton#primaryAction:hover {{ background: {c['accent_hover']}; }}
         QPushButton#primaryAction:disabled {{ background: {c['surface_primary_disabled']}; color: {c['text_primary_disabled']}; border: 1px solid {c['border_primary_disabled']}; }}
         QPushButton#stopTxAction {{ background: {c['error']}; color: {c['text_primary']}; border: 1px solid {c['error']}; font-weight: 700; }}
         QPushButton#stopTxAction:hover {{ background: #ee6d68; border-color: #ffaaa3; }}
+        QMenuBar, QMenu {{ background: {c['surface_tab']}; color: {c['text']}; }}
+        QMenuBar::item:selected, QMenu::item:selected {{ background: {c['surface_selected']}; color: {c['accent']}; }}
+        QToolTip {{ background: {c['surface_raised']}; color: {c['text']}; border: 1px solid {c['border_control']}; padding: 6px; }}
         QHeaderView::section {{ background: {c['surface_header']}; color: {c['text_header']}; border: 0; padding: 7px; }}
         QPushButton:focus, QLineEdit:focus, QComboBox:focus, QSpinBox:focus,
         QTextEdit:focus, QTableView:focus, QListWidget:focus,

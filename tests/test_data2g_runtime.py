@@ -4,12 +4,20 @@ from unittest.mock import patch
 from data2g import modem
 from data2g import codes
 from data2g.arq.engine import receive_accept
-from data2g_receive_host import enable_advertised_receive_lengths
+from data2g_receive_host import (enable_advertised_receive_lengths,
+                                 waterfall_audio_datagram)
 from data2g_runtime import (data2g_audio_device_selector, local_host_arguments,
                             local_host_command)
 
 
 class Data2GRuntimeTests(unittest.TestCase):
+    def test_waterfall_tap_mirrors_the_host_left_channel_and_rate(self):
+        import numpy as np
+        audio = np.asarray([0.25, -0.25, 0.5, -0.5], dtype=np.float32).tobytes()
+        packet = waterfall_audio_datagram(audio, channels=2, sample_rate=48000)
+        self.assertEqual(int.from_bytes(packet[:4], "big"), 48000)
+        np.testing.assert_allclose(np.frombuffer(packet[4:], dtype="<f4"), [0.25, 0.5])
+
     def test_merged_pr65_receive_policy_is_left_unchanged(self):
         from data2g.arq import engine
         original = modem.Accept.of.__func__

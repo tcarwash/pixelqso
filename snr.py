@@ -48,4 +48,5 @@ def snr_lines(card, *, sent=False):
     if reported is not None:
         label = "Sent SNR report" if sent else "Their SNR report"
         lines.append(f"{label}: {float(reported):+g} dB")
-    return lines or ["SNR: Not available"]
+    from card_feedback import report_lines
+    return (lines or ["SNR: Not available"]) + report_lines(card, sent=sent)

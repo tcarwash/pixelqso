@@ -35,6 +35,11 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QListWidget
 
 import cardmodem as modem
 from card_ids import allocate_card_id
+from card_animation import (artwork_digest, validate_link, partner as animation_partner,
+                            details as animation_details)
+from animation_editor import AnimationAuthor
+from card_feedback import make_report as make_reception_report, report_lines as reception_report_lines
+from transmit_preview import LocalTransmitPreview, Data2GTransmitPreview
 from snr import set_measured_snr, snr_lines
 from backend_adapters import (AdapterKind, DATA2G_ADAPTER, DecodeFailure,
                               DecodeFailureKind, DecodeOutcome,
@@ -56,7 +61,7 @@ from data2g_runtime import (data2g_audio_device_selector,
                             validate_data2g_ports)
 from on_air import SessionRecorder, card_reference, decoded_reference
 from card_views import (DeckDialog, card_art, deck_events, deck_image,
-                        incoming_card_text, single_card_image)
+                        incoming_card_text, single_card_image, AnimationDetailsDialog)
 from webserver import CompanionServer
 from ui_theme import (COLORS, SPACING, build_app_stylesheet, palette_swatch_style,
                       semantic_text_style, status_label_style)
@@ -83,7 +88,7 @@ def normalize_card_palette(card):
         if len(color) != 3:
             return modem.Card(card.callsign, card.grid, list(PALETTE),
                               [0] * (card.width * card.height), card.card_id,
-                              card.width, card.height)
+                              card.width, card.height, copy.deepcopy(card.animation))
         source.append(tuple(
             max(0, min(15, round(int(channel) / 17) if int(channel) > 15 else int(channel)))
             for channel in color))
@@ -96,7 +101,7 @@ def normalize_card_palette(card):
             range(len(PALETTE)),
             key=lambda target: sum((rgb[k] - PALETTE[target][k]) ** 2 for k in range(3))))
     return modem.Card(card.callsign, card.grid, list(PALETTE), mapped_pixels,
-                      card.card_id, card.width, card.height)
+                      card.card_id, card.width, card.height, copy.deepcopy(card.animation))
 
 CW_MORSE = {
     "A": ".-", "B": "-...", "C": "-.-.", "D": "-..", "E": ".",
@@ -183,6 +188,22 @@ def received_card_key(report):
 def session_wall_card_key(report):
     """Stable identity for one card while provisional snapshots improve."""
     return received_card_key(report)
+
+
+def same_received_card(left, right):
+    """Match improving provisional snapshots without merging known new artwork."""
+    if received_card_key(left) != received_card_key(right):
+        return False
+    a, b = left.get('card') or {}, right.get('card') or {}
+    if (a.get('width', 32), a.get('height', 32)) != (b.get('width', 32), b.get('height', 32)):
+        return False
+    first = a.get('image_id') or a.get('image_crc32')
+    second = b.get('image_id') or b.get('image_crc32')
+    if first is not None and second is not None:
+        return first == second
+    if a.get('exact') and b.get('exact') and left.get('pixels') is not None and right.get('pixels') is not None:
+        return left['pixels'] == right['pixels']
+    return True
 
 
 class ReceiveStatusLabel(QLabel):
@@ -480,7 +501,8 @@ def decode_all_card_backends(audio, sample_rate, audio_placement="near_carrier",
         if copy_cache is not None:
             copy_cache.update(audio,sample_rate,copies,capture_start_sample)
             cached_audio,cached_copies=copy_cache.materialize()
-            if cached_copies:
+            if cached_copies and any(copy.diagnostics.get('acquisition_start_sample', 0) >= 0
+                                     for copy in cached_copies):
                 audio,sample_rate,copies=cached_audio,8000,cached_copies
         if copies:
             for copy in copies:
@@ -717,6 +739,11 @@ class LiveDecodeWorker(QRunnable):
                               self.capture_start_utc+scan_start/self.sample_rate)
                     found=find_copies(audio[scan_start:scan_end],self.sample_rate,
                                       capture_start_utc=scan_utc)
+                    with self.copy_cache.lock:
+                        for digest, link in getattr(found, 'animation_links', ()):
+                            self.copy_cache.animation_links.add(digest, link)
+                        for part in getattr(found, 'feedback_parts', ()):
+                            self.copy_cache.feedback.add_part(*part)
                     for copy in found:
                         copy.start+=scan_start
                         copy.end+=scan_start
@@ -827,6 +854,8 @@ class CardCanvas(QWidget):
         self.tool = "draw"
         self.keyboard_cursor = (0, 0)
         self.show_grid = True
+        self.onion_image = None
+        self.onion_opacity = 0.3
         self.last_paint_pixel = None
         self.undo_stack = []
         self.redo_stack = []
@@ -920,6 +949,12 @@ class CardCanvas(QWidget):
                 rgb = self.card.palette[self.card.pixels[y * self.card.width + x]]
                 p.fillRect(QRect(int(ox+x*cell), int(oy+y*cell), int(cell+1), int(cell+1)),
                            QColor(*(v * 17 for v in rgb)))
+        if self.onion_image is not None:
+            p.save()
+            p.setOpacity(self.onion_opacity)
+            p.drawImage(QRect(round(ox), round(oy), round(cell*self.card.width), round(cell*self.card.height)),
+                        self.onion_image)
+            p.restore()
         p.setPen(QPen(QColor(COLORS["editor_grid"]), 0.5))
         for x in range(self.card.width+1) if self.show_grid else ():
             p.drawLine(int(ox+x*cell), int(oy), int(ox+x*cell), int(oy+cell*self.card.height))
@@ -1104,6 +1139,9 @@ class CardCanvas(QWidget):
                                       "width": width, "height": height, "pixels": values})
         self.selected_layer = None
         self.selection_rect = QRect(); self.selection_handle = QRect()
+        self.selection_origin = None
+        self.hover_layer = self.resize_layer = None
+        self.hover_remove_rect = QRect(); self.hover_convert_rect = QRect(); self.hover_resize_rect = QRect()
         self.drag_layer = None
         self.undo_stack.clear(); self.redo_stack.clear()
         self._render_layers()
@@ -1987,6 +2025,7 @@ class MainWindow(QMainWindow):
         editor_content = self.make_card_tab()
         self.editor_dialog = EditorDialog(self)
         editor_layout = QVBoxLayout(self.editor_dialog); editor_layout.addWidget(editor_content)
+        self.animation_author.attach_shortcuts(self.editor_dialog)
         self.editor_done_button = QPushButton("Save and close"); self.editor_done_button.setObjectName("primaryAction")
         self.editor_done_button.clicked.connect(self.editor_primary_action); editor_layout.addWidget(self.editor_done_button)
         self.editor_baseline = self.editor_signature()
@@ -2084,6 +2123,10 @@ class MainWindow(QMainWindow):
         more_menu = QMenu(self)
         duplicate = more_menu.addAction("Duplicate card")
         duplicate.triggered.connect(self.duplicate_library_card)
+        animation = more_menu.addAction("Make selected card frame 2…")
+        animation.triggered.connect(self.link_library_animation)
+        unlink = more_menu.addAction("Remove animation reference")
+        unlink.triggered.connect(self.unlink_library_animation)
         delete = more_menu.addAction("Delete card…")
         delete.triggered.connect(self.delete_library_card)
         more = QPushButton("More"); more.setMenu(more_menu); more.setToolTip("More card actions")
@@ -2259,7 +2302,7 @@ class MainWindow(QMainWindow):
             {"my": 0, "sent": 1, "starter": 2}[entry[1]], entry[0].name.casefold()))
         for path, kind in card_sources:
             try:
-                data = json.loads(path.read_text()); card = modem.Card(data["callsign"], data["grid"], [tuple(c) for c in data["palette"]], data["pixels"], data.get("card_id", 0xC0DE), data.get("width", 32), data.get("height", 32))
+                data = json.loads(path.read_text()); card = modem.Card(data["callsign"], data["grid"], [tuple(c) for c in data["palette"]], data["pixels"], data.get("card_id", 0xC0DE), data.get("width", 32), data.get("height", 32), copy.deepcopy(data.get("animation")))
                 preview = QImage(card.width, card.height, QImage.Format.Format_RGB32)
                 for i, index in enumerate(card.pixels): preview.setPixelColor(i % card.width, i // card.width, QColor(*(int(v)*17 for v in card.palette[index])))
                 section = {"my": "My card", "sent": "Sent card", "starter": "Starter card"}[kind]
@@ -2271,7 +2314,10 @@ class MainWindow(QMainWindow):
                     f"{section} · {path.stem} · {card.callsign or 'No call sign'} · "
                     f"{card.grid or 'No grid'} · {card.width}×{card.height} · "
                     f"{len(card.palette)} colors{origin}")
-                item = QListWidgetItem(f"{section} · {path.stem}")
+                animation_note = (f" · Animation frame 2 of {card.animation['first_card_id']:04X}"
+                                  if card.animation else '')
+                card_details += animation_note
+                item = QListWidgetItem(f"{section} · {path.stem}{animation_note}")
                 item.setToolTip(card_details)
                 item.setData(Qt.ItemDataRole.AccessibleTextRole, card_details)
                 item.setIcon(QIcon(card_art(preview, card.callsign, card.grid, QSize(190, 238))))
@@ -2374,7 +2420,10 @@ class MainWindow(QMainWindow):
         self.library_search.setFocus()
 
     def editor_signature(self):
-        return (self.call.text(), self.grid.text(), self.canvas.snapshot())
+        if hasattr(self, 'animation_author') and self.animation_author.frames:
+            return (self.call.text(), self.grid.text(), self.animation_author.signature())
+        return (self.call.text(), self.grid.text(), self.canvas.snapshot(),
+                json.dumps(self.card.animation, sort_keys=True))
 
     def _set_editor_title(self, title):
         self.editor_dialog.setProperty("pixelqsoBaseTitle", title)
@@ -2439,7 +2488,7 @@ class MainWindow(QMainWindow):
             self.card.validate()
             self.quick_reply_card = modem.Card(self.card.callsign, self.card.grid,
                 list(self.card.palette), list(self.card.pixels), self.card.card_id,
-                self.card.width, self.card.height)
+                self.card.width, self.card.height, copy.deepcopy(self.card.animation))
             self.quick_draw_active = False
             self.editor_dialog.accept()
             if self._reply_stage(self.reply_report):
@@ -2478,7 +2527,7 @@ class MainWindow(QMainWindow):
         pixels = list(card.pixels)
         data = {"callsign": card.callsign, "grid": card.grid, "palette": card.palette,
                 "pixels": pixels, "card_id": card.card_id, "width": card.width,
-                "height": card.height, "base_pixels": pixels, "stamp_layers": [],
+                "height": card.height, "animation": copy.deepcopy(card.animation), "base_pixels": pixels, "stamp_layers": [],
                 "archive_reason": "quick_draw_transmission"}
         serialized = json.dumps(data, indent=2) + "\n"
         target.write_text(serialized)
@@ -2528,7 +2577,7 @@ class MainWindow(QMainWindow):
                     [tuple(color) for color in data["palette"]],
                     [int(pixel) for pixel in data["pixels"]],
                     int(data.get("card_id", 0xC0DE)), int(data.get("width", 32)),
-                    int(data.get("height", 32)))
+                    int(data.get("height", 32)), copy.deepcopy(data.get("animation")))
                 card.validate()
                 image = QImage(card.width, card.height, QImage.Format.Format_RGB32)
                 for index, color_index in enumerate(card.pixels):
@@ -2577,6 +2626,7 @@ class MainWindow(QMainWindow):
             return False
         self.card = card
         self.card_path = None
+        self.animation_author.reset()
         self.canvas.set_card(card, data.get("base_pixels", pixels), data.get("stamp_layers", []))
         self._sync_editor_controls()
         self.call.setText(card.callsign)
@@ -2640,7 +2690,7 @@ class MainWindow(QMainWindow):
             data = json.loads(source.read_text())
             modem.Card(data["callsign"], data["grid"], [tuple(c) for c in data["palette"]],
                        data["pixels"], data.get("card_id", 0xC0DE),
-                       data.get("width", 32), data.get("height", 32)).validate()
+                       data.get("width", 32), data.get("height", 32), copy.deepcopy(data.get("animation"))).validate()
             stem = f"{source.stem}-copy"
             target = source.with_name(stem + source.suffix)
             suffix = 2
@@ -2663,15 +2713,121 @@ class MainWindow(QMainWindow):
         except (OSError, ValueError, KeyError, TypeError) as exc:
             QMessageBox.warning(self, "Couldn't duplicate card", str(exc))
 
+    def link_library_animation(self):
+        item, _ = self._selected_library_item()
+        if item is None:
+            return
+        path = Path(item.data(Qt.ItemDataRole.UserRole))
+        if path.parent != DATA / "cards":
+            QMessageBox.information(self, "Choose a card in My Cards",
+                                    "Open or copy this card into My Cards before making it frame 2.")
+            return
+        try:
+            second = json.loads(path.read_text())
+            choices = []
+            for candidate in sorted((DATA / "cards").glob("*.json")):
+                if candidate == path:
+                    continue
+                try:
+                    first = json.loads(candidate.read_text())
+                    if (str(first.get("callsign", "")).upper() != str(second.get("callsign", "")).upper()
+                            or first.get("card_id") == second.get("card_id") or first.get("animation")
+                            or (first.get("width", 32), first.get("height", 32)) !=
+                            (second.get("width", 32), second.get("height", 32))):
+                        continue
+                    choices.append((candidate, first, artwork_digest(first)))
+                except (OSError, ValueError, TypeError, KeyError, IndexError):
+                    continue
+            if not choices:
+                raise ValueError("Save another card with the same callsign and dimensions, a different card ID, and no animation reference first.")
+            dialog = QDialog(self); dialog.setWindowTitle("Make a two-frame animation")
+            layout = QVBoxLayout(dialog)
+            help_text = QLabel(f"Frame 2: {path.stem}\nChoose the first card. Send each card normally; receivers animate after both are verified.")
+            help_text.setWordWrap(True); layout.addWidget(help_text)
+            form = QFormLayout(); selector = QComboBox()
+            for candidate, first, digest in choices:
+                selector.addItem(f"{candidate.stem} · {int(first['card_id']):04X}")
+            form.addRow("Frame 1", selector)
+            duration = QSpinBox(); duration.setRange(100, 10000); duration.setSingleStep(100)
+            duration.setSuffix(" ms per frame")
+            current = second.get("animation") or {}
+            duration.setValue(current.get("frame_ms", 500)); form.addRow("Timing", duration)
+            for i, (_, first, _) in enumerate(choices):
+                if first['card_id'] == current.get('first_card_id'):
+                    selector.setCurrentIndex(i)
+            layout.addLayout(form)
+            preview = QLabel(); preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            preview.setFixedSize(320, 220); layout.addWidget(preview, 0, Qt.AlignmentFlag.AlignCenter)
+            timer = QTimer(dialog); state = [0]
+            def draw_preview():
+                first = choices[selector.currentIndex()][1]
+                selected = first if state[0] == 0 else second
+                image = self.card_image({"card": selected, "pixels": selected['pixels']})
+                if image is not None:
+                    preview.setPixmap(QPixmap.fromImage(image).scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio))
+                preview.setAccessibleName(f"Animation preview · frame {state[0]+1}")
+                state[0] ^= 1
+            timer.timeout.connect(draw_preview)
+            duration.valueChanged.connect(timer.setInterval)
+            selector.currentIndexChanged.connect(lambda _: draw_preview())
+            timer.start(duration.value()); draw_preview()
+            actions = QHBoxLayout(); save = QPushButton("Save animation reference")
+            cancel = QPushButton("Cancel"); save.clicked.connect(dialog.accept); cancel.clicked.connect(dialog.reject)
+            actions.addWidget(save); actions.addWidget(cancel); layout.addLayout(actions)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            _, first, digest = choices[selector.currentIndex()]
+            second['animation'] = validate_link(dict(first_card_id=int(first['card_id']),
+                first_digest=digest, frame_ms=duration.value()), int(second['card_id']))
+            if current and current != second['animation']:
+                second['card_id'] = self._new_card_id()
+            self._write_library_animation(path, second)
+            self.library_status.setText("Animation saved · send frame 1 and frame 2 normally, in either order")
+        except (OSError, ValueError, TypeError, KeyError, IndexError) as exc:
+            QMessageBox.warning(self, "Couldn't link animation", str(exc))
+
+    def _write_library_animation(self, path, data):
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, suffix=".tmp", delete=False) as handle:
+                temporary = Path(handle.name)
+                handle.write(json.dumps(data, indent=2) + "\n")
+            os.replace(temporary, path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        if self.card_path == path:
+            self.card.animation = copy.deepcopy(data.get('animation'))
+            self.card.card_id = data['card_id']
+            self._update_editor_saved_state()
+        self.refresh_card_library()
+
+    def unlink_library_animation(self):
+        item, _ = self._selected_library_item()
+        if item is None:
+            return
+        path = Path(item.data(Qt.ItemDataRole.UserRole))
+        if path.parent != DATA / "cards":
+            return
+        try:
+            data = json.loads(path.read_text())
+            data.pop('animation', None)
+            self._write_library_animation(path, data)
+            self.library_status.setText("Animation reference removed · this is now an ordinary card")
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Couldn't remove animation reference", str(exc))
+
     def _load_card_path(self, path):
         d = json.loads(path.read_text())
-        self.card = modem.Card(d["callsign"], d["grid"], [tuple(c) for c in d["palette"]], d["pixels"], d.get("card_id", 0xC0DE), d.get("width", 32), d.get("height", 32))
+        self.animation_author.reset()
+        self.card = modem.Card(d["callsign"], d["grid"], [tuple(c) for c in d["palette"]], d["pixels"], d.get("card_id", 0xC0DE), d.get("width", 32), d.get("height", 32), copy.deepcopy(d.get("animation")))
         self.card = normalize_card_palette(self.card)
         self.card.validate(); self.card_path = path
         self.canvas.set_card(self.card, d.get("base_pixels", self.card.pixels), d.get("stamp_layers", []))
         self._sync_editor_controls()
         self.call.setText(self.card.callsign); self.grid.setText(self.card.grid)
         self._set_editor_format(self.card)
+        self.animation_author.load_pair(path, d, DATA / 'cards')
 
     def refresh_qso_log(self, *_):
         if not hasattr(self, "log_gallery"): return
@@ -2789,9 +2945,8 @@ class MainWindow(QMainWindow):
                     "latest_received_at": report.get("logged_at") or entry.get("started_at", ""),
                     "status": "Received archive", "deck_type": "received_archive",
                     "sent_cards": [], "received_cards": []})
-                key = self._received_archive_key(report)
                 existing = next((item for item in group["received_cards"]
-                                if self._received_archive_key(item) == key), None)
+                                if same_received_card(item, report)), None)
                 logged_at = report.get("logged_at") or entry.get("started_at", "")
                 if not group["started_at"] or (logged_at and logged_at < group["started_at"]):
                     group["started_at"] = logged_at
@@ -2863,7 +3018,7 @@ class MainWindow(QMainWindow):
             data = json.loads(Path(item.data(Qt.ItemDataRole.UserRole)).read_text())
             card = modem.Card(data["callsign"], data.get("grid", ""),
                               [tuple(color) for color in data["palette"]], data["pixels"],
-                              data.get("card_id", 0xC0DE), data.get("width", 32), data.get("height", 32))
+                              data.get("card_id", 0xC0DE), data.get("width", 32), data.get("height", 32), copy.deepcopy(data.get("animation")))
             card.validate()
             image = self.card_image({"card": data, "pixels": data["pixels"]})
             QApplication.clipboard().setImage(image)
@@ -2894,7 +3049,7 @@ class MainWindow(QMainWindow):
             card = modem.Card(str(data["callsign"]), str(data.get("grid", "")),
                               [tuple(map(int, color)) for color in data["palette"]],
                               list(map(int, data["pixels"])), int(data.get("card_id", 0xC0DE)),
-                              int(data.get("width", 32)), int(data.get("height", 32)))
+                              int(data.get("width", 32)), int(data.get("height", 32)), copy.deepcopy(data.get("animation")))
             card.validate()
             default_name = f"{source.stem}.png"
             target_name, file_filter = QFileDialog.getSaveFileName(
@@ -2979,6 +3134,7 @@ class MainWindow(QMainWindow):
         except (OSError, ValueError): return
         if not deck_events(entry):
             self.log_status.setText("This contact has no saved image cards yet."); return
+        entry = {**entry, 'animation_candidates': self._saved_animation_candidates()}
         provenance = path if path is not None else Path(
             f"received-{entry.get('peer_callsign', 'unknown')}")
         add_received = lambda card: self.add_received_card_to_library(card, provenance)
@@ -3229,9 +3385,9 @@ class MainWindow(QMainWindow):
         self.listen_canvas_button.clicked.connect(self.listen_to_canvas)
         side.addWidget(self.listen_canvas_button)
         self.load_stamps()
-        buttons = QHBoxLayout()
-        for label, handler in (("New", self.new_card), ("Open…", self.open_card), ("Save", self.save_card), ("Paste image", self.paste_card_image), ("Export WAV…", self.export_wav)):
-            b = QPushButton(label); b.clicked.connect(handler); buttons.addWidget(b)
+        buttons = QGridLayout()
+        for index, (label, handler) in enumerate((("New", self.new_card), ("Open…", self.open_card), ("Save", self.save_card), ("Paste image", self.paste_card_image), ("Export WAV…", self.export_wav))):
+            b = QPushButton(label); b.clicked.connect(handler); buttons.addWidget(b, index // 3, index % 3)
             if label == "Save":
                 self.editor_save_button = b
                 self.editor_save_button.setAccessibleDescription(
@@ -3240,7 +3396,13 @@ class MainWindow(QMainWindow):
         self._update_card_identity_hint()
         side.addStretch()
         self.status = QLabel("Ready")
+        self.status.setWordWrap(True)
         side.addWidget(self.status)
+        self.animation_author = AnimationAuthor(self)
+        drawing.insertWidget(0, self.animation_author)
+        side.insertWidget(0, self.animation_author.preview_panel)
+        self.call.textChanged.connect(self.animation_author.changed)
+        self.grid.textChanged.connect(self.animation_author.changed)
         self.canvas.image_dropped.connect(self.place_stamp_image)
         self.canvas.changed.connect(self._sync_editor_controls)
         self.canvas.changed.connect(self._update_editor_saved_state)
@@ -3740,6 +3902,7 @@ class MainWindow(QMainWindow):
 
     def new_card(self):
         if hasattr(self, "editor_dialog") and self.editor_dialog.isVisible() and not self.confirm_editor_close(): return
+        self.animation_author.reset()
         self.card = default_card(self.station_call.text().strip().upper() or "N0CALL",
                                  self.station_grid.text().strip().upper() or "AA00",
                                  card_id=self._new_card_id())
@@ -3755,6 +3918,8 @@ class MainWindow(QMainWindow):
     def save_card(self):
         self.update_identity()
         try:
+            if self.animation_author.frames:
+                return self.animation_author.save(DATA / 'cards')
             self.card.validate()
             target = self.card_path
             if target is None:
@@ -3766,7 +3931,7 @@ class MainWindow(QMainWindow):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(json.dumps({"callsign": self.card.callsign, "grid": self.card.grid,
                 "palette": self.card.palette, "pixels": self.card.pixels, "card_id": self.card.card_id,
-                "width": self.card.width, "height": self.card.height,
+                "width": self.card.width, "height": self.card.height, "animation": copy.deepcopy(self.card.animation),
                 "base_pixels": self.canvas.base_pixels, "stamp_layers": self.canvas.layer_data()}, indent=2))
             self.card_path = target
             self.editor_baseline = self.editor_signature()
@@ -4223,6 +4388,12 @@ class MainWindow(QMainWindow):
         left = QWidget(); left.setLayout(left_panel); left.setMaximumWidth(410)
 
         right_panel = QVBoxLayout()
+        self.traffic_preview = QStackedWidget()
+        self.receive_workspace = QWidget()
+        received_layout = QVBoxLayout(self.receive_workspace)
+        received_layout.setContentsMargins(0, 0, 0, 0)
+        self.traffic_preview.addWidget(self.receive_workspace)
+        right_panel.addWidget(self.traffic_preview, 1)
         view_heading = QHBoxLayout()
         view_heading.addWidget(QLabel("Cards heard this session"), 1)
         self.listen_indicator = QLabel("● STARTING")
@@ -4230,7 +4401,7 @@ class MainWindow(QMainWindow):
         self.listen_indicator.setStyleSheet(status_label_style("muted"))
         self._refresh_listen_indicator_width()
         view_heading.addWidget(self.listen_indicator)
-        right_panel.addLayout(view_heading)
+        received_layout.addLayout(view_heading)
         self.incoming_card_details = QLabel()
         self.incoming_card_details.setTextFormat(Qt.TextFormat.PlainText)
         self.incoming_card_details.setWordWrap(True)
@@ -4238,7 +4409,7 @@ class MainWindow(QMainWindow):
         self.incoming_card_details.setAccessibleName("Incoming card metadata")
         self.incoming_card_details.setStyleSheet(semantic_text_style("soft", padding="4px"))
         self.incoming_card_details.hide()
-        right_panel.addWidget(self.incoming_card_details)
+        received_layout.addWidget(self.incoming_card_details)
         self.rx_waterfall = RxAudioWaterfall()
         self.rx_visual_stack = QStackedWidget()
         self.rx_waterfall_unavailable = QLabel(
@@ -4247,7 +4418,7 @@ class MainWindow(QMainWindow):
         self.rx_waterfall_unavailable.setObjectName("receiveWaterfallUnavailable")
         self.rx_visual_stack.addWidget(self.rx_waterfall)
         self.rx_visual_stack.addWidget(self.rx_waterfall_unavailable)
-        right_panel.addWidget(self.rx_visual_stack)
+        received_layout.addWidget(self.rx_visual_stack)
         self.receive_stack = QStackedWidget()
         self.session_wall_page = QWidget()
         wall_layout = QHBoxLayout(self.session_wall_page); wall_layout.setContentsMargins(0, 0, 0, 0); wall_layout.setSpacing(SPACING["sm"])
@@ -4317,7 +4488,8 @@ class MainWindow(QMainWindow):
         self.receive_preview_box.hide()
         wall_layout.addWidget(self.receive_preview_box, 0)
         self.receive_stack.setCurrentWidget(self.session_wall_page)
-        right_panel.addWidget(self.receive_stack, 1)
+        received_layout.addWidget(self.receive_stack, 1)
+        self.traffic_preview.addWidget(self._make_transmit_preview())
         self.rx_status = ReceiveStatusLabel("Ready to receive")
         self.rx_status.setObjectName("receiveStatus")
         self.rx_status.setWordWrap(True)
@@ -5821,6 +5993,12 @@ class MainWindow(QMainWindow):
             self.on_air.emit("host_rx_frame", frame_ref, binary=frame)
         try:
             _assembly, metadata = self.card_assembly.feed_transport_frame("PIXELQSO", frame)
+            if metadata.get("animation_metadata_only"):
+                self._refresh_animation_references()
+                return
+            if metadata.get("reception_metadata_only"):
+                self._refresh_animation_references()
+                return
             pixels = metadata.pop("pixels")
             palette_id = int(metadata["palette_id"])
             palette = [list(color) for color in modem.AVATAR_PALETTES[palette_id]]
@@ -6011,7 +6189,7 @@ class MainWindow(QMainWindow):
                     str(data.get("grid", self.station_grid.text())).strip().upper(),
                     [tuple(int(v) for v in color) for color in data["palette"]],
                     [int(v) for v in data["pixels"]], int(time.time_ns() & 0xffff),
-                    int(data.get("width", 32)), int(data.get("height", 32)))
+                    int(data.get("width", 32)), int(data.get("height", 32)), copy.deepcopy(data.get("animation")))
                 card.validate()
                 self.quick_reply_card = card
                 request["result"] = {"loaded": True, "card_id": card.card_id}
@@ -6262,6 +6440,9 @@ class MainWindow(QMainWindow):
         if (report is not None and not duplicate and card.get("callsign") and
                 card.get("card_id") is not None):
             self._add_session_wall_card(report, image=image)
+            self._show_reply_action(report)
+            if card.get('reception_report'):
+                self._refresh_animation_references()
             if not exact:
                 self._record_received_card(report)
         identity = " ".join(value for value in (
@@ -6546,7 +6727,7 @@ class MainWindow(QMainWindow):
             data = json.loads(Path(path).read_text())
             card = modem.Card(data["callsign"], data["grid"], [tuple(c) for c in data["palette"]],
                               list(data["pixels"]), data.get("card_id", 0xC0DE),
-                              data.get("width", 32), data.get("height", 32))
+                              data.get("width", 32), data.get("height", 32), copy.deepcopy(data.get("animation")))
         self.transmit_exchange(card_override=card)
 
     def _send_quick_draw_card(self):
@@ -6790,11 +6971,13 @@ class MainWindow(QMainWindow):
                         data2g)
                     return
             if backend is not None:
+                card = self._prepare_outgoing_card(card, self._outgoing_message_type())
                 total_seconds = backend.estimate_seconds(card, self.repeat_count.value())
             else:
                 symbols, profile = self._card_tx_symbols(card)
-                from modem_envelope import HEADER_SECONDS
-                total_seconds = len(symbols) / profile.baud + 2*HEADER_SECONDS*self.repeat_count.value()
+                from modem_envelope import HEADER_SECONDS, metadata_header_count
+                card = self._prepare_outgoing_card(card, self._outgoing_message_type())
+                total_seconds = len(symbols) / profile.baud + (2+metadata_header_count(card, mode))*HEADER_SECONDS*self.repeat_count.value()
                 if self.cwid_enabled.isChecked():
                     station_call = self.station_call.text().strip().upper()
                     cwid_text = self.cwid_message.text().strip().upper()
@@ -6825,14 +7008,116 @@ class MainWindow(QMainWindow):
                         "Choose a card and burst type to see estimated send time.",
                         self.selected_adapter().capabilities.kind is AdapterKind.FRAME_TRANSPORT)
 
+    def _make_transmit_preview(self):
+        self.tx_preview_box = QGroupBox('↑ SENDING · outgoing card')
+        self.tx_preview_box.setObjectName('transmitPreview')
+        self.tx_preview_box.setAccessibleName('Outgoing transmission preview')
+        self.tx_preview_box.setStyleSheet(
+            'QGroupBox#transmitPreview { border:2px solid #c69a54; border-radius:9px; '
+            'background:#201c16; margin-top:14px; padding:12px; } '
+            'QGroupBox#transmitPreview::title { color:#ffd48a; font-weight:800; }')
+        layout = QVBoxLayout(self.tx_preview_box)
+        self.tx_preview_identity = QLabel(); self.tx_preview_identity.setWordWrap(True)
+        self.tx_preview_identity.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.tx_preview_identity)
+        self.tx_preview_phase = QLabel('Preparing outgoing card')
+        self.tx_preview_phase.setWordWrap(True)
+        self.tx_preview_phase.setStyleSheet('color:#ffd48a; font-weight:700;')
+        layout.addWidget(self.tx_preview_phase)
+        self.tx_preview_view = QLabel(); self.tx_preview_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tx_preview_view.setMinimumSize(194, 194)
+        self.tx_preview_view.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
+        self.tx_preview_view.setAccessibleName('Artwork being sent')
+        layout.addWidget(self.tx_preview_view, 1)
+        self.tx_preview_progress = QProgressBar(); self.tx_preview_progress.setRange(0, 1000)
+        self.tx_preview_progress.setAccessibleName('Outgoing transmission progress')
+        layout.addWidget(self.tx_preview_progress)
+        self.tx_preview_detail = QLabel(); self.tx_preview_detail.setWordWrap(True)
+        layout.addWidget(self.tx_preview_detail)
+        notice = QLabel('LOCAL SEND PROGRESS · remote reception unconfirmed')
+        notice.setWordWrap(True); notice.setObjectName('supportingText'); layout.addWidget(notice)
+        return self.tx_preview_box
+
+    def _begin_transmit_preview(self, model, mode_label, stage):
+        if model is None:
+            return
+        self._active_tx_preview = model
+        self._tx_preview_last_update = -float('inf')
+        self._tx_preview_total_audio_samples = len(getattr(self, 'tx_bytes', b''))//2
+        card = model.report['card']
+        stage_label = {'cq': 'CQ', 'exchange': 'Exchange', 'report73': 'RR73 · report',
+                       'final73': '73 · final'}.get(stage, 'Card')
+        if stage == '73':
+            stage_label = 'RR73 · report' if getattr(self.tx_card, 'reception_report', None) else '73 · final'
+        self.tx_preview_identity.setText(
+            f"{card['callsign']} · {card.get('grid', '')} · Card {card['card_id']:04X} · {stage_label} · {mode_label}")
+        title = ('↑ SENDING TEST AUDIO · outgoing card' if isinstance(model, LocalTransmitPreview)
+                 and self.audio_test_mode.isChecked() else '↑ SENDING · outgoing card')
+        self.tx_preview_box.setTitle(title)
+        self.traffic_preview.setCurrentWidget(self.tx_preview_box)
+        self._render_transmit_preview(model.state(0) if isinstance(model, LocalTransmitPreview) else model.state())
+
+    def _render_transmit_preview(self, state):
+        report = {**state['report'], 'card': {**state['report']['card']}}
+        if state['coverage'] is not None:
+            report['card']['pixel_coverage'] = state['coverage']
+        image = self.card_image(report)
+        if image is not None:
+            if state.get('opacity', 1) < 1:
+                faded = QImage(image.size(), QImage.Format.Format_RGB32); faded.fill(QColor('#201c16'))
+                painter = QPainter(faded); painter.setOpacity(state['opacity']); painter.drawImage(0, 0, image); painter.end()
+                image = faded
+            size = QSize(max(194, self.tx_preview_view.width()), max(194, self.tx_preview_view.height()))
+            self.tx_preview_view.setPixmap(QPixmap.fromImage(image).scaled(size,
+                Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation))
+        self.tx_preview_view.setAccessibleName('Outgoing artwork · ' + state['phase'])
+        self.tx_preview_phase.setText(f"Copy {state['copy']} · {state['phase']}")
+        self.tx_preview_detail.setText(state['detail'])
+        percent = max(0, min(1000, round(state['progress']*1000)))
+        self.tx_preview_progress.setValue(percent)
+        label = 'host-confirmed frames' if isinstance(getattr(self, '_active_tx_preview', None), Data2GTransmitPreview) else 'audio playback'
+        self.tx_preview_progress.setFormat(f'{percent/10:.0f}% · {label}')
+
+    def _update_local_transmit_preview(self, *, force=False):
+        model = getattr(self, '_active_tx_preview', None)
+        if not isinstance(model, LocalTransmitPreview):
+            return
+        now = time.monotonic()
+        if not force and now-self._tx_preview_last_update < .1:
+            return
+        self._tx_preview_last_update = now
+        if self.test_link_enabled and self.audio_test_mode.isChecked():
+            samples = self.tx_offset//2
+        elif self.tx_audio is not None:
+            samples = min(self.tx_offset//2, round(self.tx_audio.processedUSecs()*modem.SAMPLE_RATE/1e6))
+        else:
+            samples = 0
+        state = model.state(samples)
+        if samples >= round(model.seconds*modem.SAMPLE_RATE) and self._tx_preview_total_audio_samples > samples:
+            state['phase'] = 'Sending CW identification'
+        state['progress'] = min(1, samples/max(1, self._tx_preview_total_audio_samples))
+        self._render_transmit_preview(state)
+
+    def _end_transmit_preview(self, completed=False):
+        if getattr(self, '_active_tx_preview', None) is None:
+            return
+        if completed:
+            self.tx_preview_progress.setValue(1000)
+            self.tx_preview_progress.setFormat('100% · local send complete')
+        self.tx_preview_phase.setText('Local send complete' if completed else 'Stopped · outgoing card')
+        self._active_tx_preview = None
+        self.traffic_preview.setCurrentWidget(self.receive_workspace)
+
     def _card_tx_audio(self, card, *, beacon=False):
         if self.selected_mode() == LEGACY_MODE_KEY:
             raise ValueError(
                 "The Soft Viterbi modem is receive-only. Select another transfer mode to transmit.")
         stage = "card" if beacon else self._outgoing_message_type()
+        card = self._prepare_outgoing_card(card, stage)
         wire_type = {"report73": "73", "final73": "73"}.get(stage, stage)
         snr_db = self.tx_snr_db if stage in {"exchange", "report73"} else None
         backend = self.selected_backend()
+        self._prepared_tx_preview = None
         adapter = self.selected_adapter()
         if adapter.capabilities.kind is AdapterKind.FRAME_TRANSPORT:
             raise ValueError(
@@ -6841,13 +7126,19 @@ class MainWindow(QMainWindow):
         if backend is not None:
             if adapter.capabilities.kind is not AdapterKind.LOCAL_IMAGE_MODEM:
                 raise ValueError(f"Selected modem adapter {adapter.key!r} cannot encode local audio")
-            return adapter.encode(backend, card, self.repeat_count.value(), wire_type, snr_db,
-                                  interlaced=self.interlaced_copies.isChecked())
+            audio = adapter.encode(backend, card, self.repeat_count.value(), wire_type, snr_db,
+                                   interlaced=self.interlaced_copies.isChecked())
+            self._prepared_tx_preview = LocalTransmitPreview(card, self.selected_mode(), backend,
+                self.repeat_count.value(), wire_type, snr_db, len(audio))
+            return audio
         encode_legacy = getattr(adapter, "encode_legacy", None)
         if not callable(encode_legacy):
             raise ValueError(f"Selected modem adapter {adapter.key!r} does not support legacy packet encoding")
-        return encode_legacy(card, self.repeat_count.value(), wire_type, snr_db,
-                             self.selected_mode(), self.selected_profile(), beacon=beacon)
+        audio = encode_legacy(card, self.repeat_count.value(), wire_type, snr_db,
+                              self.selected_mode(), self.selected_profile(), beacon=beacon)
+        self._prepared_tx_preview = LocalTransmitPreview(card, self.selected_mode(), None,
+            self.repeat_count.value(), wire_type, snr_db, len(audio))
+        return audio
 
     def _append_cwid_audio(self, audio):
         """Append the configured CW ID to locally generated modem audio."""
@@ -7007,6 +7298,7 @@ class MainWindow(QMainWindow):
             if self.tx_timer.isActive(): self.tx_timer.stop()
             if self.tx_audio: self.tx_audio.stop()
             self.tx_audio = None; self.tx_device = None
+            self._end_transmit_preview(completed=False)
             self.stop_tx_btn.setEnabled(False)
             self.exchange_log.append("CAT disconnected during transmission. Audio stopped; verify the radio is unkeyed manually.")
         if connected: self.read_rig()
@@ -7056,24 +7348,33 @@ class MainWindow(QMainWindow):
         if selected_path:
             data = json.loads(Path(selected_path).read_text())
             card = modem.Card(data["callsign"], data["grid"], [tuple(c) for c in data["palette"]],
-                              list(data["pixels"]), data.get("card_id", 0xC0DE), data.get("width", 32), data.get("height", 32))
+                              list(data["pixels"]), data.get("card_id", 0xC0DE), data.get("width", 32), data.get("height", 32), copy.deepcopy(data.get("animation")))
             card = normalize_card_palette(card)
         else:
             card = modem.Card(self.call.text().strip().upper(), self.grid.text().strip().upper(),
                               list(self.card.palette), list(self.card.pixels), self.card.card_id,
-                              self.card.width, self.card.height)
+                              self.card.width, self.card.height, copy.deepcopy(self.card.animation))
         card.validate()
         return card
 
     def _remember_tx_card(self, card):
-        self.tx_card = modem.Card(card.callsign, card.grid, list(card.palette), list(card.pixels),
-                                  card.card_id, card.width, card.height)
+        self.tx_card = copy.deepcopy(card)
         quick = self.quick_reply_card
         self.tx_quick_draw_card = (self.tx_card if quick is not None and not self.auto_armed
                                    and self.exchange_mode.currentIndex() == 0
                                    and quick.card_id == card.card_id
                                    and quick.callsign == card.callsign and quick.grid == card.grid
                                    and quick.pixels == card.pixels else None)
+
+    def _prepare_outgoing_card(self, card, stage):
+        """Freeze the current receive evidence for this one outgoing reply."""
+        result = copy.deepcopy(card)
+        result.reception_report = None
+        received = self.reply_report
+        subject = (received or {}).get('card') or {}
+        if stage in {'exchange', 'report73'} and subject.get('callsign') and subject.get('card_id') is not None:
+            result.reception_report = make_reception_report(received)
+        return result
 
     def _toggle_call_cq(self, enabled):
         self.call_cq_active = bool(enabled)
@@ -7141,7 +7442,7 @@ class MainWindow(QMainWindow):
         self.auto_receive_timer.stop()
         self._stop_local_receive_capture()
         self.card_assembly.begin_receive_window()
-        self.copy_capture_cache = self.copy_capture_cache.__class__()
+        self.copy_capture_cache = self.copy_capture_cache.next_window()
         self.rx_capture_sample_offset = 0
         self._clear_exact_live_preview()
         self._clear_rx_bytes()
@@ -7172,18 +7473,26 @@ class MainWindow(QMainWindow):
         card = (report or {}).get("card") or {}
         if not card:
             return
+        if self._reply_stage(report) is None:
+            self.reply_to_button.hide()
+            self._refresh_operate_primary_action()
+            return
         self.stopped_reply_peers.discard(str(card.get("callsign") or "").strip().upper())
         stage = card.get("message_type", "card")
         if stage == "cq":
-            if self.auto_armed or not self._assembly_verified(report):
+            if self.auto_armed:
                 return
-            self.exchange_mode.setCurrentIndex(1)
-            self.exchange_role.setCurrentIndex(1)
-            self.start_auto_exchange(reply_report=report)
-            return
-        if stage == "exchange":
+            if self._assembly_verified(report):
+                self.exchange_mode.setCurrentIndex(1)
+                self.exchange_role.setCurrentIndex(1)
+                self.start_auto_exchange(reply_report=report)
+                return
+            next_stage = 'exchange'
+        elif stage == 'card':
+            next_stage = 'exchange'
+        elif stage == "exchange":
             next_stage = "report73"
-        elif stage == "73" and card.get("snr_db") is not None:
+        elif stage == "73" and (card.get("snr_db") is not None or card.get('reception_report')):
             next_stage = "final73"
         else:
             self.reply_to_button.setVisible(False)
@@ -7198,9 +7507,23 @@ class MainWindow(QMainWindow):
         self.exchange_mode.setCurrentIndex(0)
         self.transmit_exchange()
 
+    def _feedback_matches_contact(self, card):
+        feedback = card.get('reception_report')
+        return (not self.auto_armed or not feedback or
+                feedback.get('callsign') == self.station_call.text().strip().upper() and
+                feedback.get('card_id') == self.auto_own_card_id)
+
     def _show_reply_action(self, report):
         card = report.get("card") or {}
         if str(card.get("callsign") or "").strip().upper() in self.stopped_reply_peers:
+            return
+        if str(card.get('callsign') or '').upper() == self.station_call.text().strip().upper():
+            return
+        if self.auto_armed and self.auto_peer and str(card.get('callsign') or '').upper() != self.auto_peer:
+            return
+        if self.auto_armed and not self._assembly_verified(report):
+            return
+        if not self._feedback_matches_contact(card):
             return
         self.reply_report = report
         if self.auto_armed:
@@ -7215,13 +7538,17 @@ class MainWindow(QMainWindow):
         peer = str(card.get("callsign") or "station")
         next_stage = {
             "cq": f"Reply to {peer}",
-            "exchange": f"Send RR73 to {peer}",
+            "card": f"Send Exchange to {peer}",
+            "exchange": f"Send RR73 with report to {peer}",
         }.get(kind)
-        if kind == "73" and card.get("snr_db") is not None:
+        if kind == "73" and self._reply_stage(report) == 'final73':
             next_stage = f"Send final 73 to {peer}"
+        provisional = not self._assembly_verified(report)
+        if provisional and next_stage:
+            next_stage += ' · provisional'
         self.reply_to_button.setText(next_stage or "Reply")
         self.reply_to_button.setToolTip(
-            f"Send the next exchange stage to {peer}." if next_stage else "")
+            f"Send the next exchange stage to {peer}, including received pixels and CRC-passed blocks." if next_stage else "")
         self.reply_to_button.setVisible(bool(next_stage))
         quick_reply = self._reply_stage(report) is not None
         self.quick_draw_button.setText(
@@ -7254,20 +7581,38 @@ class MainWindow(QMainWindow):
     def _reply_stage(report):
         card = (report or {}).get("card") or {}
         kind = card.get("message_type", "card")
-        if kind == "cq":
+        if kind in {"cq", "card"}:
             return "exchange"
         if kind == "exchange":
             return "report73"
-        if kind == "73" and card.get("snr_db") is not None:
+        if kind == '73' and card.get('reception_report') and not card['reception_report'].get('verified'):
+            return None
+        if kind == "73" and (card.get("snr_db") is not None or card.get('reception_report')):
             return "final73"
         return None
 
     def _handle_contact_message(self, report, *, initiated=False):
         card = report.get("card") or {}
-        if not self._assembly_verified(report) or not card.get("avatar_burst"):
+        if not card.get("avatar_burst"):
+            return
+        callsign = str(card.get('callsign') or '').strip().upper()
+        if self.auto_armed and self.auto_peer and callsign != self.auto_peer:
+            self.exchange_log.append(f"Ignoring {callsign}; current contact is with {self.auto_peer}.")
+            return
+        if not self._feedback_matches_contact(card):
+            self.exchange_log.append(f'Ignoring reception report from {callsign} for a different station or card.')
             return
         kind = card.get("message_type", "card")
         self._show_reply_action(report)
+        if not self._assembly_verified(report):
+            return
+        feedback = card.get('reception_report') or {}
+        if (feedback and not feedback.get('verified') and
+                feedback.get('callsign') == self.station_call.text().strip().upper() and
+                (not self.auto_armed or feedback.get('card_id') == self.auto_own_card_id)):
+            self.exchange_log.append('\n'.join(reception_report_lines(card)))
+            self.rx_status.setText(f"{card.get('callsign')} reports an incomplete card · retry needed")
+            return
         if kind == "cq":
             self.last_cq_snapshot = None
         if kind == "exchange" and self.last_cq_snapshot and self.active_qso_log is not None:
@@ -7407,8 +7752,9 @@ class MainWindow(QMainWindow):
                     f"This card uses {card.callsign.upper() or 'no call sign'}, but the "
                     f"Data2G broadcast group is open for {station_call or 'no call sign'}. "
                     "Update the card or Station settings so both identities match.")
-            self._remember_tx_card(card)
             message_type = message_type or self._outgoing_message_type()
+            card = self._prepare_outgoing_card(card, message_type)
+            self._remember_tx_card(card)
             wire_type = {"report73": "73", "final73": "73"}.get(message_type, message_type)
             # `report73` is serialized as wire stage `73`, but its optional
             # SNR field still carries the report when a local decoder supplied one.
@@ -7429,6 +7775,9 @@ class MainWindow(QMainWindow):
             self.data2g_tx_total = len(self.data2g_tx_frames)
             self.tx_card = card
             self.tx_message_type = wire_type
+            self.data2g_tx_waiting_frame = None
+            self._begin_transmit_preview(Data2GTransmitPreview(card, len(frames), self.data2g_tx_total),
+                                         backend.mode_name, message_type)
             if wire_type == "cq":
                 self.last_cq_snapshot = self._local_card_snapshot(card, wire_type, snr_db)
             elif not beacon:
@@ -7475,6 +7824,11 @@ class MainWindow(QMainWindow):
         try:
             DATA2G_ADAPTER.submit_frame(self.data2g_session, tag, frame)
             self.data2g_tx_waiting = tag
+            self.data2g_tx_waiting_frame = frame
+            if isinstance(getattr(self, '_active_tx_preview', None), Data2GTransmitPreview):
+                self._active_tx_preview.phase = ('Channel busy · waiting for host transmission'
+                                                if self.data2g_channel_busy else 'Waiting for host transmission')
+                self._render_transmit_preview(self._active_tx_preview.state())
             if self.on_air:
                 self.on_air.emit("host_tx_frame_queued", {
                     "port": DATA2G_ADAPTER.group_port(self.data2g_session), "tag": tag.hex(),
@@ -7497,6 +7851,12 @@ class MainWindow(QMainWindow):
                 self.data2g_tx_waiting is None or tag != self.data2g_tx_waiting):
             return
         self.data2g_ack_timer.stop()
+        model = getattr(self, '_active_tx_preview', None)
+        frame = getattr(self, 'data2g_tx_waiting_frame', None)
+        if isinstance(model, Data2GTransmitPreview) and frame is not None:
+            model.acknowledge(frame)
+            self._render_transmit_preview(model.state())
+        self.data2g_tx_waiting_frame = None
         self.data2g_tx_waiting = None
         self.data2g_tx_sent += 1
         if self.on_air:
@@ -7513,6 +7873,8 @@ class MainWindow(QMainWindow):
                 transmission_complete=True)
 
     def _finish_data2g_transmission(self, message, *, transmission_complete=False):
+        self._end_transmit_preview(completed=transmission_complete)
+        self.data2g_tx_waiting_frame = None
         self.data2g_ack_timer.stop()
         sent_count = self.data2g_tx_sent
         total_count = self.data2g_tx_total
@@ -7586,8 +7948,9 @@ class MainWindow(QMainWindow):
         self.tx_btn.setEnabled(False)
         try:
             card = card_override if card_override is not None else self._chosen_card()
-            self._remember_tx_card(card)
             self.tx_message_type = self._outgoing_message_type()
+            card = self._prepare_outgoing_card(card, self.tx_message_type)
+            self._remember_tx_card(card)
             if self.tx_message_type in {"exchange", "report73"} and self.reply_report:
                 self.tx_snr_db = (self.reply_report.get("card") or {}).get("measured_snr_db")
             elif self.tx_message_type not in {"exchange", "report73"}:
@@ -7752,8 +8115,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Select upper-sideband data mode", f"The rig reports {self.rig_mode}. Set the radio to USB or an upper-sideband data mode and read it again."); return
         try:
             card = card_override if card_override is not None else self._chosen_card()
-            self._remember_tx_card(card)
             self.tx_message_type = self._outgoing_message_type()
+            card = self._prepare_outgoing_card(card, self.tx_message_type)
+            self._remember_tx_card(card)
             if self.tx_message_type in {"exchange", "report73"} and self.reply_report:
                 self.tx_snr_db = (self.reply_report.get("card") or {}).get("measured_snr_db")
             elif self.tx_message_type not in {"exchange", "report73"}:
@@ -7853,6 +8217,7 @@ class MainWindow(QMainWindow):
             self._update_active_send_control(True)
             self._refresh_operate_primary_action()
             self.tx_timer.start()
+            self._begin_transmit_preview(getattr(self, '_prepared_tx_preview', None), self.selected_mode(), self.tx_message_type)
             self._record_on_air_tx()
             self.exchange_log.append(f"TX started: {self.tx_label}, local software audio link, {len(self.tx_bytes)//2} samples. CAT/PTT bypassed.")
             return
@@ -7878,6 +8243,7 @@ class MainWindow(QMainWindow):
         self._update_active_send_control(True)
         self._refresh_operate_primary_action()
         self.tx_timer.start()
+        self._begin_transmit_preview(getattr(self, '_prepared_tx_preview', None), self.selected_mode(), self.tx_message_type)
         self._record_on_air_tx()
         self.stop_tx_btn.setText(
             "Stop audio" if self.audio_test_mode.isChecked() else "Stop transmission")
@@ -7885,6 +8251,7 @@ class MainWindow(QMainWindow):
                                  ("Audio-only test; PTT disabled." if self.audio_test_mode.isChecked() else "PTT asserted."))
 
     def _pump_tx(self):
+        self._update_local_transmit_preview()
         if self.test_link_enabled and self.audio_test_mode.isChecked() and self.test_tx_socket is not None:
             if time.monotonic() - self.tx_started > self.tx_deadline:
                 self._finish_tx("Transmit timed out; stopping local audio."); return
@@ -7899,6 +8266,7 @@ class MainWindow(QMainWindow):
                     self._finish_tx("Local audio link failed."); return
                 self.test_tx_sequence += 1
                 self.tx_offset += count
+                self._update_local_transmit_preview()
             elif time.monotonic() - self.tx_started >= len(self.tx_bytes) / (2 * modem.SAMPLE_RATE):
                 self.test_tx_socket.writeDatagram(
                     self.test_tx_sequence.to_bytes(4, "big") + b"EOF!",
@@ -7919,6 +8287,8 @@ class MainWindow(QMainWindow):
             self._finish_tx("Transmit complete; releasing PTT.")
 
     def _finish_tx(self, message):
+        self._update_local_transmit_preview(force=True)
+        self._end_transmit_preview(completed=message in {'Transmit complete; releasing PTT.', 'Audio playback complete.'})
         if self.on_air and self.on_air_tx_id:
             self.on_air.emit("tx_end", {"tx_event_id": self.on_air_tx_id, "message": message,
                                        "submitted_samples": self.tx_offset // 2})
@@ -8106,6 +8476,7 @@ class MainWindow(QMainWindow):
         try:
             self.update_identity()
             card = self._chosen_card()
+            self._remember_tx_card(card)
             audio = self._append_cwid_audio(self._card_tx_audio(card, beacon=True))
             self.tx_bytes = pcm16_audio_bytes(audio)
             self.tx_offset = 0
@@ -8348,7 +8719,7 @@ class MainWindow(QMainWindow):
             self.test_rx_expected = None
             self.test_rx_pending = {}
         self.card_assembly.begin_receive_window()
-        self.copy_capture_cache = self.copy_capture_cache.__class__()
+        self.copy_capture_cache = self.copy_capture_cache.next_window()
         self.rx_capture_sample_offset = 0
         self._clear_exact_live_preview()
         self._clear_rx_bytes()
@@ -8795,6 +9166,8 @@ class MainWindow(QMainWindow):
         grid = str(card.get("grid") or "")
         kind = {"cq": "CQ", "exchange": "Exchange", "report73": "RR73",
                 "final73": "73", "73": "73"}.get(card.get("message_type"), "Card")
+        if card.get('message_type') == '73' and card.get('reception_report'):
+            kind = 'RR73 · report'
         received_at = time.strftime("%H:%M:%S")
         tile = image.scaled(QSize(144, 144), Qt.AspectRatioMode.KeepAspectRatio,
                             Qt.TransformationMode.FastTransformation)
@@ -8845,6 +9218,11 @@ class MainWindow(QMainWindow):
             card_face.setIconSize(QSize(132, 132))
             card_face.setStyleSheet("QPushButton { background:#101a17; border:1px solid #43564d; border-radius:7px; padding:4px; } QPushButton:checked { background:#18251f; color:#e2eee6; border-color:#70927d; font-size:10px; font-weight:600; text-align:left; }")
             def flip_card(show_back, button=card_face):
+                if show_back and getattr(button, '_animation_report', None):
+                    with QSignalBlocker(button):
+                        button.setChecked(False)
+                    AnimationDetailsDialog(button._animation_report, self.card_image, self).exec()
+                    return
                 button.setIcon(QIcon() if show_back else button._front_icon)
                 button.setText(button._back_text if show_back else "")
                 button.setAccessibleName(button._accessible_label +
@@ -8860,6 +9238,13 @@ class MainWindow(QMainWindow):
         card_face._front_icon = icon
         card_face._back_text = back_text
         card_face._accessible_label = accessible_label
+        card_face._ordinary_icon = icon
+        card_face._ordinary_back = back_text
+        card_face._ordinary_label = accessible_label
+        card_face._report = copy.deepcopy(report)
+        card_face._report.setdefault('logged_at', time.strftime('%Y-%m-%d %H:%M:%S'))
+        card_face._report.setdefault('frequency_hz', frequency_hz)
+        card_face._report.setdefault('receive_profile', profile)
         item.setToolTip(accessible_label)
         item.setData(Qt.ItemDataRole.AccessibleTextRole, accessible_label)
         card_face.setToolTip(accessible_label + " · click to flip for receive details")
@@ -8873,13 +9258,145 @@ class MainWindow(QMainWindow):
             card_face.setAccessibleName(accessible_label + " · card front; activate to read receive details")
         self.session_wall_empty.hide()
         self.session_wall.show()
+        self._update_wall_animations()
+
+    def _saved_animation_candidates(self):
+        """Read saved receptions across sessions, caching unchanged archive files."""
+        cache = getattr(self, '_animation_archive_cache', {})
+        current, reports = {}, []
+        for path in self.qso_log_dir.glob('*.json'):
+            try:
+                stat = path.stat(); stamp = (stat.st_mtime_ns, stat.st_size)
+                old = cache.get(path)
+                cards = old[1] if old and old[0] == stamp else json.loads(path.read_text()).get('received_cards', [])
+                current[path] = (stamp, cards); reports.extend(cards)
+            except (OSError, ValueError, TypeError, AttributeError):
+                continue
+        self._animation_archive_cache = current
+        return reports
+
+    def _refresh_animation_references(self):
+        """Late sidecars upgrade metadata without inventing another reception."""
+        links = self.card_assembly.animation_links
+        feedback_caches = (self.card_assembly.feedback, self.copy_capture_cache.feedback)
+        for _item, button in self.session_wall_items.values():
+            if hasattr(button, '_report'):
+                links.attach(button._report)
+                for cache in feedback_caches:
+                    if cache.attach(button._report):
+                        base = '\n'.join(line for line in button._ordinary_back.splitlines()
+                                         if not line.startswith('Their reception of '))
+                        button._ordinary_back = base + '\n' + '\n'.join(reception_report_lines(button._report['card']))
+        entries = []
+        if self.active_qso_log is not None:
+            entries.append((self.active_qso_log, self._active_qso_path))
+        entries.extend(getattr(self, 'passive_received_logs', {}).values())
+        active_paths = {path for _, path in entries}
+        for path in self.qso_log_dir.glob('*.json'):
+            if path not in active_paths:
+                try:
+                    entries.append((json.loads(path.read_text()), path))
+                except (OSError, ValueError):
+                    continue
+        for entry, path in entries:
+            changed = False
+            for report in entry.get('received_cards', []):
+                meta = report.get('card') or {}
+                before = copy.deepcopy((meta.get('animation'), meta.get('reception_report')))
+                links.attach(report)
+                for cache in feedback_caches:
+                    cache.attach(report)
+                changed |= before != (meta.get('animation'), meta.get('reception_report'))
+            if changed and path is not None:
+                temporary = None
+                try:
+                    with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, suffix='.tmp', delete=False) as handle:
+                        temporary = Path(handle.name); handle.write(json.dumps(entry, indent=2) + '\n')
+                    os.replace(temporary, path)
+                except OSError as exc:
+                    self.rx_status.setText(f'Card metadata received; could not save it: {exc}')
+                finally:
+                    if temporary is not None:
+                        temporary.unlink(missing_ok=True)
+        if self.reply_report:
+            changed = False
+            for cache in feedback_caches:
+                changed |= cache.attach(self.reply_report)
+            if changed:
+                self._handle_contact_message(self.reply_report)
+        self._update_wall_animations()
+
+    def _update_wall_animations(self):
+        tiles = [(item, button) for item, button in self.session_wall_items.values()
+                 if hasattr(button, '_report')]
+        reports = [button._report for _, button in tiles]
+        candidates = self._saved_animation_candidates() + reports
+        for item, button in tiles:
+            item.setHidden(False)
+            button._animation_report = None
+            button._animation_icons = []
+            button._front_icon = button._ordinary_icon
+            button._back_text = button._ordinary_back
+            button._accessible_label = button._ordinary_label
+            button.setToolTip(button._ordinary_label + ' · click to flip for receive details')
+            button.setAccessibleName(button._ordinary_label)
+            waiting = animation_details(button._report)
+            if waiting:
+                button._back_text += '\n' + waiting
+                button.setToolTip(button._ordinary_label + ' · ' + waiting)
+            if not button.isChecked():
+                button.setIcon(button._front_icon)
+            else:
+                button.setText(button._back_text)
+        for _item, button in tiles:
+            second = button._report
+            first = animation_partner(second, candidates)
+            if first is None:
+                continue
+            combined = {**second, 'animation_frames': [first, second]}
+            button._animation_report = combined
+            button._animation_ms = second['card']['animation']['frame_ms']
+            button._animation_icons = [QIcon(card_art(self.card_image(frame),
+                f'Frame {i+1} / 2', 'ANIMATION', QSize(132, 132))) for i, frame in enumerate((first, second))]
+            button._back_text = animation_details(combined)
+            button._accessible_label = button._ordinary_label + ' · two-frame animation; activate for both frames’ details'
+            button.setToolTip(button._accessible_label)
+            button.setAccessibleName(button._accessible_label)
+            with QSignalBlocker(button):
+                button.setChecked(False)
+            button.setText(''); button.setIcon(button._animation_icons[0])
+            for first_item, first_button in tiles:
+                candidate = first_button._report
+                if candidate is first:
+                    first_item.setHidden(True)
+                elif (candidate.get('card') or {}).get('card_id') == second['card']['animation']['first_card_id']:
+                    try:
+                        if artwork_digest(candidate) == second['card']['animation']['first_digest']:
+                            first_item.setHidden(True)
+                    except (ValueError, KeyError, TypeError, IndexError):
+                        pass
+        if not hasattr(self, '_animation_wall_timer'):
+            self._animation_wall_timer = QTimer(self)
+            self._animation_wall_timer.timeout.connect(self._advance_wall_animations)
+        if any(getattr(button, '_animation_icons', ()) for _, button in tiles):
+            self._animation_wall_timer.start(100)
+        else:
+            self._animation_wall_timer.stop()
+
+    def _advance_wall_animations(self):
+        now = time.monotonic()*1000
+        for _item, button in self.session_wall_items.values():
+            icons = getattr(button, '_animation_icons', ())
+            if icons and button.isVisible() and not button.isChecked():
+                button._front_icon = icons[int(now/button._animation_ms) % 2]
+                button.setIcon(button._front_icon)
 
     def _reset_receive_window(self, *, preserve_preview=False):
         self._clear_rx_bytes()
         self.live_decode_samples = 0
         self.live_decode_final = False
         self.card_assembly.begin_receive_window()
-        self.copy_capture_cache = self.copy_capture_cache.__class__()
+        self.copy_capture_cache = self.copy_capture_cache.next_window()
         self.rx_capture_sample_offset = 0
         if not preserve_preview:
             self._clear_exact_live_preview()
@@ -8939,13 +9456,16 @@ class MainWindow(QMainWindow):
 
     def _append_qso_card(self, bucket, card_data):
         if self.active_qso_log is None: self._begin_qso_log()
+        if bucket == 'received_cards':
+            card_data = copy.deepcopy(card_data)
         new_card = card_data.get("card") or {}
         attempts_key = "transmission_attempts" if bucket == "sent_cards" else "receive_attempts"
         duplicate = next((item for item in self.active_qso_log[bucket]
                           if (item.get("card") or {}).get("card_id") == new_card.get("card_id")
                           and (item.get("card") or {}).get("callsign") == new_card.get("callsign")
                           and (item.get("card") or {}).get("message_type", "card") == new_card.get("message_type", "card")
-                          and (item.get("card") or {}).get("snr_db") == new_card.get("snr_db")
+                          and (bucket == 'received_cards' or (item.get("card") or {}).get("snr_db") == new_card.get("snr_db"))
+                          and (bucket != 'received_cards' or same_received_card(item, card_data))
                           and bool(item.get("duplicate_receipt")) == bool(card_data.get("duplicate_receipt"))
                           and new_card.get("card_id") is not None), None)
         if duplicate is not None:
@@ -9013,6 +9533,8 @@ class MainWindow(QMainWindow):
         return {"card": {"callsign": card.callsign, "grid": card.grid, "card_id": card.card_id,
                           "width": card.width, "height": card.height,
                           "palette": [list(color) for color in card.palette],
+                          "animation": copy.deepcopy(card.animation),
+                          "reception_report": copy.deepcopy(card.reception_report),
                           "message_type": {"report73": "73", "final73": "73"}.get(message_type, message_type),
                           "snr_db": snr_db}, "pixels": pixels}
 

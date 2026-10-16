@@ -1,5 +1,132 @@
 # Next steps: Pixel QSO UI/UX
 
+## Animation authoring — 2026-10-15
+
+Implemented an animation workspace around the existing card canvas. **Animate this card**
+duplicates the drawing and editable stamp layers into a second frame. Thumbnail controls,
+Flip and Alt+Left/Right switch frames with independent Undo/Redo, selection and color state.
+Onion skin has adjustable opacity and stays out of saved art. A live framed preview has
+Pause/Play and timing controls. Copy a box selection or stamp to the other frame as a movable,
+resizable stamp; copying the whole frame is also undoable on the destination.
+
+Save writes both existing-format card files and updates the frame-2 fingerprint, timing and
+affected IDs. Opening either saved frame finds a matching local companion, including beside
+files saved outside My Cards. Failed/cancelled saves retain the drafts, and a failed second
+file replacement rolls back the first. **Export GIF…** produces a looping 320×400 framed
+animation with callsign and current timing from the live draft. Pillow is included in desktop
+dependencies and the new editor module is included in the package manifest.
+
+Validation: 52 focused checks passed across authoring, GIF readback, file-write rollback,
+ordinary canvas tools, animation protocol/audio roundtrips, pairing/playback, palette and
+card identity, and transfer UI. Two previously documented unrelated transfer UI failures
+(advanced-controls visibility and the removed getting-started guide) were deselected.
+The authoring editor and a sample framed GIF were rendered offscreen for visual inspection
+in `screenshots/animation-authoring.png` and `screenshots/animation-authoring.gif`.
+The running desktop app was not restarted; packaged desktop and live audio/RF remain unverified.
+
+## Current checkpoint — 2026-10-14
+
+Animation work is committed as `d3a2bb0`; provisional reply/report support is committed as `c67f613`.
+The follow-up work below is in the working tree and remains uncommitted.
+
+Provisional receive cards now coalesce in station and session decks by protected card identity,
+including across partial-to-complete updates and session reloads. Receive reports are deep-copied
+when archived so later updates do not mutate saved history. The exchange panel now has a separate,
+amber **SENDING** preview: serial modes reveal actual raster checkpoints, coded bursts use a whole-card
+progress fade, and Data2G reveals only host-confirmed outgoing fragments. Playback progress is labeled
+local; it does not claim remote receipt. Stop/complete restores the receive workspace.
+
+E-major previous-pass evidence is retained across receive-window/reply transitions while explicit
+Discard still clears it. A two-window replay from the recorded `7bea033c775437e68966489d215c88f0`
+card recovered an unverified first pass and a whole-card-verified second pass with two retained copies.
+This supports the cache-lifecycle fix; it does not resolve the separate captured card that failed to
+verify after three passes, and sample-slip recovery remains limited.
+
+E-major now also sends an optional protected block-CRC table in common-envelope sidecars. The 64-byte
+table has 16 CRC16 values over 64-pixel blocks, bound to the existing whole-card identity and protected
+by table CRC32 plus the existing RS/CRC header markers. Four 16-byte pieces appear before and after all repeated copies in a send. This costs about 12.8 seconds per send at the common-header rate, regardless of copy count. Updated receivers merge matching blocks across passes and keep the whole-card digest
+as the final verification gate. The extension keeps the existing mode ID and native tone sequence;
+older receivers skip the new optional marker versions. Images over 1024 pixels omit the table.
+See [E-major block CRC sidecar format](docs/MUSICAL-BLOCK-CRC.md).
+
+Validation so far: nine focused outgoing-preview/deck checks passed, including rendering and state
+direction; 160 focused protocol/reply/deck checks and two subtests passed in the prior checkpoint.
+The recorded two-window audio replay completed as described above. Python source compilation passes
+for the touched implementation modules. No RF transmission, CAT/PTT, container restart or live
+hardware validation was performed. Full send/receive behavior with the new CRC sidecar remains to be
+verified against recorded audio and an updated peer.
+
+## Provisional replies and reception reports — 2026-10-14
+
+Animation work is committed as `d3a2bb0` and reply/report support as `c67f613` on `animations`.
+
+Identified provisional cards now expose the manual reply action. Both **Send Exchange**
+and **Send RR73 with report** include the current card's received-pixel count, CRC-passed
+block count and available total, callsign/card ID, and whole-card verification status.
+Saved-card and quick-draw replies share the same prepared-TX snapshot. Provisional CQ
+replies use manual Exchange rather than entering the verified automatic CQ flow.
+Ordinary received cards can also be replied to with Exchange. No ownership or image
+verification gate is relaxed. CQ, ordinary-card and final-73 sends clear transient feedback.
+
+Optional checked PQRP metadata carries reports in Data2G; local modems use common-header
+versions 6/7 for two checked halves, retained across incremental scans. References bind
+to checked outgoing image identity so reports can be displayed before the reply image
+finishes. Counts appear with signal reports in incoming details, wall backs, decks and
+saved QSO/sent snapshots. A late companion updates existing QSO metadata without adding
+an attempt. Data2G counts distinct checked transport-fragment ranges and leaves the
+unadvertised total unknown, explicitly distinguishing them from modem CRC raster blocks.
+Report-bearing airtime estimates include companion overhead, including animation coexistence.
+
+Incomplete reception is labeled **RETRY NEEDED**, even when every candidate pixel is
+present. Such a report about the active outgoing card cannot advance an automatic
+contact or offer final 73. Reports for another station/card and provisional off-peer
+messages cannot replace the automatic contact's reply target. RR73 with progress is
+recognized even without an SNR estimate. Deck verification now reads the actual image's
+verified flag, separately from the embedded report about the other station's card.
+
+Validation: 160 focused protocol, audio, transport, receive/UI and SNR checks and two
+subtests passed; diff checks pass. The tests include both actual Data2G transmit
+preparation stages with host submission mocked, complete ordinary/grouped/interlaced
+local audio roundtrips, old-header-reader fallback, partial reply-image association,
+late metadata persistence, automatic sequencing guards and quick-draw report preparation.
+Offscreen renders of the provisional reply action and received-report deck/front/back
+were inspected. Two known pre-existing transfer UI failures remain deselected (the same
+advanced-controls visibility and removed getting-started dialog tests recorded below).
+No running receiver/container was restarted or synchronized. Hardware audio, CAT/PTT,
+RF and a live two-host Data2G exchange remain unverified. Older clients can decode the
+ordinary image but cannot interpret the new partial-progress reports.
+See [reception report usage and wire format](docs/RECEPTION-REPORTS.md).
+
+## Two-frame animations — 2026-10-14
+
+Implemented the one-way frame-2 reference. My Cards → More → Make selected card
+frame 2… selects a same-station, same-size first card and previews the frame timing.
+Frame 1 stays ordinary; frame 2 stores its ID and artwork fingerprint. Save/load,
+duplication, TX snapshots, quick-draw archives and JSON exports preserve the reference.
+Changing an existing pairing/timing assigns a new second-card ID; local unlinking is
+available from More. Verified pairs render as one animated wall/deck item, including
+partners saved in earlier sessions. Clicking shows both thumbnails and each reception's
+identity, time, mode, frequency and measured/reported SNR. Deck playback can be paused.
+Original records remain independent, and incomplete/mismatched pairs remain static.
+
+Optional checked sidecars carry the reference without changing ordinary image headers
+or raster fragments: Data2G uses a separate 29-byte PQAN frame, and local audio uses
+common-header version 5 outside the existing payload boundaries. Incremental header
+scans retain references in the bounded copy cache. Late Data2G sidecars update saved
+QSO metadata without inventing another reception attempt. Airtime estimates include
+sidecars. See [the usage and wire format](docs/TWO-FRAME-ANIMATIONS.md).
+
+Validation: 120 focused checks and two subtests passed across animation, transport,
+backend adapters, protected headers, palette normalization, previews and transfer UI.
+The 17 animation cases include full ordinary/grouped/interlaced audio roundtrips,
+an older-header-reader simulation, unchanged Data2G image fragments, reverse arrival,
+late metadata, saved-session pairing, persistence, animation playback and artwork clicks.
+Two existing transfer UI tests were deselected after reproducing both failures against
+the original HEAD app source: advanced-controls visibility and the removed getting-started
+dialog. Offscreen deck/details renders were inspected; diff checks pass.
+No running app/container was restarted or synchronized. Live audio/RF, CAT/PTT, a separate
+older installed client and a live two-host Data2G animation remain unverified.
+
 ## Default chip cards and stamps — 2026-10-14
 
 Added four E-major chip cards to the starter gallery and eight opaque pixel stamps

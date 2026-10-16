@@ -305,8 +305,15 @@ class Card:
     card_id: int = 0xC0DE
     width: int = 32
     height: int = 32
+    animation: dict | None = None
+    reception_report: dict | None = None  # Transient TX feedback, not card artwork.
 
     def validate(self) -> None:
+        from card_animation import validate_link
+        validate_link(self.animation, self.card_id)
+        if self.reception_report is not None:
+            from card_feedback import validate_report
+            validate_report(self.reception_report)
         if not 1 <= int(self.width) <= 255 or not 1 <= int(self.height) <= 255:
             raise ValueError("canvas dimensions must be in 1..255")
         if len(self.pixels) != int(self.width) * int(self.height):
@@ -1493,6 +1500,9 @@ def decode_avatar_copies(copies, sample_rate, profile, *, checked=True, wire_ver
     header_count = AVATAR_META_V4_TONE_COUNT if checked and wire_version == 4 else AVATAR_META_TONE_COUNT
     frames, timing_hypotheses, best, best_metrics = [], [], None, None
     best_raw_quality = None
+    from musical_crc import ADMITTED_TABLE, BlockCollector
+    table = ADMITTED_TABLE.get() if verify_raw else None
+    collector = BlockCollector(table) if table and table['identity'] == admitted[1] else None
     error = ValueError("no valid avatar identity header received yet")
     for audio in copies:
         start, offset, period = _announced_avatar_acquisition(audio, sample_rate, selected)
@@ -1566,6 +1576,9 @@ def decode_avatar_copies(copies, sample_rate, profile, *, checked=True, wire_ver
             # identity to select among timing/copy candidates before ranking
             # provisional images by coverage or copy count.
             if verify_raw:
+                if collector is not None:
+                    collector.update(report)
+                    report = collector.apply(report)
                 from modem_envelope import report_content_id
                 candidate = {'pixels': report[0], 'card': report[1]}
                 if report_content_id(admitted[0], candidate).hex() == admitted[1]:
@@ -1594,6 +1607,8 @@ def decode_avatar_copies(copies, sample_rate, profile, *, checked=True, wire_ver
                 best_metrics=metrics
         except (ValueError, UnicodeDecodeError, ZeroDivisionError) as exc:
             error = exc
+    if best is not None and collector is not None:
+        best = collector.apply(best)
     if best is not None and selected.baud <= 50 and best_metrics is not None:
         locally_recovered = _recover_avatar_blocks_with_local_timing(
             copies, timing_hypotheses, best, best_metrics, sample_rate, selected, header_count)

@@ -26,6 +26,20 @@ Example cards made in the editor:
 
 ![Starter cards showing sample QSO and signal artwork](screenshots/starter-cards.png)
 
+### Two-frame animation
+
+The editor supports paired card frames. This capture shows frame switching and
+editing with an animation made in Pixel QSO:
+
+![Creating a two-frame animated card in the Pixel QSO editor](screenshots/animation-authoring.gif)
+
+The included [Chip series](examples/starter-cards/) has four more editor-made
+examples: [Neon Summit](examples/starter-cards/chip-01-neon-summit.json),
+[Star Runner](examples/starter-cards/chip-02-star-runner.json),
+[Bot Boogie](examples/starter-cards/chip-03-bot-boogie.json), and
+[Prism Tracker](examples/starter-cards/chip-04-prism-tracker.json). Open the
+JSON files in Pixel QSO to edit or use them as the basis for a card.
+
 ## Install and run
 
 Python 3.10 or newer is required. The standard install includes the pinned

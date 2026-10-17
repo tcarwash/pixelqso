@@ -24,7 +24,8 @@ starter card.
 
 Example cards made in the editor:
 
-![Starter cards showing sample QSO and signal artwork](screenshots/starter-cards.png)
+![example card, showing a cat](screenshots/cat.png)
+![example card, showing a cat](screenshots/toad.png)
 
 ### Two-frame animation
 
@@ -33,6 +34,7 @@ editing with an animation made in Pixel QSO:
 
 ![Creating a two-frame animated card in the Pixel QSO editor](screenshots/CQ_smile.gif)
 
+![Creating a two-frame animated card in the Pixel QSO editor](screenshots/rocket.gif)
 The included [Chip series](examples/starter-cards/) has four more editor-made
 examples: [Neon Summit](examples/starter-cards/chip-01-neon-summit.json),
 [Star Runner](examples/starter-cards/chip-02-star-runner.json),

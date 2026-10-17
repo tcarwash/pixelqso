@@ -13,8 +13,8 @@ Implemented the broader PixelChat-inspired layout on `pixelchat-inspired-ui`:
 - Library refresh blocks selection signals while rebuilding card choices. Explicit Current drawing
   no longer falls through to a stale generic manual-card choice.
 
-Validation: 35 tests passed across workspace/transfer controls/animation/transmit preview before
-adding the final larger-text width check; the final 8-test column/workspace/editor-fit run passed,
+Validation: 36 tests passed across workspace/transfer controls/animation/transmit preview, with
+three documented pre-existing tests excluded; the final 8-test column/workspace/editor-fit run passed,
 including saved splitter restoration, visibility of all four stage buttons, no transmit on selection,
 correct per-stage card dispatch, dedicated Stop visibility, and 115% text form fit. Three pre-existing
 excluded tests remain documented in the preceding checkpoint. Offscreen renders inspected at

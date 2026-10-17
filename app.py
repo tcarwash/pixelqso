@@ -2473,6 +2473,9 @@ class MainWindow(QMainWindow):
             self.outgoing_art.setPixmap(card_art(image, card.callsign or "Your card",
                 f"{card.width} × {card.height} · {len(card.palette)} colors", QSize(152, 190)))
             self.outgoing_art.setAccessibleName(f"Selected outgoing card: {card.callsign or 'current drawing'}")
+            self.outgoing_art.setToolTip(
+                f"{card.callsign or 'Your card'} · {card.width} × {card.height} · "
+                f"{len(card.palette)} colors")
         except (ValueError, OSError, KeyError, IndexError, TypeError):
             self._outgoing_art_signature = None
             self.outgoing_art.clear(); self.outgoing_art.setText("Choose a valid card to preview")
@@ -4881,10 +4884,15 @@ class MainWindow(QMainWindow):
         self.outgoing_art = QLabel(); self.outgoing_art.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.outgoing_art.setMinimumHeight(190)
         outgoing_label = QLabel("YOUR OUTGOING CARD"); outgoing_label.setObjectName("eyebrow")
-        left_panel.addWidget(outgoing_label); left_panel.addWidget(self.outgoing_art)
+        outgoing_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        left_panel.addWidget(outgoing_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        left_panel.addWidget(self.outgoing_art, 0, Qt.AlignmentFlag.AlignHCenter)
         choose = QPushButton("Browse collection"); choose.clicked.connect(lambda: self.tabs.setCurrentIndex(1))
-        left_panel.addWidget(choose); left_panel.addWidget(transfer_group)
+        left_panel.addWidget(choose, 0, Qt.AlignmentFlag.AlignHCenter)
+        left_panel.addWidget(transfer_group)
         left = QWidget(); left.setLayout(left_panel)
+        left.setMinimumWidth(0)
+        left.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
         right_panel = QVBoxLayout()
         self.traffic_preview = QStackedWidget()
@@ -5061,7 +5069,7 @@ class MainWindow(QMainWindow):
         right = QWidget(); right.setLayout(right_panel)
         left_scroll = QScrollArea(); left_scroll.setWidgetResizable(True); left_scroll.setWidget(left)
         left_scroll.setFrameShape(QFrame.Shape.NoFrame); left_scroll.setMinimumWidth(300)
-        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         sender = QWidget(); sender.setObjectName("senderWorkspace")
         sender_layout = QVBoxLayout(sender); sender_layout.setContentsMargins(12, 12, 12, 12)
         sender_layout.addWidget(left_scroll, 1)

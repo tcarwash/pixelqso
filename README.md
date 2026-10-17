@@ -31,7 +31,7 @@ Example cards made in the editor:
 The editor supports paired card frames. This capture shows frame switching and
 editing with an animation made in Pixel QSO:
 
-![Creating a two-frame animated card in the Pixel QSO editor](screenshots/animation-authoring.gif)
+![Creating a two-frame animated card in the Pixel QSO editor](screenshots/CQ_smile.gif)
 
 The included [Chip series](examples/starter-cards/) has four more editor-made
 examples: [Neon Summit](examples/starter-cards/chip-01-neon-summit.json),

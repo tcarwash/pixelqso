@@ -369,7 +369,7 @@ class DeckDialog(QDialog):
         self.export_contact_button.clicked.connect(self._export_contact)
         self.export_contact_button.setVisible(self.export_contact is not None)
         actions.addWidget(self.export_contact_button)
-        self.export_card_button = QPushButton('Export selected card PNG…')
+        self.export_card_button = QPushButton('Export selected card PNG/GIF…')
         self.export_card_button.clicked.connect(self._export_selected_card)
         self.export_card_button.setVisible(self.export_card is not None)
         actions.addWidget(self.export_card_button)

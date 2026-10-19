@@ -16,6 +16,17 @@ dragging and commit as ordinary palette-index pixels through canvas undo.
 Source syntax and whitespace checks pass; interactive rendering remains
 unverified.
 
+Follow-up: Ctrl+C copies selected visible pixels with their palette indices;
+Ctrl+V pastes a duplicate as a movable stamp, preserving pixel edges and
+supporting Undo. Added visible Copy and Paste buttons beside Undo/Redo. The
+existing y/p and system-image clipboard paths remain available. Syntax and
+whitespace checks pass; interactive behavior is not yet verified.
+
+Follow-up: the received-card viewer now offers PNG or GIF export. Still cards
+export as single-frame GIFs; paired animation cards retain their saved frame
+timing. Syntax and whitespace checks pass; exported file rendering has not
+been inspected in a desktop session.
+
 ## Outgoing card clipping — 2026-10-18
 
 Fixed the sender form's oversized minimum width: long mode/card names no longer

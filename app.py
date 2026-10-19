@@ -37,7 +37,7 @@ import cardmodem as modem
 from card_ids import allocate_card_id
 from card_animation import (artwork_digest, validate_link, partner as animation_partner,
                             details as animation_details)
-from animation_editor import AnimationAuthor
+from animation_editor import AnimationAuthor, export_gif
 from card_feedback import make_report as make_reception_report, report_lines as reception_report_lines
 from transmit_preview import LocalTransmitPreview, Data2GTransmitPreview
 from snr import set_measured_snr, snr_lines
@@ -871,6 +871,7 @@ class CardCanvas(QWidget):
         self.shape_centered = False
         self.shape_origin = None
         self.shape_preview = None
+        self.pixel_clipboard = None
         self.onion_image = None
         self.onion_opacity = 0.3
         self.last_paint_pixel = None
@@ -1059,6 +1060,12 @@ class CardCanvas(QWidget):
             p.drawRect(cursor_rect.adjusted(2, 2, -2, -2))
 
     def keyPressEvent(self, event):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_C:
+            if self.copy_selection_pixels():
+                event.accept(); return
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_V:
+            self.paste_selection_pixels()
+            event.accept(); return
         key_text = event.text().lower()
         if self.keyboard_command is not None:
             if event.key() == Qt.Key.Key_Escape:
@@ -1163,7 +1170,7 @@ class CardCanvas(QWidget):
                 self.selection_origin = None
             self.changed.emit(); self.update(); event.accept(); return
         if key_text == "y" and not self.selection_rect.isNull():
-            self.copy_selection_to_clipboard()
+            self.copy_selection_pixels()
             event.accept(); return
         if key_text == "d":
             self.delete_selection_or_pixel(copy_to_clipboard=True)
@@ -1356,6 +1363,56 @@ class CardCanvas(QWidget):
                 value = self.card.pixels[(rect.y()+y)*self.card.width+rect.x()+x]
                 image.setPixelColor(x, y, QColor(*(channel*17 for channel in self.card.palette[value])))
         QApplication.clipboard().setImage(image)
+
+    def copy_selection_pixels(self):
+        """Copy the visible selected pixels with exact palette indices and transparency."""
+        rect = self.selection_rect.intersected(QRect(0, 0, self.card.width, self.card.height))
+        if rect.isEmpty():
+            return False
+        values = [self.card.pixels[y*self.card.width+x]
+                  for y in range(rect.top(), rect.bottom()+1)
+                  for x in range(rect.left(), rect.right()+1)]
+        self.pixel_clipboard = {"width": rect.width(), "height": rect.height(),
+                                "pixels": values, "palette": list(self.card.palette),
+                                "x": rect.x(), "y": rect.y()}
+        self.copy_selection_to_clipboard()
+        return True
+
+    def paste_selection_pixels(self):
+        """Paste an internal pixel selection as a movable, undoable stamp."""
+        copied = self.pixel_clipboard
+        if not copied:
+            image = QApplication.clipboard().image()
+            if image.isNull():
+                return False
+            self.add_stamp(image)
+            return True
+        width, height = copied["width"], copied["height"]
+        palette = copied["palette"]
+        mapping = [min(range(len(self.card.palette)),
+                       key=lambda i: sum((palette[source][k]-self.card.palette[i][k])**2 for k in range(3)))
+                   for source in range(len(palette))]
+        pixels = [mapping[value] for value in copied["pixels"]]
+        if width > self.card.width or height > self.card.height:
+            new_width = min(width, self.card.width); new_height = min(height, self.card.height)
+            pixels = [pixels[min(height-1, int((dy+.5)*height/new_height))*width+
+                             min(width-1, int((dx+.5)*width/new_width))]
+                      for dy in range(new_height) for dx in range(new_width)]
+            width, height = new_width, new_height
+        x, y = self.keyboard_cursor
+        if not self.selection_rect.isNull():
+            x, y = self.selection_rect.x(), self.selection_rect.y()
+        x = min(max(0, x), self.card.width-width)
+        y = min(max(0, y), self.card.height-height)
+        self.remember_edit()
+        self.stamp_layers.append({"x": x, "y": y, "width": width, "height": height,
+                                  "pixels": pixels})
+        self.selected_layer = self.hover_layer = len(self.stamp_layers)-1
+        self.selection_rect = QRect(); self.selection_handle = QRect()
+        self.tool = "move"
+        self._render_layers()
+        self.update_accessible_description()
+        return True
 
     def move_selection(self, dx, dy):
         index = self.lift_selection()
@@ -3639,17 +3696,27 @@ class MainWindow(QMainWindow):
         stage = "".join(ch if ch.isalnum() or ch in "-_" else "_"
                         for ch in str(card.get("message_type", "card")))
         name, _ = QFileDialog.getSaveFileName(
-            dialog_parent, "Export selected card PNG",
+            dialog_parent, "Export selected card",
             str(DATA / "exports" / f"card-{callsign}-{id_label}-{stage}.png"),
-            "PNG image (*.png)")
+            "PNG image (*.png);;GIF image (*.gif)")
         if not name:
             return None
-        target = Path(name).with_suffix(".png")
+        target = Path(name)
+        is_gif = target.suffix.lower() == ".gif"
+        target = target.with_suffix(".gif" if is_gif else ".png")
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            image = single_card_image(direction, report, self.card_image)
-            if not image.save(str(target), "PNG"):
-                raise OSError("Qt could not write the card PNG")
+            if is_gif:
+                paired = report.get("animation_frames") or [report]
+                images = [self.card_image(frame) for frame in paired]
+                if any(image is None or image.isNull() for image in images):
+                    raise ValueError("This card does not have complete artwork for GIF export.")
+                duration = int(card.get("animation", {}).get("frame_ms", 500))
+                export_gif(target, images, duration)
+            else:
+                image = single_card_image(direction, report, self.card_image)
+                if not image.save(str(target), "PNG"):
+                    raise OSError("Qt could not write the card PNG")
             self.log_status.setText(f"Exported card to {target.name}")
             return target
         except Exception as exc:
@@ -3758,6 +3825,7 @@ class MainWindow(QMainWindow):
             "repeats movement. Type :wq then Enter to save and close, or :q then Enter "
             "to close with the usual unsaved-change prompt. "
             "Hold Space or press i to draw while moving; Escape cancels i mode. "
+            "Ctrl+C copies a box selection and Ctrl+V pastes a movable copy; "
             "n/N cycles colors forward/backward, u undoes, U redoes, x deletes the pixel, "
             "and Enter applies "
             "Draw, Erase, Fill, or Pick. In Move stamp mode, Space/Enter selects a stamp, "
@@ -3773,7 +3841,17 @@ class MainWindow(QMainWindow):
         self.redo_button.setAccessibleName("Redo card edit")
         self.redo_button.setAccessibleDescription("Redo the last undone card edit. Keyboard shortcut: Ctrl+Shift+Z or Ctrl+Y.")
         self.redo_button.setToolTip("Redo the last undone card edit · Ctrl+Shift+Z")
-        history.addWidget(self.undo_button); history.addWidget(self.redo_button); history.addStretch()
+        history.addWidget(self.undo_button); history.addWidget(self.redo_button)
+        self.copy_pixels_button = QPushButton("Copy")
+        self.copy_pixels_button.setAccessibleName("Copy box selected pixels")
+        self.copy_pixels_button.setToolTip("Copy the selected box as pixels · Ctrl+C")
+        self.copy_pixels_button.clicked.connect(self.canvas.copy_selection_pixels)
+        history.addWidget(self.copy_pixels_button)
+        self.paste_pixels_button = QPushButton("Paste")
+        self.paste_pixels_button.setAccessibleName("Paste copied pixels")
+        self.paste_pixels_button.setToolTip("Paste copied pixels as a movable stamp · Ctrl+V")
+        self.paste_pixels_button.clicked.connect(self.canvas.paste_selection_pixels)
+        history.addWidget(self.paste_pixels_button); history.addStretch()
         grid = QCheckBox("Grid"); grid.setChecked(True)
         grid.toggled.connect(lambda checked: (setattr(self.canvas, "show_grid", checked), self.canvas.update()))
         history.addWidget(grid); drawing.addLayout(history)

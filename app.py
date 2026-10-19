@@ -53,6 +53,7 @@ from card_backends import (BACKENDS, DEFAULT_MODE_KEY, LEGACY_MODE_KEY, MODE_REG
                            preferred_data2g_mode_key, recommended_data2g_modes,
                            register_data2g_mode_backends, EXPERIMENTAL_MODE_DESCRIPTIONS)
 from card_transfer import CardAssemblyService
+from card_requests import RequestCache, UNVERIFIED, ANIMATION_PARTNER
 from data2g_transport import Data2GMode
 from data2g_runtime import (data2g_audio_device_selector,
                             data2g_host_audio_devices,
@@ -733,11 +734,14 @@ class LiveDecodeWorker(QRunnable):
 
     def run(self):
         started = time.perf_counter()
+        self.card_requests = []
         try:
             audio = pcm16_to_float32(self.samples)
             announced = None
+            from modem_envelope import MODE_IDS
             if (self.copy_cache is not None and
-                    (self.mode == "auto" or self.include_experimental or self.copy_cache.entries)):
+                    (self.mode == "auto" or self.include_experimental or self.copy_cache.entries or
+                     self.mode in MODE_IDS)):
                 from modem_envelope import find_copies
                 ranges=self.copy_cache.header_scan_ranges(
                     self.capture_start_sample,len(audio),self.sample_rate)
@@ -747,11 +751,20 @@ class LiveDecodeWorker(QRunnable):
                               self.capture_start_utc+scan_start/self.sample_rate)
                     found=find_copies(audio[scan_start:scan_end],self.sample_rate,
                                       capture_start_utc=scan_utc)
+                    completed_requests = []
                     with self.copy_cache.lock:
                         for digest, link in getattr(found, 'animation_links', ()):
                             self.copy_cache.animation_links.add(digest, link)
                         for part in getattr(found, 'feedback_parts', ()):
                             self.copy_cache.feedback.add_part(*part)
+                        for token, index, part in getattr(found, 'request_parts', ()):
+                            request = self.copy_cache.requests.add_part(token, index, part)
+                            if request is not None:
+                                completed_requests.append(request)
+                    if not completed_requests:
+                        completed_requests.extend(getattr(found, 'requests', ()))
+                    if completed_requests:
+                        self.card_requests = completed_requests[-16:]
                     for copy in found:
                         copy.start+=scan_start
                         copy.end+=scan_start
@@ -762,6 +775,10 @@ class LiveDecodeWorker(QRunnable):
                             self.receive_session_id,
                             copy.diagnostics["acquisition_start_sample"], copy.mode, copy.identity)
                     announced.extend(found)
+            if getattr(self, "card_requests", None) and not announced:
+                self._finish({"receive_activity": "Broadcast card request received",
+                              "card_requests": self.card_requests}, False, None, started)
+                return
             if (self.mode == "auto" or announced or
                     (self.copy_cache is not None and (self.include_experimental or self.copy_cache.entries))):
                 outcome = decode_all_card_backends(audio, self.sample_rate, self.audio_placement,
@@ -778,6 +795,8 @@ class LiveDecodeWorker(QRunnable):
                     self._finish(None, False, outcome.failure, started)
                     return
                 result = outcome.report
+                if self.card_requests:
+                    result["card_requests"] = list(self.card_requests)
                 result.setdefault("valid_packet_count", 0)
                 if result.get("receive_activity"):
                     self._finish(result, False, None, started)
@@ -796,6 +815,8 @@ class LiveDecodeWorker(QRunnable):
                     self._finish(None, False, outcome.failure, started)
                     return
                 result = outcome.report
+                if self.card_requests:
+                    result["card_requests"] = list(self.card_requests)
                 self._finish(result, bool(result.get("complete")), None, started)
                 return
             if is_card_backend(self.mode):
@@ -805,6 +826,8 @@ class LiveDecodeWorker(QRunnable):
                     self._finish(None, False, outcome.failure, started)
                     return
                 result = outcome.report
+                if self.card_requests:
+                    result["card_requests"] = list(self.card_requests)
                 card = result["card"]
                 result.setdefault("valid_packet_count", 0)
                 result.setdefault("fresh_packets", [])
@@ -2376,6 +2399,8 @@ class MainWindow(QMainWindow):
         self.contact_stage = "idle"
         self.call_cq_active = False
         self.reply_report = None
+        self.pending_reply_retry = None
+        self.reply_retry_prompted = set()
         self.stopped_reply_peers = set()
         self.quick_reply_card = None
         self.quick_draw_active = False
@@ -5109,6 +5134,22 @@ class MainWindow(QMainWindow):
         self.session_wall_empty.setAccessibleDescription(
             "Identified provisional cards appear here while integrity checks are still in progress.")
         wall_list_layout.addWidget(self.session_wall_empty, 1)
+        self.broadcast_requests_button = QPushButton("Broadcast missing card requests…")
+        self.broadcast_requests_button.clicked.connect(self._confirm_broadcast_missing_cards)
+        wall_list_layout.addWidget(self.broadcast_requests_button)
+        self.request_status = QLabel("No card requests heard this session")
+        self.request_status.setWordWrap(True)
+        self.request_status.setObjectName("supportingText")
+        wall_list_layout.addWidget(self.request_status)
+        self.incoming_requests = QListWidget()
+        self.incoming_requests.setMaximumHeight(96)
+        self.incoming_requests.setAccessibleName("Card requests heard this session")
+        self.incoming_requests.currentRowChanged.connect(self._sync_queue_resend_button)
+        wall_list_layout.addWidget(self.incoming_requests)
+        self.queue_resend_button = QPushButton("Queue selected resend")
+        self.queue_resend_button.setEnabled(False)
+        self.queue_resend_button.clicked.connect(self._queue_requested_resend)
+        wall_list_layout.addWidget(self.queue_resend_button)
         self.session_wall = QListWidget()
         self.session_wall.setViewMode(QListWidget.ViewMode.IconMode)
         self.session_wall.setMovement(QListWidget.Movement.Static)
@@ -7388,13 +7429,134 @@ class MainWindow(QMainWindow):
         if not snapshot and not self.current_preview_is_duplicate:
             self.receive_view.clear()
             self.receive_view.setText("Receiving signal…\nWaiting for card data")
-            self.receive_progress.setRange(0, 0)
-            self.receive_progress.setValue(0)
-            self.receive_progress.setFormat("Waiting for card data")
-            self.receive_progress.setAccessibleDescription(
-                "Signal detected. Waiting for card data; card-image progress is not available yet.")
-            self.receive_progress.hide()
+        self.receive_progress.setRange(0, 0)
+        self.receive_progress.setValue(0)
+        self.receive_progress.setFormat("Waiting for card data")
+        self.receive_progress.setAccessibleDescription(
+            "Signal detected. Waiting for card data; card-image progress is not available yet.")
+        self.receive_progress.hide()
         self.receive_preview_box.show()
+
+    def _collect_missing_card_requests(self):
+        requester = self.station_call.text().strip().upper()
+        if not requester:
+            return []
+        reports = [button._report for _item, button in self.session_wall_items.values()
+                   if hasattr(button, "_report")]
+        requests = {}
+        for report in reports:
+            card = report.get("card") or {}
+            call, card_id = card.get("callsign"), card.get("card_id")
+            if not call or card_id is None:
+                continue
+            if not self._assembly_verified(report):
+                value = dict(requester=requester, target=str(call).upper(),
+                             card_id=int(card_id), reason=UNVERIFIED)
+                requests[(value["target"], value["card_id"], value["reason"])] = value
+            link = card.get("animation") or {}
+            first_id = link.get("first_card_id")
+            if first_id is not None and animation_partner(report, reports + self._saved_animation_candidates()) is None:
+                value = dict(requester=requester, target=str(call).upper(),
+                             card_id=int(first_id), reason=ANIMATION_PARTNER,
+                             related_id=int(card_id))
+                requests[(value["target"], value["card_id"], value["reason"])] = value
+        return list(requests.values())
+
+    def _confirm_broadcast_missing_cards(self):
+        requests = self._collect_missing_card_requests()
+        if not requests:
+            QMessageBox.information(self, "No missing cards", "This session has no identified unverified cards or missing animation frames to request.")
+            return
+        if len(requests) > 8:
+            requests = requests[:8]
+        labels = []
+        for request in requests:
+            if request["reason"] == ANIMATION_PARTNER:
+                labels.append(f"{request['target']} {request['card_id']:04X} · missing animation frame for {request['related_id']:04X}")
+            else:
+                labels.append(f"{request['target']} {request['card_id']:04X} · received but not verified")
+        if QMessageBox.question(self, "Broadcast card requests",
+                "Send a short broadcast asking for these cards?\n\n" + "\n".join(labels) +
+                "\n\nOnly stations with a matching saved card should resend it.") != QMessageBox.StandardButton.Yes:
+            return
+        if self.selected_adapter().capabilities.kind is AdapterKind.FRAME_TRANSPORT:
+            QMessageBox.information(self, "Request broadcast unavailable",
+                "Card request broadcasts currently use the local audio modem header. Select a local audio mode to send this request.")
+            return
+        try:
+            from modem_envelope import request_audio
+            audio = request_audio(self.selected_mode(), requests)
+            if self.audio_test_mode.isChecked():
+                if not self.output_device.currentData() and not self.test_link_enabled:
+                    raise ValueError("Choose an audio output device in Station settings first.")
+                self.tx_message_type = "request"; self.tx_label = "card request"
+                self.tx_card = None; self.tx_snr_db = None; self._prepared_tx_preview = None
+                audio = self._append_cwid_audio(audio)
+                self.tx_bytes = pcm16_audio_bytes(audio); self.tx_offset = 0
+                self.tx_deadline = len(audio)/modem.SAMPLE_RATE + 8
+                self._start_tx_audio()
+            else:
+                if not self.rig.connected():
+                    raise ValueError("Connect CAT before broadcasting a card request.")
+                self.tx_btn.setEnabled(False)
+                self.read_rig(lambda ok, data=audio:
+                    self._preflight_and_confirm_tx(ok, audio_override=data))
+            self.request_status.setText(f"Broadcasting {len(requests)} card request(s) · {', '.join(labels)}")
+        except Exception as exc:
+            QMessageBox.warning(self, "Couldn't prepare card request", str(exc))
+
+    def _receive_card_requests(self, requests):
+        from card_requests import validate_request
+        accepted = []
+        known = {tuple((item.data(Qt.ItemDataRole.UserRole) or {}).get(key)
+                       for key in ("requester", "target", "card_id", "reason"))
+                 for i in range(self.incoming_requests.count())
+                 if (item := self.incoming_requests.item(i)) is not None}
+        for raw in requests:
+            try:
+                request = validate_request(raw)
+            except (ValueError, TypeError):
+                continue
+            key = tuple(request.get(field) for field in ("requester", "target", "card_id", "reason"))
+            if key in known:
+                continue
+            known.add(key); accepted.append(request)
+            reason = "needs another copy" if request["reason"] == UNVERIFIED else "needs animation frame"
+            item = QListWidgetItem(f"{request['requester']} requests {request['target']} {request['card_id']:04X} · {reason}")
+            item.setData(Qt.ItemDataRole.UserRole, request)
+            self.incoming_requests.insertItem(0, item)
+        if accepted:
+            self.request_status.setText(f"{len(accepted)} new card request(s) heard · choose one to queue a resend")
+        self._sync_queue_resend_button()
+
+    def _sync_queue_resend_button(self, *_):
+        item = self.incoming_requests.currentItem() if hasattr(self, "incoming_requests") else None
+        request = item.data(Qt.ItemDataRole.UserRole) if item else None
+        local_call = self.station_call.text().strip().upper()
+        self.queue_resend_button.setEnabled(bool(request and request.get("target") == local_call))
+
+    def _queue_requested_resend(self):
+        item = self.incoming_requests.currentItem()
+        request = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not request:
+            return
+        self.refresh_card_library()
+        found = None
+        for index in range(1, self.card_combo.count()):
+            path = self.card_combo.itemData(index)
+            try:
+                data = json.loads(Path(path).read_text())
+                if (str(data.get("callsign", "")).upper() == request["target"] and
+                        int(data.get("card_id", -1)) == request["card_id"]):
+                    found = index; break
+            except (OSError, ValueError, TypeError):
+                continue
+        if found is None:
+            self.request_status.setText(f"No saved card {request['target']} {request['card_id']:04X} is available to resend.")
+            return
+        self.card_combo.setCurrentIndex(found)
+        self.request_status.setText(
+            f"Queued {request['target']} {request['card_id']:04X} · review the card and press Send card when ready.")
 
     def _receive_activity_expired(self):
         self.receive_activity_pending = False
@@ -8300,7 +8462,10 @@ class MainWindow(QMainWindow):
         card = (report or {}).get("card") or {}
         if not card:
             return
-        if self._reply_stage(report) is None:
+        retry = self.pending_reply_retry
+        retry_for_peer = bool(retry and retry.get("peer") ==
+                              str(card.get("callsign") or "").strip().upper())
+        if self._reply_stage(report) is None and not retry_for_peer:
             self.reply_to_button.hide()
             self._refresh_operate_primary_action()
             return
@@ -8332,7 +8497,11 @@ class MainWindow(QMainWindow):
         self._refresh_operate_primary_action()
         self.contact_stage = "send_" + next_stage
         self.exchange_mode.setCurrentIndex(0)
-        self.transmit_exchange()
+        self.pending_reply_retry = None
+        retry_card = None
+        if retry and retry.get("peer") == str(card.get("callsign") or "").strip().upper():
+            retry_card = retry.get("card")
+        self.transmit_exchange(card_override=retry_card)
 
     def _feedback_matches_contact(self, card):
         feedback = card.get('reception_report')
@@ -8373,10 +8542,28 @@ class MainWindow(QMainWindow):
         provisional = not self._assembly_verified(report)
         if provisional and next_stage:
             next_stage += ' · provisional'
+        retry = self.pending_reply_retry
+        if retry and (retry.get("peer") != peer.upper() or
+                      retry.get("response_card_id") != card.get("card_id")):
+            self.pending_reply_retry = None
+            retry = None
+        if retry and retry.get("peer") == peer.upper():
+            next_stage = f"Repeat card {retry['card'].card_id:04X} to {peer}"
         self.reply_to_button.setText(next_stage or "Reply")
         self.reply_to_button.setToolTip(
-            f"Send the next exchange stage to {peer}, including received pixels and CRC-passed blocks." if next_stage else "")
+            (f"Repeat the same artwork and card ID. The current reply's reception report will be included."
+             if retry and retry.get("peer") == peer.upper() else
+             f"Send the next exchange stage to {peer}, including received pixels and CRC-passed blocks.")
+            if next_stage else "")
         self.reply_to_button.setVisible(bool(next_stage))
+        if not self.auto_armed:
+            self._offer_provisional_card_retry(report)
+            retry = self.pending_reply_retry
+            if retry and retry.get("peer") == peer.upper():
+                self.reply_to_button.setText(f"Repeat card {retry['card'].card_id:04X} to {peer}")
+                self.reply_to_button.setToolTip(
+                    "Repeat the same artwork and card ID; the current reply's reception report will be included.")
+                self.reply_to_button.setVisible(True)
         quick_reply = self._reply_stage(report) is not None
         self.quick_draw_button.setText(
             f"Quick reply to {peer}" if quick_reply else "Quick draw")
@@ -8386,6 +8573,87 @@ class MainWindow(QMainWindow):
             "Sketch a card while receiving or transmitting; use it for the next manual send.")
         self.quick_draw_button.setVisible(self.exchange_mode.currentIndex() == 0 and not self.auto_armed)
         self._refresh_operate_primary_action()
+
+    def _find_sent_card_for_retry(self, report):
+        feedback = ((report.get("card") or {}).get("reception_report") or {})
+        own_call = self.station_call.text().strip().upper()
+        card_id = feedback.get("card_id")
+        if (feedback.get("verified", True) or feedback.get("callsign") != own_call or
+                type(card_id) is not int):
+            return None
+        candidates = []
+        if self.active_qso_log is not None:
+            candidates.append(self.active_qso_log)
+        for path in sorted(self.qso_log_dir.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+            try:
+                candidates.append(json.loads(path.read_text()))
+            except (OSError, ValueError, TypeError):
+                continue
+        snapshots = []
+        for log in candidates:
+            for entry in log.get("sent_cards", []):
+                meta = entry.get("card") or {}
+                if (str(meta.get("callsign") or "").upper() == own_call and
+                        meta.get("card_id") == card_id):
+                    snapshots.append(entry)
+        if not snapshots:
+            return None
+        snapshot = snapshots[0]
+        meta = snapshot.get("card") or {}
+        try:
+            width, height = int(meta["width"]), int(meta["height"])
+            palette = [tuple(int(channel) for channel in color[:3]) for color in meta["palette"]]
+            palette_index = {color: index for index, color in enumerate(palette)}
+            pixels = snapshot["pixels"]
+            flat = [pixel for row in pixels for pixel in row]
+            if len(flat) != width * height:
+                return None
+            indices = []
+            for value in flat:
+                if isinstance(value, int):
+                    index = value
+                else:
+                    color = tuple(max(0, min(15, int(round(channel / 17)))) for channel in value[:3])
+                    index = palette_index.get(color)
+                if index is None or not 0 <= index < len(palette):
+                    return None
+                indices.append(index)
+            result = modem.Card(meta["callsign"], meta.get("grid", ""), palette, indices,
+                                card_id, width, height, copy.deepcopy(meta.get("animation")))
+            result.validate()
+            return result
+        except (KeyError, TypeError, ValueError, IndexError):
+            return None
+
+    def _offer_provisional_card_retry(self, report):
+        card = report.get("card") or {}
+        feedback = card.get("reception_report") or {}
+        peer = str(card.get("callsign") or "").strip().upper()
+        if (not peer or card.get("message_type") not in {"card", "exchange", "73"} or
+                feedback.get("verified", True) or
+                feedback.get("callsign") != self.station_call.text().strip().upper()):
+            return
+        sent_card = self._find_sent_card_for_retry(report)
+        if sent_card is None:
+            return
+        key = (peer, card.get("card_id"), feedback.get("card_id"), card.get("message_type"))
+        if key in self.reply_retry_prompted:
+            return
+        self.reply_retry_prompted.add(key)
+        box = QMessageBox(self)
+        box.setWindowTitle("Your card was received provisionally")
+        box.setText(f"{peer} received your card {feedback['card_id']:04X} provisionally. Repeat the same card before continuing?")
+        box.setInformativeText(
+            "Repeating it keeps the original artwork and card ID so their partial copy can be completed. "
+            "The reply's normal reception report will be included. You will still choose when to send.")
+        repeat_button = box.addButton("Repeat same card", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Continue to next stage", QMessageBox.ButtonRole.ActionRole)
+        box.addButton("Decide later", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(box.buttons()[-1])
+        box.exec()
+        if box.clickedButton() is repeat_button:
+            self.pending_reply_retry = {"peer": peer, "card": sent_card,
+                                       "response_card_id": card.get("card_id")}
 
     def stop_responding(self):
         peer = self.auto_peer or str((self.reply_report or {}).get("card", {}).get("callsign") or "")
@@ -8924,7 +9192,8 @@ class MainWindow(QMainWindow):
             self.duplicate_preview_key = None
         QTimer.singleShot(400, self._ensure_session_receive)
 
-    def _preflight_and_confirm_tx(self, read_ok, generation=None, card_override=None):
+    def _preflight_and_confirm_tx(self, read_ok, generation=None, card_override=None,
+                                  audio_override=None):
         if generation is not None and (not self.auto_armed or generation != self.auto_generation):
             self.refresh_tx_button(); return
         if not read_ok or not self.rig.connected():
@@ -8941,27 +9210,36 @@ class MainWindow(QMainWindow):
             if self.auto_armed: self.stop_auto_exchange("Automatic exchange stopped: upper-sideband data mode is required.")
             QMessageBox.warning(self, "Select upper-sideband data mode", f"The rig reports {self.rig_mode}. Set the radio to USB or an upper-sideband data mode and read it again."); return
         try:
-            card = card_override if card_override is not None else self._chosen_card()
-            self.tx_message_type = self._outgoing_message_type()
-            card = self._prepare_outgoing_card(card, self.tx_message_type)
-            self._remember_tx_card(card)
-            if self.tx_message_type in {"exchange", "report73"} and self.reply_report:
-                self.tx_snr_db = (self.reply_report.get("card") or {}).get("measured_snr_db")
-            elif self.tx_message_type not in {"exchange", "report73"}:
+            if audio_override is not None:
+                self.tx_message_type = "request"
+                self.tx_card = None
                 self.tx_snr_db = None
-            if self.auto_armed and card.callsign.upper() != self.station_call.text().strip().upper():
-                raise ValueError("The automatic exchange card must use the call sign configured in Station settings.")
-            if self.auto_armed: self.auto_own_card_id = card.card_id
-            if self.auto_armed and self.selected_mode() == "fast_avatar":
-                raise ValueError("Raw burst pixels have no correction or integrity check; use a checked-block mode for automatic exchange.")
-            audio = self._append_cwid_audio(self._card_tx_audio(card))
+                self._prepared_tx_preview = None
+                audio = self._append_cwid_audio(audio_override)
+                self.tx_label = "card request" + (" + CW ID" if self.tx_cwid_appended else "")
+            else:
+                card = card_override if card_override is not None else self._chosen_card()
+                self.tx_message_type = self._outgoing_message_type()
+                card = self._prepare_outgoing_card(card, self.tx_message_type)
+                self._remember_tx_card(card)
+                if self.tx_message_type in {"exchange", "report73"} and self.reply_report:
+                    self.tx_snr_db = (self.reply_report.get("card") or {}).get("measured_snr_db")
+                elif self.tx_message_type not in {"exchange", "report73"}:
+                    self.tx_snr_db = None
+                if self.auto_armed and card.callsign.upper() != self.station_call.text().strip().upper():
+                    raise ValueError("The automatic exchange card must use the call sign configured in Station settings.")
+                if self.auto_armed: self.auto_own_card_id = card.card_id
+                if self.auto_armed and self.selected_mode() == "fast_avatar":
+                    raise ValueError("Raw burst pixels have no correction or integrity check; use a checked-block mode for automatic exchange.")
+                audio = self._append_cwid_audio(self._card_tx_audio(card))
             duration = len(audio) / modem.SAMPLE_RATE
             self.auto_last_card_duration = duration
             self.tx_bytes = pcm16_audio_bytes(audio)
             self.tx_offset = 0
             self.tx_deadline = duration + 8.0
-            self.tx_label = ("card burst" if self.selected_backend() is not None else "legacy card") + (
-                " + CW ID" if self.tx_cwid_appended else "")
+            if audio_override is None:
+                self.tx_label = ("card burst" if self.selected_backend() is not None else "legacy card") + (
+                    " + CW ID" if self.tx_cwid_appended else "")
         except Exception as exc:
             self.tx_btn.setEnabled(self.rig.connected())
             if self.auto_armed: self.stop_auto_exchange("Automatic exchange stopped: its selected card could not be prepared.")
@@ -9764,6 +10042,8 @@ class MainWindow(QMainWindow):
         self.active_live_decode_token = None
         if report and report.get("receive_profile"):
             self._follow_detected_rx_mode(report["receive_profile"])
+        if report and report.get("card_requests"):
+            self._receive_card_requests(report["card_requests"])
         error_text = (error.message if isinstance(error, DecodeFailure) else
                       str(error) if error else None)
         on_air_details = None
@@ -10002,6 +10282,10 @@ class MainWindow(QMainWindow):
         exact = self._assembly_verified(report)
         received_percent = self._coverage_percent(card.get("pixel_coverage"))
         verified_percent = self._coverage_percent(card.get("verified_pixel_coverage"))
+        total_pixels = int(card.get("width", image.width())) * int(card.get("height", image.height()))
+        verified_pixels = int(card.get("pixels_verified", sum(bool(v) for v in
+                               (card.get("verified_pixel_coverage") or [])) or
+                               (total_pixels if exact else 0)))
         integrity_text = ("Integrity: whole card verified" if exact else
                           f"Integrity: provisional · {received_percent}% received · "
                           f"{verified_percent}% of image regions verified")
@@ -10034,6 +10318,7 @@ class MainWindow(QMainWindow):
             f"Received: {received_at}",
             f"Image: {card.get('width', image.width())} × {card.get('height', image.height())}",
             integrity_text,
+            f"CRC-verified pixels: {verified_pixels}/{total_pixels}",
         ))
         if existing is None:
             item = QListWidgetItem()

@@ -359,6 +359,8 @@ class CardPreviewAssembler:
             state["card"][name] = state["integrity"][name]
         merged_card = {**state["card"], "pixel_coverage": state["coverage"],
                        "verified_pixel_coverage": state["verified_pixels"],
+                       "pixels_received": sum(bool(value) for value in state["coverage"]),
+                       "pixels_verified": sum(bool(value) for value in state["verified_pixels"]),
                        "block_checksums": state["block_checksums"],
                        "received_blocks": state["received_blocks"] if blocks is not None else None,
                        "received_copies": state["copies"]}

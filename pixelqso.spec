@@ -40,6 +40,7 @@ hidden = [
     "data2g_transport",
     "data2g_runtime",
     "card_transfer",
+    "card_requests",
     "weak_signal_modem",
     "weak_signal_ldpc",
     "weak_signal_ldpc_data",

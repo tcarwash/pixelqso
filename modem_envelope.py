@@ -31,6 +31,7 @@ COMPRESSED_VERSION = 3
 INTERLACED_VERSION = 4
 ANIMATION_VERSION = 5  # Optional sidecar; never replaces a normal copy header.
 REPORT_VERSIONS = (6, 7)  # Two independently checked halves of a reception report.
+REQUEST_VERSIONS = (8, 9)  # Two halves of a standalone card request.
 # Keep the musical raster's optional CRC sidecar available for quick re-enable,
 # but omit its eight envelope markers by default while timing/skew is addressed.
 ENABLE_MUSICAL_BLOCK_CRC_SIDECAR = False
@@ -237,6 +238,25 @@ def header_audio(key, payload_samples, identity, *, trailer=False, copies=None, 
     return resample_poly(np.pad(audio, (round(GUARD*RATE),)*2), 6, 1).astype(np.float32)
 
 
+def request_audio(key, requests):
+    """Build a short, payload-free protected control burst for card requests."""
+    from card_requests import request_parts
+    if key not in MODE_IDS:
+        raise ValueError('Selected mode cannot identify a card request')
+    packets = []
+    for request in requests:
+        token, parts = request_parts(request)
+        for index, version in enumerate(REQUEST_VERSIONS):
+            body = BODY.pack(b'PQCH', version, MODE_IDS[key], token, parts[index])
+            encoded = pixel.synthesize(_protected_symbols(body), sample_rate=RATE, profile=PROFILE)
+            packets.append(resample_poly(np.pad(encoded, (round(GUARD*RATE),)*2), 6, 1).astype(np.float32))
+    if not packets:
+        raise ValueError('There are no card requests to send')
+    audio = np.concatenate(packets)
+    peak = float(np.max(np.abs(audio)))
+    return (audio / max(peak, 1e-12) * .85).astype(np.float32)
+
+
 def transmit(key, card, payload, copies, message_type='card', snr_db=None):
     if int(copies) != copies or not 1 <= copies <= MAX_COPIES:
         raise ValueError(f'copy count must be between 1 and {MAX_COPIES}')
@@ -352,6 +372,9 @@ def decode_header(metrics, *, soft=False):
     if magic == b'PQCH' and version in REPORT_VERSIONS and mode in ID_MODES:
         return dict(mode=ID_MODES[mode], version=version,
                     feedback_part=(ID_MODES[mode], samples, version-REPORT_VERSIONS[0], identity.hex()))
+    if magic == b'PQCH' and version in REQUEST_VERSIONS and mode in ID_MODES:
+        return dict(mode=ID_MODES[mode], version=version,
+                    request_part=(samples, version-REQUEST_VERSIONS[0], identity))
     if magic == b'PQCH' and version == ANIMATION_VERSION and mode in ID_MODES:
         from card_animation import validate_link
         link = validate_link(dict(first_card_id=samples >> 16, frame_ms=samples & 65535,
@@ -464,9 +487,11 @@ class AnnouncedCopy:
 
 
 class AnnouncedCopies(list):
-    def __init__(self, copies=(), animation_links=(), feedback_parts=(), block_crc_parts=()):
+    def __init__(self, copies=(), animation_links=(), feedback_parts=(), block_crc_parts=(), requests=()):
         super().__init__(copies)
         self.block_crc_parts = list(block_crc_parts)
+        self.requests = list(requests)
+        self.request_parts = []
         self.animation_links = list(animation_links)
         self.feedback_parts = list(feedback_parts)
 
@@ -595,6 +620,14 @@ def find_copies(audio, sample_rate, *, capture_start_utc=None, grid_window=.1):
         markers.append((start, header, score, offset))
     links = [header['animation_link'] for _, header, _, _ in markers if 'animation_link' in header]
     parts = [header['feedback_part'] for _, header, _, _ in sorted(markers, key=lambda marker: marker[0]) if 'feedback_part' in header]
+    request_parts = [header['request_part'] for _, header, _, _ in sorted(markers, key=lambda marker: marker[0]) if 'request_part' in header]
+    from card_requests import RequestCache
+    request_cache = RequestCache()
+    requests = []
+    for token, index, part in request_parts:
+        request = request_cache.add_part(token, index, part)
+        if request is not None:
+            requests.append(request)
     from card_feedback import FeedbackCache
     feedback = FeedbackCache()
     for part in parts:
@@ -608,7 +641,8 @@ def find_copies(audio, sample_rate, *, capture_start_utc=None, grid_window=.1):
     prefix_boundaries = {}
     trailer_boundaries = {}
     for index, (start, header, _, _) in enumerate(markers):
-        if 'animation_link' in header or 'feedback_part' in header or 'block_crc_part' in header:
+        if ('animation_link' in header or 'feedback_part' in header or
+                'block_crc_part' in header or 'request_part' in header):
             continue
         boundary = (start - GUARD*RATE if header['trailer'] else
                     start + SYMBOLS*step + GUARD*RATE)
@@ -640,7 +674,8 @@ def find_copies(audio, sample_rate, *, capture_start_utc=None, grid_window=.1):
 
     copies = []
     for marker_index, (start, header, score, offset) in enumerate(markers):
-        if 'animation_link' in header or 'feedback_part' in header or 'block_crc_part' in header:
+        if ('animation_link' in header or 'feedback_part' in header or
+                'block_crc_part' in header or 'request_part' in header):
             continue
         if marker_index in used_trailers:
             continue
@@ -689,7 +724,9 @@ def find_copies(audio, sample_rate, *, capture_start_utc=None, grid_window=.1):
                     'payload_overread_samples': payload_overread,
                     'paired_trailer': paired_trailer_end is not None,
                     'observed_payload_samples': round((last-first)*48000/RATE)}))
-    return AnnouncedCopies(sorted(copies, key=lambda c: c.start)[:MAX_COPIES], links, parts, crc_parts)
+    result = AnnouncedCopies(sorted(copies, key=lambda c: c.start)[:MAX_COPIES], links, parts, crc_parts, requests)
+    result.request_parts = request_parts
+    return result
 
 
 def groups(copies, key):
@@ -851,6 +888,8 @@ class CopyCaptureCache:
         self.block_crc_tables = TableCache()
         from card_feedback import FeedbackCache
         self.feedback = FeedbackCache()
+        from card_requests import RequestCache
+        self.requests = RequestCache()
         from threading import RLock
         self.max_bytes=max_bytes; self.max_groups=max_groups
         self.lock=RLock(); self.entries={}; self.serial=0
@@ -863,6 +902,9 @@ class CopyCaptureCache:
             self.block_crc_tables.tables.clear()
             self.feedback.reports.clear()
             self.feedback.parts.clear()
+            self.requests.parts.clear()
+            self.requests.requests.clear()
+            self.requests.received_requests.clear()
             self.entries.clear()
             self.header_scan_sample=None
 
@@ -885,6 +927,7 @@ class CopyCaptureCache:
             result.animation_links = copy.deepcopy(self.animation_links)
             result.block_crc_tables = copy.deepcopy(self.block_crc_tables)
             result.feedback = copy.deepcopy(self.feedback)
+            result.requests = copy.deepcopy(self.requests)
             return result
 
     def header_scan_ranges(self, capture_start_sample, sample_count, sample_rate,

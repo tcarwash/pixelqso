@@ -23,12 +23,16 @@ def validate_report(report):
     if not re.fullmatch(r'[A-Z0-9/]{1,12}', call):
         raise ValueError('Reception report requires an identified station')
     result = dict(callsign=call)
-    for field, maximum in (('card_id', 65535), ('pixels_received', 65025), ('pixels_total', 65025)):
+    for field, maximum in (('card_id', 65535), ('pixels_received', 65025),
+                           ('pixels_verified', 65025), ('pixels_total', 65025)):
         value = report.get(field)
+        if field == 'pixels_verified' and value is None:
+            value = report.get('pixels_total', 0) if report.get('verified') else 0
         if type(value) is not int or not 0 <= value <= maximum:
             raise ValueError(f'Invalid reception report {field}')
         result[field] = value
-    if not result['pixels_total'] or result['pixels_received'] > result['pixels_total']:
+    if (not result['pixels_total'] or result['pixels_received'] > result['pixels_total'] or
+            result['pixels_verified'] > result['pixels_received']):
         raise ValueError('Invalid reception report pixel count')
     for field in ('crc_blocks_passed', 'crc_blocks_total'):
         value = report.get(field)
@@ -41,7 +45,7 @@ def validate_report(report):
     verified = report.get('verified', False)
     if type(verified) is not bool:
         raise ValueError('Invalid reception report verification flag')
-    if verified and (result['pixels_received'] != result['pixels_total'] or
+    if verified and (result['pixels_verified'] != result['pixels_total'] or
                      total is not None and passed != total):
         raise ValueError('Incomplete reception report cannot claim whole-card verification')
     result['verified'] = verified
@@ -59,13 +63,16 @@ def make_report(received):
     coverage = card.get('pixel_coverage')
     verified = bool((received.get('assembly_event') or {}).get('verified_complete') or card.get('exact'))
     count = sum(bool(value) for value in coverage[:total]) if coverage is not None else (total if verified else 0)
+    verified_coverage = card.get('verified_pixel_coverage')
+    verified_count = (sum(bool(value) for value in verified_coverage[:total])
+                      if verified_coverage is not None else (total if verified else 0))
     blocks = card.get('received_blocks')
     if blocks is not None:
         passed, block_total = sum(bool(value) for value in blocks), len(blocks)
     else:
         passed, block_total = card.get('crc_blocks_passed'), card.get('crc_blocks_total')
     return validate_report(dict(callsign=card.get('callsign'), card_id=card.get('card_id'),
-        pixels_received=count, pixels_total=total, crc_blocks_passed=passed,
+        pixels_received=count, pixels_verified=verified_count, pixels_total=total, crc_blocks_passed=passed,
         crc_blocks_total=block_total, verified=verified,
         block_kind=card.get('crc_block_kind', 'crc_block')))
 
@@ -80,7 +87,8 @@ def report_lines(card, *, sent=False):
         return []
     subject = f"{r['callsign']} card {r['card_id']:04X}"
     prefix = 'Sent reception report for' if sent else 'Their reception of'
-    pixels = f"{r['pixels_received']}/{r['pixels_total']} pixels received"
+    pixels = (f"{r['pixels_verified']}/{r['pixels_total']} pixels CRC-verified · "
+              f"{r['pixels_received']}/{r['pixels_total']} pixels received")
     passed, total = r['crc_blocks_passed'], r['crc_blocks_total']
     if r['block_kind'] == 'transport_fragment':
         blocks = f'{passed} CRC-checked transport fragments' if passed is not None else 'CRC-checked fragments: unavailable'
@@ -96,8 +104,10 @@ def encode_report(report, binding, message_type):
     if message_type not in ('exchange', '73') or len(binding) != 8:
         raise ValueError('Reception reports belong to Exchange or RR73')
     flags = int(r['verified']) | (2 if message_type == '73' else 0) | (4 if r['block_kind'] == 'transport_fragment' else 0)
-    body = SUBJECT.pack(r['callsign'].encode().ljust(12, b'\0'), r['card_id'], flags, 1)
-    body += COUNTS.pack(binding, r['pixels_received'], r['pixels_total'],
+    body = SUBJECT.pack(r['callsign'].encode().ljust(12, b'\0'), r['card_id'], flags, 2)
+    # Version 2 reports the number of pixels covered by checked data in the
+    # legacy pixel-count slot; v1 decoders still read the original candidate count.
+    body += COUNTS.pack(binding, r['pixels_verified'], r['pixels_total'],
                         UNKNOWN if r['crc_blocks_passed'] is None else r['crc_blocks_passed'],
                         UNKNOWN if r['crc_blocks_total'] is None else r['crc_blocks_total'])
     return MAGIC + body + struct.pack('>I', zlib.crc32(body))
@@ -107,7 +117,7 @@ def decode_report(frame):
     if len(frame) != 40 or frame[:4] != MAGIC or zlib.crc32(frame[4:-4]) != int.from_bytes(frame[-4:], 'big'):
         raise ValueError('Invalid reception report checksum or length')
     call, card_id, flags, version = SUBJECT.unpack(frame[4:20])
-    if version != 1 or flags & ~7:
+    if version not in (1, 2) or flags & ~7:
         raise ValueError('Unsupported reception report')
     binding, pixels, total, passed, blocks = COUNTS.unpack(frame[20:-4])
     try:
@@ -115,6 +125,7 @@ def decode_report(frame):
     except UnicodeError as exc:
         raise ValueError('Invalid reception report callsign') from exc
     report = validate_report(dict(callsign=call, card_id=card_id, pixels_received=pixels,
+        pixels_verified=(pixels if version == 2 else (total if flags & 1 else 0)),
         pixels_total=total, crc_blocks_passed=None if passed == UNKNOWN else passed,
         crc_blocks_total=None if blocks == UNKNOWN else blocks, verified=bool(flags & 1),
         block_kind='transport_fragment' if flags & 4 else 'crc_block'))

@@ -129,3 +129,36 @@ def test_large_text_keeps_editor_form_inside_column(workspace):
     workspace._apply_interface_text_size(100)
     workspace.editor_baseline = workspace.editor_signature()
     workspace.editor_dialog.close()
+
+
+@pytest.mark.parametrize('text_size', [100, 115])
+@pytest.mark.parametrize('width', [1198, 1440])
+def test_outgoing_card_and_details_fit_sender_viewport(workspace, text_size, width):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QScrollArea
+    workspace.show_experimental_modes.setChecked(True)
+    workspace.backend_combo.setCurrentIndex(workspace.backend_combo.findData('experimental'))
+    workspace.advanced_controls_action.setChecked(True)
+    workspace.mode_combo.setCurrentIndex(workspace.mode_combo.findData('experimental_8fsk_orthogonal'))
+    workspace.card_combo.addItem('A very long saved card title ' * 8, 'layout-only-card')
+    workspace._apply_interface_text_size(text_size)
+    workspace.resize(width, 1064)
+    workspace.operate_splitter.setSizes([370, 740])
+    for _ in range(5):
+        QApplication.processEvents()
+    art = workspace.outgoing_art
+    scroll = art.parentWidget()
+    while not isinstance(scroll, QScrollArea):
+        scroll = scroll.parentWidget()
+    scroll.verticalScrollBar().setValue(0)
+    QApplication.processEvents()
+    viewport = scroll.viewport()
+    assert scroll.widget().width() <= viewport.width()
+    card_rect = art.rect().translated(art.mapTo(viewport, QPoint(0, 0)))
+    assert viewport.rect().contains(card_rect)
+    assert abs(card_rect.center().x() - viewport.rect().center().x()) <= 2
+    for control in (workspace.mode_combo, workspace.mode_compatibility_filter,
+                    workspace.rx_mode_preference_form_row):
+        left = control.mapTo(viewport, QPoint(0, 0)).x()
+        assert left >= 0
+        assert left + control.width() <= viewport.width()

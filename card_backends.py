@@ -82,9 +82,10 @@ EXPERIMENTAL_MODE_DESCRIPTIONS = {
         "pilot timing and whole-card CRC32. Fixed tones 450–2550 Hz; new experimental wire format.",
     "experimental_8fsk_musical_25": "Experimental musical 8-FSK at 25 baud. The eight palette indices map directly "
         "to the E-major scale E4–E5 (330, 370, 415, 440, 494, 554, 622, 659 Hz), so each image pixel selects a note "
-        "lasting about 40 ms. Raw pixel tones make the image audible as a note pattern. An optional protected "
-        "sidecar carries per-block CRC16 checks so receivers can keep good blocks across passes; the normal "
-        "whole-card identity remains the final verification gate. The raster itself has no FEC.",
+        "lasting about 40 ms. Raw pixel tones make the image audible as a note pattern. The current wire format "
+        "adds a three-note in-raster timing marker every 64 pixels (about 1.8 seconds per 32×32 card); older unpiloted "
+        "version-3 cards remain receivable. The optional CRC sidecar is disabled by default, and the whole-card "
+        "identity remains the final verification gate. The raster itself has no FEC.",
     "experimental_8fsk_mono_fast": "Black-and-white 32×32 cards use one raster bit per pixel, protected identity, "
         "Reed–Solomon blocks and whole-card CRC32/content tag. A typical full card takes about 3 seconds before "
         "the common copy header; color artwork is luminance-thresholded to black and white.",
@@ -137,7 +138,9 @@ class AvatarBackend:
         cycle = (pixel.minimal_avatar_resilient_cycle_symbols(
                     card, message_type=message_type, snr_db=snr_db,
                     wire_version=self.wire_version)
-                 if self.checked else pixel.minimal_avatar_symbols(card, message_type=message_type, snr_db=snr_db))
+                 if self.checked else pixel.minimal_avatar_symbols(
+                     card, message_type=message_type, snr_db=snr_db,
+                     timing_pilots=self.key == "experimental_8fsk_musical_25"))
         return pixel.synthesize(pixel.repeat_symbol_stream(cycle, repeats), profile=self.profile)
 
     def estimate_seconds(self, card, repeats):
@@ -146,6 +149,9 @@ class AvatarBackend:
         if self.checked:
             symbol_count = len(pixel.minimal_avatar_resilient_cycle_symbols(
                 card, wire_version=self.wire_version))
+            return repeats * symbol_count / self.profile.baud
+        if self.key == "experimental_8fsk_musical_25":
+            symbol_count = len(pixel.minimal_avatar_symbols(card, timing_pilots=True))
             return repeats * symbol_count / self.profile.baud
         duration = pixel.minimal_avatar_duration(card=card)
         return repeats * duration * pixel.MINIMAL_AVATAR_PROFILE.baud / self.profile.baud

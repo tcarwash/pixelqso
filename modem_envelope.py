@@ -31,6 +31,9 @@ COMPRESSED_VERSION = 3
 INTERLACED_VERSION = 4
 ANIMATION_VERSION = 5  # Optional sidecar; never replaces a normal copy header.
 REPORT_VERSIONS = (6, 7)  # Two independently checked halves of a reception report.
+# Keep the musical raster's optional CRC sidecar available for quick re-enable,
+# but omit its eight envelope markers by default while timing/skew is addressed.
+ENABLE_MUSICAL_BLOCK_CRC_SIDECAR = False
 
 
 COMPRESSED_MODES = frozenset((
@@ -70,7 +73,7 @@ def metadata_header_count(card, key=None):
 
 
 def block_crc_header_count(card, key=None):
-    return (8 if key == 'experimental_8fsk_musical_25' and
+    return (8 if ENABLE_MUSICAL_BLOCK_CRC_SIDECAR and key == 'experimental_8fsk_musical_25' and
             0 < card.width*card.height <= 1024 else 0)
 
 
@@ -207,6 +210,8 @@ def _metadata_framed(key, card, audio, message_type, snr_db, *, include_block_cr
 
 
 def _block_crc_framed(key, card, audio, message_type, snr_db):
+    if not ENABLE_MUSICAL_BLOCK_CRC_SIDECAR:
+        return audio
     from musical_crc import MODE, VERSIONS, encode_table
     if key != MODE:
         return audio
@@ -600,18 +605,63 @@ def find_copies(audio, sample_rate, *, capture_start_utc=None, grid_window=.1):
                  if 'block_crc_part' in header]
     for part in crc_parts:
         tables.add_part(*part)
-    copies = []
-    for start, header, score, offset in markers:
+    prefix_boundaries = {}
+    trailer_boundaries = {}
+    for index, (start, header, _, _) in enumerate(markers):
         if 'animation_link' in header or 'feedback_part' in header or 'block_crc_part' in header:
+            continue
+        boundary = (start - GUARD*RATE if header['trailer'] else
+                    start + SYMBOLS*step + GUARD*RATE)
+        if header['trailer']:
+            trailer_boundaries[index] = boundary
+        else:
+            prefix_boundaries[index] = boundary
+    paired_trailers = {}
+    used_trailers = set()
+    for prefix_index, boundary in sorted(prefix_boundaries.items(), key=lambda item: item[1]):
+        header = markers[prefix_index][1]
+        if header['mode'] != 'experimental_8fsk_musical_25':
+            continue
+        expected_length = header['payload_samples'] * RATE / 48000
+        tolerance = max(round(expected_length * .02), 2 * RATE)
+        matches = []
+        for trailer_index, trailer_boundary in trailer_boundaries.items():
+            trailer_header = markers[trailer_index][1]
+            if trailer_index in used_trailers or trailer_header['identity'] != header['identity']:
+                continue
+            observed_length = trailer_boundary - boundary
+            if observed_length > 0 and abs(observed_length - expected_length) <= tolerance:
+                matches.append((abs(observed_length - expected_length), trailer_index,
+                                trailer_boundary))
+        if matches:
+            _, trailer_index, trailer_boundary = min(matches)
+            paired_trailers[prefix_index] = trailer_boundary
+            used_trailers.add(trailer_index)
+
+    copies = []
+    for marker_index, (start, header, score, offset) in enumerate(markers):
+        if 'animation_link' in header or 'feedback_part' in header or 'block_crc_part' in header:
+            continue
+        if marker_index in used_trailers:
             continue
         header = {**header, 'animation_links': links, 'reception_reports': feedback.frames(),
                   'block_crc_tables': tables.frames()}
         header = {**header, 'estimated_snr_db_2500': header_snr_db(analytic, start, offset)}
         payload_length = header['payload_samples'] * RATE / 48000
+        # The musical payload has in-band timing pilots and can estimate its
+        # own sample clock. Keep a small tail reserve so a slow receive clock
+        # does not cut off raster symbols at the nominal sample count. The
+        # pilot decoder consumes only the declared raster, so the following
+        # trailer/header audio in this reserve is harmless.
+        paired_trailer_end = paired_trailers.get(marker_index)
+        payload_overread = (round(payload_length * .012)
+                            if header['mode'] == 'experimental_8fsk_musical_25'
+                            and not header['trailer'] and paired_trailer_end is None else 0)
         boundary = (start - GUARD*RATE if header['trailer'] else
                     start + SYMBOLS*step + GUARD*RATE)
         first = boundary-payload_length if header['trailer'] else boundary
-        last = boundary if header['trailer'] else boundary+payload_length
+        last = (paired_trailer_end if paired_trailer_end is not None else
+                boundary if header['trailer'] else boundary+payload_length+payload_overread)
         if header['version'] in (GROUP_VERSION,COMPRESSED_VERSION):
             # Native payload training and guards independently synchronize each
             # copy. Only the opening marker carries mode and content identity.
@@ -635,7 +685,10 @@ def find_copies(audio, sample_rate, *, capture_start_utc=None, grid_window=.1):
             continue
         copies.append(AnnouncedCopy(header['mode'], header['identity'], original_first,
                     original_last, {**header, 'acquisition_score': score,
-                    'carrier_offset_hz': offset}))
+                    'carrier_offset_hz': offset,
+                    'payload_overread_samples': payload_overread,
+                    'paired_trailer': paired_trailer_end is not None,
+                    'observed_payload_samples': round((last-first)*48000/RATE)}))
     return AnnouncedCopies(sorted(copies, key=lambda c: c.start)[:MAX_COPIES], links, parts, crc_parts)
 
 
@@ -712,7 +765,11 @@ def decode_capture(key, audio, sample_rate, decoder, copies=None, copy_decoder=N
                 coverage = card.get('pixel_coverage') or []
                 pixels = report.get('pixels') or []
                 expected_pixels = int(card.get('width', 32)) * int(card.get('height', 32))
-                if (complete_payload or all(card.get('received_blocks') or [False])) and len(pixels) == expected_pixels:
+                # A verified content digest proves the entire raster even if
+                # marker timing clipped a few nominal payload samples.
+                eligible_for_failed_checksum = (
+                    complete_payload or all(card.get('received_blocks') or [False]))
+                if len(pixels) == expected_pixels:
                     matches_identity = report_content_id(key, report).hex() == group[0].identity
                     if matches_identity:
                         received_coverage = list(coverage) if coverage else [True] * expected_pixels
@@ -726,7 +783,7 @@ def decode_capture(key, audio, sample_rate, decoder, copies=None, copy_decoder=N
                         card['color_stage'] = (
                             'whole-card checksum verified' if recovered_count == expected_pixels else
                             f'whole-card checksum verified · {recovered_count}/{expected_pixels} pixels decoded directly')
-                    elif coverage and all(coverage):
+                    elif eligible_for_failed_checksum and coverage and all(coverage):
                         card['content_checksum_valid'] = False
                         card['exact'] = False
                         card['color_stage'] = f'{expected_pixels}/{expected_pixels} pixels · whole-card checksum failed · unverified'

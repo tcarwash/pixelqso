@@ -1,8 +1,17 @@
 # E-major optional block CRC metadata
 
-The existing `experimental_8fsk_musical_25` raster stays byte-for-byte the same:
-its native protected identity header is followed directly by the E-major pixel
-notes. The per-block checks travel in optional `PQCH` common-envelope markers
+The transmitter sidecar is disabled to remove its airtime. Set
+`ENABLE_MUSICAL_BLOCK_CRC_SIDECAR` in `modem_envelope.py` to `True` to restore it;
+receiver support remains available. The current musical transmitter uses native
+metadata version 5 with a three-note timing marker every 64 pixel symbols. This adds
+45 symbols (1.8 seconds) to a 32×32 color card and lets the receiver re-estimate
+symbol timing through the raster. Version-3 unpiloted cards remain supported by
+the receiver; older software will not understand version 5.
+
+Version-3 `experimental_8fsk_musical_25` remains unchanged: its native protected
+identity header is followed directly by the E-major pixel notes. Version 5
+inserts timing markers in the raster and the receiver removes them before
+reconstructing the pixels. When enabled, per-block checks travel in optional `PQCH` common-envelope markers
 before and after the repeated raster burst. Each marker is independently protected with
 the existing RS/CRC header coding.
 

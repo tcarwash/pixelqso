@@ -848,6 +848,10 @@ class CardCanvas(QWidget):
         "erase": "Erase pixels to transparency.",
         "fill": "Fill a connected area with the selected palette color.",
         "pick": "Pick the palette color from a pixel.",
+        "rect": "Drag from one corner to the opposite corner to draw a rectangle.",
+        "filled_rect": "Drag from one corner to the opposite corner to draw a filled rectangle.",
+        "ellipse": "Drag to draw an ellipse; enable Center out to size it from its center.",
+        "filled_ellipse": "Drag to draw a filled ellipse; enable Center out to size it from its center.",
         "move": ("Select a placed stamp with Space or Enter at the cursor, then move it "
                  "one pixel at a time with the arrow keys; Escape deselects it. You can "
                  "also drag a stamp with the mouse and drag its lower-right handle to resize."),
@@ -862,6 +866,11 @@ class CardCanvas(QWidget):
         self.tool = "draw"
         self.keyboard_cursor = (0, 0)
         self.show_grid = True
+        # Aseprite-style X symmetry mirrors brush strokes around the canvas center.
+        self.mirror_x = False
+        self.shape_centered = False
+        self.shape_origin = None
+        self.shape_preview = None
         self.onion_image = None
         self.onion_opacity = 0.3
         self.last_paint_pixel = None
@@ -968,6 +977,10 @@ class CardCanvas(QWidget):
                 rgb = self.card.palette[self.card.pixels[y * self.card.width + x]]
                 p.fillRect(QRect(int(ox+x*cell), int(oy+y*cell), int(cell+1), int(cell+1)),
                            QColor(*(v * 17 for v in rgb)))
+        if self.shape_preview:
+            color = QColor(*(v * 17 for v in self.card.palette[self.color_index]))
+            for x, y in self.shape_preview:
+                p.fillRect(QRect(int(ox+x*cell), int(oy+y*cell), max(1, int(cell+1)), max(1, int(cell+1))), color)
         if self.onion_image is not None:
             p.save()
             p.setOpacity(self.onion_opacity)
@@ -1248,7 +1261,7 @@ class CardCanvas(QWidget):
                     self._render_layers()
             else:
                 self.remember_edit()
-                self.base_pixels[index] = 0 if self.tool == "erase" else self.color_index
+                self._set_brush_pixel(x, y, 0 if self.tool == "erase" else self.color_index)
                 self._render_layers()
             event.accept()
             return
@@ -1266,11 +1279,12 @@ class CardCanvas(QWidget):
         x, y = self.keyboard_cursor
         index = y * self.card.width + x
         value = self.color_index
-        if self.base_pixels[index] == value:
+        mirrored_index = y * self.card.width + (self.card.width - 1 - x)
+        if self.base_pixels[index] == value and (not self.mirror_x or self.base_pixels[mirrored_index] == value):
             return
         if remember:
             self.remember_edit()
-        self.base_pixels[index] = value
+        self._set_brush_pixel(x, y, value)
         self.keyboard_stroke_changed = True
         self._render_layers()
 
@@ -1577,9 +1591,39 @@ class CardCanvas(QWidget):
         for step in range(steps+1):
             px = round(start_x+(x-start_x)*step/steps)
             py = round(start_y+(y-start_y)*step/steps)
-            self.base_pixels[py*self.card.width+px] = 0 if erase or self.tool == "erase" else self.color_index
+            self._set_brush_pixel(px, py, 0 if erase or self.tool == "erase" else self.color_index)
         self.last_paint_pixel = (x, y)
         self._render_layers()
+
+    def _set_brush_pixel(self, x, y, value):
+        self.base_pixels[y*self.card.width+x] = value
+        if self.mirror_x:
+            mirrored_x = self.card.width - 1 - x
+            self.base_pixels[y*self.card.width+mirrored_x] = value
+
+    def _shape_pixels(self, tool, start, end):
+        from PySide6.QtGui import QImage
+        from PySide6.QtCore import QRect
+        sx, sy = start; ex, ey = end
+        if self.shape_centered:
+            left, top = max(0, sx-abs(ex-sx)), max(0, sy-abs(ey-sy))
+            right, bottom = min(self.card.width-1, sx+abs(ex-sx)), min(self.card.height-1, sy+abs(ey-sy))
+        else:
+            left, right = sorted((sx, ex)); top, bottom = sorted((sy, ey))
+        mask = QImage(self.card.width, self.card.height, QImage.Format.Format_ARGB32)
+        mask.fill(0)
+        painter = QPainter(mask); painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setPen(QPen(QColor(255, 255, 255), 1))
+        filled = tool.startswith("filled_")
+        painter.setBrush(QColor(255, 255, 255) if filled else Qt.BrushStyle.NoBrush)
+        box = QRect(left, top, right-left+1, bottom-top+1)
+        if "ellipse" in tool:
+            painter.drawEllipse(box)
+        else:
+            painter.drawRect(box)
+        painter.end()
+        return [(x, y) for y in range(self.card.height) for x in range(self.card.width)
+                if mask.pixelColor(x, y).alpha()]
 
     def mousePressEvent(self, event):
         if event.button() not in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton): return
@@ -1635,6 +1679,14 @@ class CardCanvas(QWidget):
         self.keyboard_cursor = (x, y)
         self.update_accessible_description()
         self.update()
+        if self.tool in ("rect", "filled_rect", "ellipse", "filled_ellipse"):
+            if event.button() != Qt.MouseButton.LeftButton: return
+            self.remember_edit()
+            self.selected_layer = None
+            self.shape_origin = (x, y)
+            self.shape_preview = self._shape_pixels(self.tool, self.shape_origin, self.shape_origin)
+            self.update()
+            return
         if self.tool == "pick":
             self.color_index = self.card.pixels[y*self.card.width+x]
             self.tool = "draw"
@@ -1668,6 +1720,14 @@ class CardCanvas(QWidget):
             self.paint_at(point, event.button() == Qt.MouseButton.RightButton)
 
     def mouseReleaseEvent(self, event):
+        if self.shape_origin is not None:
+            if self.shape_preview:
+                for x, y in self.shape_preview:
+                    self._set_brush_pixel(x, y, self.color_index)
+                self._render_layers()
+            self.shape_origin = None
+            self.shape_preview = None
+            self.update()
         self.selection_origin = None
         self.last_paint_pixel = None
         self.drag_layer = None
@@ -1679,6 +1739,12 @@ class CardCanvas(QWidget):
         self.changed.emit()
 
     def mouseMoveEvent(self, event):
+        if self.shape_origin is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            end = self.card_position(event.position().toPoint())
+            if end[0] is not None:
+                self.shape_preview = self._shape_pixels(self.tool, self.shape_origin, end)
+                self.update()
+            return
         if self.selection_origin is not None and event.buttons() & Qt.MouseButton.LeftButton:
             x, y = self.card_position(event.position().toPoint())
             if x is not None:
@@ -3669,7 +3735,10 @@ class MainWindow(QMainWindow):
         self.editor_splitter.addWidget(drawing_widget)
         tools = QGridLayout(); self.tool_buttons = {}
         self.tool_group = QButtonGroup(self); self.tool_group.setExclusive(True)
-        for title, tool in (("Draw", "draw"), ("Erase", "erase"), ("Fill", "fill"), ("Pick", "pick"), ("Move stamp", "move"), ("Box select", "select")):
+        for title, tool in (("Draw", "draw"), ("Erase", "erase"), ("Fill", "fill"), ("Pick", "pick"),
+                            ("Move stamp", "move"), ("Box select", "select"),
+                            ("Rectangle", "rect"), ("Filled rectangle", "filled_rect"),
+                            ("Ellipse", "ellipse"), ("Filled ellipse", "filled_ellipse")):
             button = QPushButton(title); button.setCheckable(True)
             button.setAccessibleName(f"{title} tool")
             button.setAccessibleDescription(CardCanvas.TOOL_HELP[tool])
@@ -3708,6 +3777,14 @@ class MainWindow(QMainWindow):
         grid = QCheckBox("Grid"); grid.setChecked(True)
         grid.toggled.connect(lambda checked: (setattr(self.canvas, "show_grid", checked), self.canvas.update()))
         history.addWidget(grid); drawing.addLayout(history)
+        mirror = QCheckBox("Mirror X")
+        mirror.setToolTip("Mirror Draw and Erase strokes across the canvas center, like Aseprite X symmetry.")
+        mirror.toggled.connect(lambda checked: setattr(self.canvas, "mirror_x", checked))
+        history.addWidget(mirror)
+        centered = QCheckBox("Center out")
+        centered.setToolTip("Draw rectangles and ellipses outward from the first point instead of from a corner.")
+        centered.toggled.connect(lambda checked: setattr(self.canvas, "shape_centered", checked))
+        history.addWidget(centered)
         for key, callback in (("Ctrl+Z", self.canvas.undo), ("Ctrl+Shift+Z", self.canvas.redo), ("Ctrl+Y", self.canvas.redo)):
             shortcut = QShortcut(QKeySequence(key), w); shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut); shortcut.activated.connect(callback)
 
@@ -4628,13 +4705,20 @@ class MainWindow(QMainWindow):
             "Select the digital mode used to send and receive cards. "
             "This is separate from the radio control mode and frequency.")
         mode_form = QFormLayout()
+        mode_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        # Long mode names must not widen the scroll content and push the
+        # centered outgoing card outside the visible sender pane.
+        for combo in (self.mode_combo, self.mode_compatibility_filter):
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(16)
+            combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         mode_form.addRow("Transfer mode", self.mode_combo)
         self.transfer_mode_label = mode_form.labelForField(self.mode_combo)
         self.mode_compatibility_filter.currentIndexChanged.connect(
             lambda *_: self._set_mode_options(self.selected_mode()))
         mode_form.addRow("Show", self.mode_compatibility_filter)
         self._update_transfer_mode_visibility()
-        self.receive_all_modes = QCheckBox("Receive all local audio modem types")
+        self.receive_all_modes = QCheckBox("Receive all local modes")
         self.receive_all_modes.setChecked(self.settings.value("transfer/receive_all", True, type=bool))
         self.receive_all_modes.setToolTip(
             "This applies to Pixel QSO's local audio decoders. Data2G receives decoded card frames from its host.")
@@ -4654,6 +4738,7 @@ class MainWindow(QMainWindow):
         self.rx_mode_lock.toggled.connect(
             lambda value: self.settings.setValue("transfer/rx_mode_locked", value))
         self.rx_mode_preference_label = QLabel()
+        self.rx_mode_preference_label.setWordWrap(True)
         self.rx_mode_preference_label.setObjectName("rxModePreference")
         rx_mode_row = QWidget()
         rx_mode_layout = QHBoxLayout(rx_mode_row)
@@ -4683,6 +4768,8 @@ class MainWindow(QMainWindow):
             lambda value: self.settings.setValue("transfer/interlaced_copies", value)
             if not getattr(self, "_station_settings_editing", False) else None)
         self.card_combo = QComboBox()
+        self.card_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.card_combo.setMinimumContentsLength(16)
         self.card_combo.setIconSize(QSize(42, 42))
         self.card_combo.currentIndexChanged.connect(self._refresh_transfer_summary)
         self.card_combo.currentIndexChanged.connect(self._refresh_mode_capabilities)
@@ -7689,10 +7776,9 @@ class MainWindow(QMainWindow):
         self.tx_preview_phase.setStyleSheet('color:#ffd48a; font-weight:700;')
         layout.addWidget(self.tx_preview_phase)
         self.tx_preview_view = QLabel(); self.tx_preview_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.tx_preview_view.setMinimumSize(194, 194)
-        self.tx_preview_view.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
+        self.tx_preview_view.setFixedSize(194, 194)
         self.tx_preview_view.setAccessibleName('Artwork being sent')
-        layout.addWidget(self.tx_preview_view, 1)
+        layout.addWidget(self.tx_preview_view, 0, Qt.AlignmentFlag.AlignHCenter)
         self.tx_preview_progress = QProgressBar(); self.tx_preview_progress.setRange(0, 1000)
         self.tx_preview_progress.setAccessibleName('Outgoing transmission progress')
         layout.addWidget(self.tx_preview_progress)
@@ -7731,8 +7817,7 @@ class MainWindow(QMainWindow):
                 faded = QImage(image.size(), QImage.Format.Format_RGB32); faded.fill(QColor('#201c16'))
                 painter = QPainter(faded); painter.setOpacity(state['opacity']); painter.drawImage(0, 0, image); painter.end()
                 image = faded
-            size = QSize(max(194, self.tx_preview_view.width()), max(194, self.tx_preview_view.height()))
-            self.tx_preview_view.setPixmap(QPixmap.fromImage(image).scaled(size,
+            self.tx_preview_view.setPixmap(QPixmap.fromImage(image).scaled(self.tx_preview_view.size(),
                 Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation))
         self.tx_preview_view.setAccessibleName('Outgoing artwork · ' + state['phase'])
         self.tx_preview_phase.setText(f"Copy {state['copy']} · {state['phase']}")

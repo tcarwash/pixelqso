@@ -64,6 +64,37 @@ class MusicalModeTests(unittest.TestCase):
         self.assertEqual(combined["pixels"], baseline["pixels"])
         self.assertFalse(combined["card"]["exact"])
 
+    def test_timing_markers_reanchor_after_missing_audio_without_skewing_preview(self):
+        backend = get_backend("experimental_8fsk_musical_25")
+        card = pixel.example_card()
+        symbols = pixel.minimal_avatar_symbols(card, message_type="cq", timing_pilots=True)
+        clean = pixel.synthesize(symbols, sample_rate=8000, profile=backend.profile)
+        header = len(pixel.FRAME_SYNC) + pixel.AVATAR_META_TONE_COUNT
+        # Remove two complete audio symbols in each of three separate raster
+        # spans, as observed in the saved first-pass reception.
+        damaged = clean.copy()
+        for pixel_index in (672, 608, 416):
+            preceding_pilots = (pixel_index - 1) // pixel.MUSICAL_TIMING_PILOT_INTERVAL
+            symbol_index = header + pixel_index + preceding_pilots * len(pixel.MUSICAL_TIMING_PILOT_TONES)
+            cut = symbol_index * 320
+            damaged = np.concatenate((damaged[:cut], damaged[cut + 640:]))
+        identity = envelope.content_id(backend.key, card, "cq", None).hex()
+        token = ADMITTED_IDENTITY.set((backend.key, identity))
+        try:
+            first = backend.decode_payload_copies([np.pad(damaged, (400, 400))], 8000)
+            second = backend.decode_payload_copies(
+                [np.pad(damaged, (400, 400)), np.pad(clean, (400, 400))], 8000)
+        finally:
+            ADMITTED_IDENTITY.reset(token)
+        expected = pixel.unpack_indices(pixel.minimal_avatar_payload(card), 1024)
+        coverage = first["card"]["pixel_coverage"]
+        self.assertLess(sum(coverage), 1024)
+        self.assertGreater(sum(coverage), 700)
+        self.assertTrue(all(first["pixels"][i] == expected[i]
+                            for i, present in enumerate(coverage) if present))
+        self.assertEqual(second["pixels"], expected)
+        self.assertEqual(envelope.report_content_id(backend.key, second).hex(), identity)
+
 
 if __name__ == "__main__":
     unittest.main()

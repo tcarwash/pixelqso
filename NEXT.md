@@ -1,5 +1,116 @@
 # Next steps: Pixel QSO UI/UX
 
+## Aseprite-inspired canvas symmetry — 2026-10-18
+
+Added an optional Mirror X canvas toggle. Draw and Erase strokes now reflect
+across the card's vertical centerline, including mouse drags and keyboard
+painting; the center column maps to itself on odd-width cards. This uses the
+existing palette-index pixels, so card interchange is unchanged.
+
+Implemented in source; desktop rendering and interactive behavior are not yet
+verified. Protocol, packaging, and RF behavior are unaffected.
+
+Follow-up: added drag-to-draw Rectangle, Filled rectangle, Ellipse, and Filled
+ellipse tools. Center out draws around the initial point. Shapes preview while
+dragging and commit as ordinary palette-index pixels through canvas undo.
+Source syntax and whitespace checks pass; interactive rendering remains
+unverified.
+
+## Outgoing card clipping — 2026-10-18
+
+Fixed the sender form's oversized minimum width: long mode/card names no longer
+force its scrolling content beyond the visible pane. Mode rows and the RX
+preference text wrap, while selectors use bounded minimum widths. The outgoing
+artwork, callsign, and dimensions remain centered inside the actual viewport.
+Preserved the existing fixed live-transmit preview change.
+
+Validation: all 11 desktop workspace checks pass, including viewport containment
+at 1198/1440 pixels and 100%/115% text size with long saved card names. Inspected
+an offscreen 1198x1064 render at 115%; artwork tile and identifying text are fully
+visible. RF behavior is unaffected by this layout change.
+
+## Musical 8-FSK airtime and skew — 2026-10-17
+
+Multi-mode RF follow-up (2026-10-18): the local transmitter and container
+recordings now have matching timestamps and card IDs. Outer RS card 10990
+reached 677 checked pixels on its first send and verified after the second.
+QPSK cards 46657 and 41492, and grouped 8-FSK card 15347, each verified in
+one send. Two fast-avatar sends of card 15347 announced valid common headers
+but never decoded a native card header; the saved receive audio reproduces that
+failure, while the local transmit WAV decodes. This capture alone does not
+identify where that waveform was damaged.
+
+Musical card 41492 had 149 wrong pixels after its first send, compared with
+the exact QPSK image of the same card. The decoder rejected the second Musical
+copy because one pilot scored 0.685 against a 0.70 cutoff. Lowering that cutoff
+to 0.65 lets the second copy recover all 1024 pixels with two errors; combining
+the independently aligned copies yields zero pixel errors and matches the
+protected whole-card digest. A second receive gate still refused verification
+because the paired trailer left the payload 120 samples (2.5 ms) shorter than
+nominal at 48 kHz. The Musical path now accepts a matching protected digest
+even for that slightly short capture, while incomplete mismatches remain
+provisional. Saved-audio replay produces an exact verified card. The updated
+overlay was rebuilt and the radio container restarted at 12:30 PDT; the
+recorder returned to ready/listening state. A fresh over-the-air Musical send
+with this build is still needed to confirm the live result.
+
+Live first-pass follow-up (2026-10-18): AG7SU card 20791 used the new v5
+markers. The first pass filled all 1024 slots but had 423 wrong pixels against
+the later identity-verified card. The second pass alone decoded exactly. In
+the first saved audio, markers through pixel 384 were aligned, then shifted by
+about two symbols at pixel 448 and six symbols by pixel 704, despite strong
+marker tones. This is a discrete audio timing loss, not a gradual clock error;
+the precise source of the lost samples (send, RF, or receive capture) is not
+established. The receiver now searches farther when an expected marker is
+missing, re-anchors on a strong displaced marker, and marks the intervening
+64-pixel spans untrusted. On a replay of that first recorded payload it kept
+832 pixels, all matching the later verified card, and left the three affected
+spans blank. The clean second payload remained exact. The focused musical-mode
+suite also passes, including a synthetic multi-slip regression. Live RF after
+this follow-up receiver change remains to be observed.
+
+Implemented: disabled the optional musical block-CRC transmit sidecar behind
+`ENABLE_MUSICAL_BLOCK_CRC_SIDECAR` in `modem_envelope.py` (one switch restores
+it); the transmit airtime estimate now also omits its eight markers. Receiver
+support remains in place. Existing `app.py` changes were preserved.
+
+Source investigation: the musical mode is a raw 25-baud raster with no per-pixel
+or per-block FEC. Its receive path tries global symbol-clock hypotheses, then
+uses the protected whole-image identity to accept an exact image. The CRC sidecar
+could label matching 64-pixel blocks but could not repair skewed pixels. The
+saved RF session is at
+`/home/tyler/dev/pixelqso_stream/recordings/skew_followup_20261014/AG7SU`.
+Four musical copies of card 6495 combine to an exact 1024-pixel decode; three
+copies of card 32285 cover all 1024 pixels but fail the protected whole-image
+checksum. The reports show 8000 Hz, 320.0 samples/symbol, and 0 ppm clock error,
+while local block alignment shifts by roughly -235 to +240 ms. A finer 41-step
+global clock-period sweep still did not recover card 32285; that experimental
+search was removed because it added decoder work without fixing the sample.
+The nominal 0 ppm report is not an independent clock measurement. I found a
+second concrete timing issue in the common envelope: it cropped payload audio at
+the nominal sample count. A 0.5% clock mismatch over this roughly 47-second
+payload shifts the boundary by about 235 ms, matching the observed offset range.
+When both envelope markers are present, the receiver now pairs them and uses the
+measured payload extent; if the trailer is absent, it keeps a 1.2% tail reserve.
+The E-major transmitter also sends native metadata version 5 with a three-note
+timing marker every 64 pixel symbols; the receiver estimates clock period from
+each marker and decodes each raster section at its local timing. This adds 45
+symbols (1.8 seconds for a 32x32 card) and keeps the long CRC sidecar disabled.
+Version-3 unpiloted cards remain receivable. The protected whole-image identity
+remains the acceptance gate. Synthetic full-waveform replay passed exact pixel
+and identity checks with a +0.5% sample-rate error, including with the envelope
+trailer absent. Payload-only replays also passed with a +1% rate error and with a
++1% to -1% piecewise clock change. The saved legacy RF replay remains unchanged:
+card 6495 verifies, while card 32285 still fails its checksum. A new-version
+on-air capture is still needed to confirm the timing repair against RF. Replay
+summaries are in
+`docs/rx-evidence/2026-10-14/`.
+
+Validation: the legacy saved-audio capture replays without regressions. A
+current-version 48 kHz payload simulation decoded exactly after the same timing
+distortions. The sparse-pilot protocol has not yet been transmitted over RF;
+live behavior remains unverified.
+
 ## Desktop workspace redesign — 2026-10-16
 
 Implemented the broader PixelChat-inspired layout on `pixelchat-inspired-ui`:

@@ -6,6 +6,7 @@ Each group is keyed by mode and protected content digest, including across RX re
 """
 import os
 os.environ['OPENBLAS_NUM_THREADS'] = '1'
+import re
 import sys
 import json
 from pathlib import Path
@@ -19,7 +20,29 @@ from modem_envelope import AnnouncedCopy, decode_capture
 recordings, output = map(Path, sys.argv[1:])
 output.mkdir(parents=True, exist_ok=True)
 headers = json.loads(Path(__file__).with_name('headers.json').read_text())
-events = [json.loads(line) for line in (recordings / 'events.jsonl').read_text().splitlines()]
+events = []
+with (recordings / 'events.jsonl').open() as event_file:
+    for line_number, line in enumerate(event_file, 1):
+        # Decode/status events are irrelevant to reconstruction and one old
+        # rx_decode record in this capture is malformed. Keep only the small
+        # audio index fields so replay does not retain hundreds of MB of logs.
+        # A malformed rx_decode record at line 8376 was concatenated with the
+        # next rx_audio JSON object without a newline. Split on event starts;
+        # only audio records are needed for deterministic reconstruction.
+        for record in re.split(r'(?={"schema"\s*:)', line):
+            if '"kind": "rx_audio"' not in record:
+                continue
+            try:
+                event = json.loads(record)
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f'malformed rx_audio record at events.jsonl:{line_number}') from error
+            events.append({
+                'kind': 'rx_audio',
+                'details': {key: event['details'][key] for key in
+                            ('rx_stream_id', 'sample_start', 'sample_end')},
+                'audio': {'wav': event['audio']['wav']},
+            })
 order = {stream: i for i, stream in enumerate(dict.fromkeys(
     e['details']['rx_stream_id'] for e in events if e['kind'] == 'rx_audio'))}
 headers.sort(key=lambda h: (order[h['stream']], h['start']))
@@ -57,6 +80,8 @@ for mode, identity in dict.fromkeys((h['mode'], h['identity']) for h in headers)
         if not coverage[stream][start * 6:(start + length) * 6].all():
             raise ValueError('Recording gap in announced payload')
         part = streams[stream][start:start + length]
+        if os.environ.get('PIXELQSO_REPLAY_DUMP_COPIES') == '1' and mode == 'experimental_8fsk_musical_25':
+            np.save(output / f'{identity}-copy-{len(copies) + 1}.npy', part)
         parts.append(part)
         copies.append(AnnouncedCopy(mode, identity, offset, offset + len(part), header['diagnostics']))
         offset += len(part)

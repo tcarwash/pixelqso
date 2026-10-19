@@ -68,6 +68,8 @@ AVATAR_V4_PIXELS_PER_BLOCK = ((AVATAR_RS_K - AVATAR_V4_BLOCK_OVERHEAD) * 6) // 3
 AVATAR_MESSAGE_CODES = {"card": 0, "cq": 1, "exchange": 2, "73": 3}
 AVATAR_MESSAGE_NAMES = {value: key for key, value in AVATAR_MESSAGE_CODES.items()}
 AVATAR_BURST_CODES = {"fast_avatar": 1, "fast_avatar_fec": 2}
+MUSICAL_TIMING_PILOT_INTERVAL = 64
+MUSICAL_TIMING_PILOT_TONES = (0, 7, 2)
 
 
 def _resilient_cycle_tone_count(wire_version: int) -> int:
@@ -413,13 +415,21 @@ def minimal_avatar_payload(card: Card) -> bytes:
 
 
 def minimal_avatar_symbols(card: Card, *, include_sync: bool = True,
-                           message_type: str = "card", snr_db: int | None = None) -> tuple[int, ...]:
+                           message_type: str = "card", snr_db: int | None = None,
+                           timing_pilots: bool = False) -> tuple[int, ...]:
     """Identity-protected burst followed by packed raw pixels on 8-FSK tones."""
     bits = AVATAR_PALETTE_BITS[_avatar_palette_id(card)]
     palette_map = _avatar_palette_map(card)
-    symbols = _indices_to_tones((palette_map[int(index)] for index in card.pixels), bits)
-    header = tuple(_encode_avatar_metadata(card, message_type=message_type, snr_db=snr_db))
-    return (FRAME_SYNC + header + symbols) if include_sync else (header + symbols)
+    pixels = _indices_to_tones((palette_map[int(index)] for index in card.pixels), bits)
+    if timing_pilots:
+        pixels = tuple(tone for start in range(0, len(pixels), MUSICAL_TIMING_PILOT_INTERVAL)
+                       for tone in (pixels[start:start + MUSICAL_TIMING_PILOT_INTERVAL] +
+                                    (MUSICAL_TIMING_PILOT_TONES
+                                     if start + MUSICAL_TIMING_PILOT_INTERVAL < len(pixels)
+                                     else ())))
+    header = tuple(_encode_avatar_metadata(card, message_type=message_type, snr_db=snr_db,
+                                           wire_version=5 if timing_pilots else 3))
+    return (FRAME_SYNC + header + pixels) if include_sync else (header + pixels)
 
 
 def _gf64_tables():
@@ -567,9 +577,10 @@ def _avatar_metadata(card: Card, *, resilient: bool = False,
     if snr_db is not None and not -127 <= int(snr_db) <= 127:
         raise ValueError("SNR report must be between -127 and 127 dB")
     palette_id = _avatar_palette_id(card)
-    if wire_version not in (3, 4):
+    if wire_version not in (3, 4, 5):
         raise ValueError("unsupported resilient avatar wire version")
-    common = (b"PQ", wire_version if resilient else 3, card.width, card.height,
+    common = (b"PQ", wire_version if resilient or wire_version == 5 else 3,
+              card.width, card.height,
               palette_id, len(call), len(grid), int(card.card_id) & 0xFFFF,
               call.ljust(12, b"\0"), grid.ljust(8, b"\0"),
               AVATAR_BURST_CODES["fast_avatar_fec" if resilient else "fast_avatar"],
@@ -630,7 +641,7 @@ def _decode_avatar_metadata(tones: list[int]) -> dict:
         snr_db = None if snr_db == -128 else snr_db
     elif metadata_struct is AVATAR_META_STRUCT:
         burst_code, message_code, snr_db = fields[10:]
-        if version != 3 or burst_code not in (1, 2) or message_code not in AVATAR_MESSAGE_NAMES:
+        if version not in (3, 5) or burst_code not in (1, 2) or message_code not in AVATAR_MESSAGE_NAMES:
             raise ValueError("unsupported card burst metadata")
         avatar_mode = "fast_avatar_fec" if burst_code == 2 else "fast_avatar"
         message_type = AVATAR_MESSAGE_NAMES[message_code]
@@ -650,7 +661,8 @@ def _decode_avatar_metadata(tones: list[int]) -> dict:
             "bits_per_pixel": AVATAR_PALETTE_BITS[palette_id],
             "metadata_corrected": corrected,
             "avatar_mode": avatar_mode, "transmission_type": avatar_mode,
-            "message_type": message_type, "snr_db": snr_db, "header_version": version}
+            "message_type": message_type, "snr_db": snr_db, "header_version": version,
+            "timing_pilots": version == 5}
     if image_crc32 is not None:
         result.update(image_crc32=image_crc32, image_tag=image_tag.hex(),
                       image_id=f"{image_crc32:08x}{image_tag.hex()}")
@@ -1141,13 +1153,30 @@ def decode_minimal_avatar_symbols_progress(symbols: Iterable[int], *, require_sy
         pixel_count = metadata["width"] * metadata["height"]
         bpp = metadata["bits_per_pixel"]
         tone_count = (pixel_count * bpp + 2) // 3
-        frame_end = meta_end + tone_count
+        pilot_symbol_count = (((tone_count - 1) // MUSICAL_TIMING_PILOT_INTERVAL) *
+                              len(MUSICAL_TIMING_PILOT_TONES)
+                              if metadata.get('timing_pilots') and tone_count else 0)
+        has_pilot_symbols = (pilot_symbol_count > 0 and
+                             len(tones) - meta_end >= tone_count + pilot_symbol_count)
+        frame_end = meta_end + tone_count + (pilot_symbol_count if has_pilot_symbols else 0)
         key = (metadata["callsign"].upper(), metadata["grid"].upper(), metadata["card_id"],
                metadata["width"], metadata["height"], metadata["palette_id"],
                metadata.get("message_type", "card"), metadata.get("snr_db"))
         candidate = candidates.setdefault(key, {"metadata": metadata,
             "votes": [[0] * (1 << bpp) for _ in range(pixel_count)], "copies": 0})
-        frame = tones[meta_end:meta_end + tone_count]
+        frame = tones[meta_end:frame_end]
+        if has_pilot_symbols:
+            unpiloted = []
+            cursor = 0
+            remaining = tone_count
+            while remaining:
+                count = min(MUSICAL_TIMING_PILOT_INTERVAL, remaining)
+                unpiloted.extend(frame[cursor:cursor + count])
+                cursor += count
+                remaining -= count
+                if remaining:
+                    cursor += len(MUSICAL_TIMING_PILOT_TONES)
+            frame = tuple(unpiloted)
         available_pixels = min(pixel_count, len(frame) * 3 // bpp)
         if available_pixels:
             indices = _tones_to_indices(frame, available_pixels, bpp)
@@ -1283,11 +1312,152 @@ def _avatar_metrics_report(symbols, metadata, combined_metrics, combined_copies,
             if metadata["avatar_mode"] == "fast_avatar_fec":
                 raise
     pixels, present, copies, metadata = decode_minimal_avatar_symbols_progress(symbols)
+    for first_symbol, last_symbol in acquisition.get('timing_untrusted_symbol_ranges', ()):
+        bits = int(metadata['bits_per_pixel'])
+        first_pixel = max(0, first_symbol * 3 // bits)
+        last_pixel = min(len(present), (last_symbol * 3 + bits - 1) // bits)
+        for pixel_index in range(first_pixel, last_pixel):
+            present[pixel_index] = False
+            pixels[pixel_index] = 0
     return pixels, {**metadata, "measured_snr_db": measured_snr_db,
                     "acquisition": acquisition,
                     "raw_avatar": True, "exact": False,
                     "pixel_coverage": present, "received_copies": max(copies, combined_copies),
                     "color_stage": f"{sum(present)}/{metadata['width'] * metadata['height']} pixels · {copies} copies · unverified"}
+
+
+def _demodulate_musical_pilot_metrics(audio, sample_rate, start, offset, period,
+                                      profile, metadata, header_count):
+    """Recover a raw musical raster using its sparse in-band timing pilots."""
+    selected = resolve_profile(profile)
+    width, height = int(metadata['width']), int(metadata['height'])
+    bits = int(metadata['bits_per_pixel'])
+    pixel_count = width * height
+    pixel_symbols = (pixel_count * bits + 2) // 3
+    header_symbols = len(FRAME_SYNC) + int(header_count)
+    pilot_count = (((pixel_symbols - 1) // MUSICAL_TIMING_PILOT_INTERVAL) *
+                   len(MUSICAL_TIMING_PILOT_TONES) if pixel_symbols else 0)
+    cycle_symbol_count = header_symbols + pixel_symbols + pilot_count
+    output = np.zeros((header_symbols + pixel_symbols, len(selected.tones_hz)),
+                      dtype=np.float64)
+    header = demodulate_metrics(audio, sample_rate, start_sample=start,
+                                frequency_offset_hz=offset,
+                                symbol_period_samples=period, profile=selected,
+                                symbol_count=header_symbols)
+    if len(header) < header_symbols:
+        return None, {'reason': 'incomplete_header'}
+    output[:header_symbols] = header
+
+    nominal = sample_rate / selected.baud
+    anchor_index, anchor_sample = 0, float(start)
+    previous_pixel_end = 0
+    pilot_tones = np.asarray(MUSICAL_TIMING_PILOT_TONES, dtype=int)
+    anchor_periods = []
+    pilot_scores = []
+    untrusted_symbol_ranges = []
+    timing_jumps = []
+    for pixel_end in range(MUSICAL_TIMING_PILOT_INTERVAL, pixel_symbols,
+                           MUSICAL_TIMING_PILOT_INTERVAL):
+        pilot_index = (header_symbols + pixel_end +
+                       (pixel_end // MUSICAL_TIMING_PILOT_INTERVAL - 1) *
+                       len(MUSICAL_TIMING_PILOT_TONES))
+        index_delta = pilot_index - anchor_index
+        predicted = anchor_sample + index_delta * period
+        radius = period * (2.5 if anchor_index == 0 else 1.4)
+        best_score, best_sample = -1.0, None
+        for delta in range(-int(radius), int(radius) + 1, 4):
+            candidate_start = max(0, int(round(predicted + delta)))
+            candidate = demodulate_metrics(
+                audio, sample_rate, start_sample=candidate_start,
+                frequency_offset_hz=offset, symbol_period_samples=period,
+                profile=selected, symbol_count=len(pilot_tones))
+            if len(candidate) < len(pilot_tones):
+                continue
+            normalized = candidate / np.maximum(candidate.sum(axis=1, keepdims=True), 1e-20)
+            score = float(normalized[np.arange(len(pilot_tones)), pilot_tones].mean())
+            if score > best_score:
+                best_score, best_sample = score, candidate_start
+        # A missing run of received audio can move every later symbol by
+        # several whole symbol periods. Search farther only when the nearby
+        # marker is weak; an intact marker then gives us a new raster anchor.
+        if best_score < .70:
+            for delta in range(-int(period * 8), int(period * 8) + 1, 16):
+                candidate_start = max(0, int(round(predicted + delta)))
+                candidate = demodulate_metrics(
+                    audio, sample_rate, start_sample=candidate_start,
+                    frequency_offset_hz=offset, symbol_period_samples=period,
+                    profile=selected, symbol_count=len(pilot_tones))
+                if len(candidate) < len(pilot_tones):
+                    continue
+                normalized = candidate / np.maximum(candidate.sum(axis=1, keepdims=True), 1e-20)
+                score = float(normalized[np.arange(len(pilot_tones)), pilot_tones].mean())
+                if score > best_score:
+                    best_score, best_sample = score, candidate_start
+        # A faded but correctly placed marker can score just below .70; the
+        # protected whole-image digest still gates exact acceptance.
+        if best_sample is None or best_score < .65:
+            return None, {'reason': 'pilot_not_found', 'pixel_end': pixel_end,
+                          'pilot_score': best_score}
+
+        local_period = (best_sample - anchor_sample) / index_delta
+        count = pixel_end - previous_pixel_end
+        if not nominal * .98 <= local_period <= nominal * 1.02:
+            if best_score < .85:
+                return None, {'reason': 'uncertain_pilot_jump',
+                              'pixel_end': pixel_end, 'pilot_score': best_score}
+            # This interval contains a sample discontinuity, not a change in
+            # the transmitter clock. Its pixel positions are uncertain, so
+            # leave them blank and resume just after the recovered marker.
+            untrusted_symbol_ranges.append((previous_pixel_end, pixel_end))
+            timing_jumps.append(float(best_sample - predicted))
+            local_period = period
+        else:
+            if anchor_index == 0:
+                data_start = anchor_sample + header_symbols * local_period
+            else:
+                data_start = anchor_sample + len(pilot_tones) * local_period
+            block = demodulate_metrics(
+                audio, sample_rate, start_sample=int(round(data_start)),
+                frequency_offset_hz=offset, symbol_period_samples=local_period,
+                profile=selected, symbol_count=count)
+            if len(block) < count:
+                return None, {'reason': 'incomplete_pixel_block', 'pixel_end': pixel_end}
+            output[header_symbols + previous_pixel_end:
+                   header_symbols + pixel_end] = block
+        anchor_periods.append(local_period)
+        pilot_scores.append(best_score)
+        anchor_index, anchor_sample = pilot_index, float(best_sample)
+        previous_pixel_end = pixel_end
+        period = local_period
+
+    if previous_pixel_end < pixel_symbols:
+        if anchor_index == 0:
+            data_start = anchor_sample + header_symbols * period
+        else:
+            data_start = anchor_sample + len(pilot_tones) * period
+        count = pixel_symbols - previous_pixel_end
+        block = demodulate_metrics(
+            audio, sample_rate, start_sample=int(round(data_start)),
+            frequency_offset_hz=offset, symbol_period_samples=period,
+            profile=selected, symbol_count=count)
+        if len(block) < count:
+            return None, {'reason': 'incomplete_final_pixel_block'}
+        output[header_symbols + previous_pixel_end:] = block
+    cycle_samples = ((anchor_sample - start) +
+                     (cycle_symbol_count - anchor_index) * period)
+    return output, {
+        'timing_recovery': 'embedded_pilots',
+        'timing_pilot_interval_pixels': MUSICAL_TIMING_PILOT_INTERVAL,
+        'timing_pilot_symbols': len(anchor_periods) * len(pilot_tones),
+        'timing_pilot_score_median': float(np.median(pilot_scores)) if pilot_scores else None,
+        'timing_period_samples_min': float(min(anchor_periods)) if anchor_periods else float(period),
+        'timing_period_samples_max': float(max(anchor_periods)) if anchor_periods else float(period),
+        'timing_period_samples_end': float(period),
+        'timing_untrusted_symbol_ranges': untrusted_symbol_ranges,
+        'timing_jump_samples': timing_jumps,
+        'timing_cycle_symbol_count': cycle_symbol_count,
+        'timing_next_cycle_start_sample': float(start + cycle_samples),
+    }
 
 
 
@@ -1513,6 +1683,8 @@ def decode_avatar_copies(copies, sample_rate, profile, *, checked=True, wire_ver
     header_count = AVATAR_META_V4_TONE_COUNT if checked and wire_version == 4 else AVATAR_META_TONE_COUNT
     frames, timing_hypotheses, best, best_metrics = [], [], None, None
     best_raw_quality = None
+    pilot_results = {}
+    pilots_attempted = False
     from musical_crc import ADMITTED_TABLE, BlockCollector
     table = ADMITTED_TABLE.get() if verify_raw else None
     collector = BlockCollector(table) if table and table['identity'] == admitted[1] else None
@@ -1584,6 +1756,144 @@ def decode_avatar_copies(copies, sample_rate, profile, *, checked=True, wire_ver
             header_tones = _metadata_tones_from_decoded(metadata)
             symbols[header_start:header_start+header_count] = header_tones
             diagnostic = diagnostics_for(used, len(frames))
+            if metadata.get('timing_pilots'):
+                if not pilots_attempted:
+                    pilots_attempted = True
+                    for pilot_copy, pilot_audio in enumerate(copies):
+                        pilot_pixel_symbols = (int(metadata['width']) * int(metadata['height']) *
+                                               int(metadata['bits_per_pixel']) + 2) // 3
+                        pilot_count = (((pilot_pixel_symbols - 1) //
+                                       MUSICAL_TIMING_PILOT_INTERVAL) *
+                                       len(MUSICAL_TIMING_PILOT_TONES))
+                        expected_pilot_samples = round(
+                            (header_start + header_count + pilot_pixel_symbols + pilot_count) *
+                            sample_rate / selected.baud) + round(.1 * sample_rate)
+                        if abs(len(pilot_audio) - expected_pilot_samples) > max(
+                                8, round(expected_pilot_samples * .012)):
+                            continue
+                        pilot_start, pilot_offset, pilot_period = _announced_avatar_acquisition(
+                            pilot_audio, sample_rate, selected)
+                        own_header_metrics = demodulate_metrics(
+                            pilot_audio, sample_rate, start_sample=pilot_start,
+                            frequency_offset_hz=pilot_offset,
+                            symbol_period_samples=pilot_period, profile=selected,
+                            symbol_count=header_start + header_count)
+                        if len(own_header_metrics) < header_start + header_count:
+                            continue
+                        try:
+                            own_metadata = _decode_avatar_metadata_soft(
+                                own_header_metrics[header_start:header_start + header_count])
+                        except (ValueError, UnicodeDecodeError, ZeroDivisionError):
+                            own_metadata = {}
+                        same_identity = (
+                            own_metadata.get('callsign'), own_metadata.get('grid'),
+                            own_metadata.get('card_id'), own_metadata.get('width'),
+                            own_metadata.get('height')) == (
+                            metadata['callsign'], metadata['grid'], metadata['card_id'],
+                            metadata['width'], metadata['height'])
+                        if same_identity and not own_metadata.get('timing_pilots', False):
+                            continue
+                        if same_identity and own_metadata.get('timing_pilots'):
+                            pilot_metadata = own_metadata
+                        else:
+                            # Payload length still identifies this version if
+                            # clock error prevents an isolated header decode.
+                            pilot_metadata = metadata
+                        cycle_pixel_symbols = (int(pilot_metadata['width']) *
+                                               int(pilot_metadata['height']) *
+                                               int(pilot_metadata['bits_per_pixel']) + 2) // 3
+                        cycle_pilot_count = (((cycle_pixel_symbols - 1) //
+                                              MUSICAL_TIMING_PILOT_INTERVAL) *
+                                             len(MUSICAL_TIMING_PILOT_TONES))
+                        cycle_symbols = (header_start + header_count +
+                                         cycle_pixel_symbols + cycle_pilot_count)
+                        nominal_cycle_samples = cycle_symbols * sample_rate / selected.baud
+                        # The payload can contain several consecutive native
+                        # cycles. Estimate the count from its duration, then
+                        # follow each cycle using the timing recovered from
+                        # the preceding cycle instead of restarting the clock.
+                        repeat_count = max(1, min(16, int(round(
+                            len(pilot_audio) / max(nominal_cycle_samples, 1)))))
+                        cycle_start, cycle_period = pilot_start, pilot_period
+                        cycle_metrics = []
+                        cycle_diagnostics = []
+                        for _cycle_index in range(repeat_count):
+                            recovered_cycle, cycle_diagnostic = _demodulate_musical_pilot_metrics(
+                                pilot_audio, sample_rate, cycle_start, pilot_offset,
+                                cycle_period, selected, pilot_metadata, header_count)
+                            if recovered_cycle is None:
+                                break
+                            cycle_metrics.append(recovered_cycle)
+                            cycle_diagnostics.append(cycle_diagnostic)
+                            cycle_start = cycle_diagnostic['timing_next_cycle_start_sample']
+                            cycle_period = cycle_diagnostic['timing_period_samples_end']
+                        if not cycle_metrics:
+                            continue
+                        recovered_metrics = np.sum([
+                            current / np.maximum(current.sum(axis=1, keepdims=True), 1e-20)
+                            for current in cycle_metrics], axis=0)
+                        pilot_diagnostic = dict(cycle_diagnostics[0])
+                        pilot_diagnostic.update(
+                            timing_recovered_cycles=len(cycle_metrics),
+                            timing_pilot_symbols=sum(
+                                int(item.get('timing_pilot_symbols', 0))
+                                for item in cycle_diagnostics))
+                        recovered_symbols = np.argmax(recovered_metrics, axis=1).astype(int).tolist()
+                        recovered_symbols[:len(FRAME_SYNC)] = FRAME_SYNC
+                        recovered_symbols[header_start:header_start + header_count] = (
+                            _metadata_tones_from_decoded(pilot_metadata))
+                        recovered_acquisition = dict(
+                            start_sample=pilot_start, sample_rate=sample_rate,
+                            frequency_offset_hz=pilot_offset,
+                            symbol_period_samples=pilot_period,
+                            clock_error_ppm=(pilot_period / (sample_rate / selected.baud) - 1) * 1e6,
+                            source_copy=pilot_copy, **pilot_diagnostic)
+                        recovered_report = _avatar_metrics_report(
+                            recovered_symbols, pilot_metadata, recovered_metrics,
+                            len(cycle_metrics),
+                            recovered_acquisition, None)
+                        pilot_results[pilot_copy] = (
+                            recovered_metrics, recovered_report, recovered_acquisition,
+                            pilot_metadata)
+                        if verify_raw:
+                            from modem_envelope import report_content_id
+                            recovered_candidate = {'pixels': recovered_report[0],
+                                                   'card': recovered_report[1]}
+                            if report_content_id(admitted[0], recovered_candidate).hex() == admitted[1]:
+                                return recovered_report
+                if pilot_results:
+                    if verify_raw and len(pilot_results) >= 2:
+                        fused = np.sum([
+                            result[0] / np.maximum(result[0].sum(axis=1, keepdims=True), 1e-20)
+                            for result in pilot_results.values()], axis=0)
+                        fused_symbols = np.argmax(fused, axis=1).astype(int).tolist()
+                        fused_symbols[:len(FRAME_SYNC)] = FRAME_SYNC
+                        fused_symbols[header_start:header_start + header_count] = header_tones
+                        fused_acquisition = dict(
+                            diagnostic, timing_recovery='independent_embedded_pilots',
+                            timing_pilot_copies=sorted(pilot_results))
+                        fused_report = _avatar_metrics_report(
+                            fused_symbols, metadata, fused, len(pilot_results),
+                            fused_acquisition, None)
+                        from modem_envelope import report_content_id
+                        fused_candidate = {'pixels': fused_report[0], 'card': fused_report[1]}
+                        if report_content_id(admitted[0], fused_candidate).hex() == admitted[1]:
+                            return fused_report
+                    for recovered_metrics, recovered_report, recovered_acquisition, _ in pilot_results.values():
+                        normalized = recovered_metrics / np.maximum(
+                            recovered_metrics.sum(axis=1, keepdims=True), 1e-20)
+                        ordered = np.sort(normalized, axis=1)
+                        confidence = ((ordered[:, -1] - ordered[:, -2]) /
+                                      np.maximum(ordered[:, -1], 1e-12))
+                        raw_quality = (sum(recovered_report[1].get('pixel_coverage') or []),
+                                       float(np.percentile(confidence, 10)),
+                                       float(np.median(confidence)))
+                        if best_raw_quality is None or raw_quality > best_raw_quality:
+                            best, best_metrics, best_raw_quality = (
+                                recovered_report, recovered_metrics, raw_quality)
+                    if not verify_raw:
+                        return best
+                    continue
             report = _avatar_metrics_report(symbols, metadata, metrics, len(used), diagnostic, None)
             # A raw raster has no native CRC. Use the protected envelope's
             # identity to select among timing/copy candidates before ranking

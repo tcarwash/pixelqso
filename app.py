@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QListWidget
 import cardmodem as modem
 from card_ids import allocate_card_id
 from card_animation import (artwork_digest, validate_link, partner as animation_partner,
-                            details as animation_details)
+                            details as animation_details, group_events as group_animation_events)
 from animation_editor import AnimationAuthor, export_gif
 from card_feedback import make_report as make_reception_report, report_lines as reception_report_lines
 from transmit_preview import LocalTransmitPreview, Data2GTransmitPreview
@@ -62,7 +62,7 @@ from data2g_runtime import (data2g_audio_device_selector,
                             validate_data2g_ports)
 from on_air import SessionRecorder, card_reference, decoded_reference
 from card_views import (DeckDialog, card_art, deck_events, deck_image,
-                        incoming_card_text, single_card_image, AnimationDetailsDialog)
+                        incoming_card_text, single_card_image, AnimationDetailsDialog, stage_label)
 from webserver import CompanionServer
 from ui_theme import (COLORS, SPACING, build_app_stylesheet, palette_swatch_style,
                       semantic_text_style, status_label_style)
@@ -2669,12 +2669,17 @@ class MainWindow(QMainWindow):
         self.starter_library_button = starter
         open_button = QPushButton("Open selected"); open_button.clicked.connect(self._open_library_item); heading.addWidget(open_button)
         self.open_library_button = open_button
-        selection_actions = QHBoxLayout(); selection_actions.addStretch(1)
+        selection_actions = QHBoxLayout()
+        selection_actions.addStretch(1)
         heading.removeWidget(open_button); selection_actions.addWidget(open_button)
         self.export_card_button = QPushButton("Export selected…")
         self.export_card_button.setEnabled(False)
         self.export_card_button.clicked.connect(self.export_selected_card)
         selection_actions.addWidget(self.export_card_button)
+        self.export_animation_button = QPushButton("Export animation…")
+        self.export_animation_button.setEnabled(False)
+        self.export_animation_button.clicked.connect(self.export_selected_animation)
+        selection_actions.addWidget(self.export_animation_button)
         self.copy_card_button = QPushButton("Copy PNG")
         self.copy_card_button.clicked.connect(self.copy_selected_card)
         self.copy_card_button.setEnabled(False)
@@ -3392,7 +3397,6 @@ class MainWindow(QMainWindow):
         self.call.setText(self.card.callsign); self.grid.setText(self.card.grid)
         self._set_editor_format(self.card)
         self.animation_author.load_pair(path, d, DATA / 'cards')
-
     def refresh_qso_log(self, *_):
         if not hasattr(self, "log_gallery"): return
         self.log_gallery.clear()
@@ -3566,6 +3570,12 @@ class MainWindow(QMainWindow):
             self.more_card_button.setVisible(saved)
             self.export_card_button.setEnabled(saved)
             self.copy_card_button.setEnabled(saved)
+            animations = self._selected_library_animations(item) if saved else []
+            self.export_animation_button.setVisible(saved)
+            self.export_animation_button.setEnabled(bool(animations))
+            self.export_animation_button.setToolTip(
+                "Export the linked two-frame animation as a looping GIF" if animations else
+                "This card has no matching, saved animation partner")
         if hasattr(self, "export_qso_button"):
             selected = (hasattr(self, "log_gallery") and
                         self.log_gallery.currentItem() is not None)
@@ -3644,6 +3654,99 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(self, "Couldn't export card", str(exc))
 
+    def _library_animation_candidates(self):
+        candidates = []
+        for folder in (DATA / "cards", DATA / "sent-cards"):
+            for path in folder.glob("*.json"):
+                try:
+                    data = json.loads(path.read_text())
+                    candidates.append({"card": data, "pixels": data["pixels"],
+                                       "sent_by_station": True,
+                                       "source_path": str(path)})
+                except (OSError, ValueError, TypeError, KeyError):
+                    continue
+        candidates.extend(self._saved_animation_candidates())
+        return candidates
+
+    def _selected_library_animations(self, item):
+        if item is None:
+            return []
+        try:
+            path = Path(item.data(Qt.ItemDataRole.UserRole))
+            data = json.loads(path.read_text())
+            selected = {"card": data, "pixels": data["pixels"], "sent_by_station": True,
+                        "source_path": str(path)}
+            candidates = self._library_animation_candidates()
+            link = validate_link(data.get("animation"), data.get("card_id"))
+            animations = []
+            if link:
+                first = animation_partner(selected, candidates)
+                if first is not None:
+                    animations.append((first, selected, link["frame_ms"]))
+                return animations
+
+            selected_digest = artwork_digest(selected)
+            for second in candidates:
+                second_card = second.get("card") or {}
+                second_link = second_card.get("animation")
+                if not second_link:
+                    continue
+                try:
+                    second_link = validate_link(second_link, second_card.get("card_id"))
+                    if (second_link["first_card_id"] != data.get("card_id") or
+                            second_link["first_digest"] != selected_digest):
+                        continue
+                    first = animation_partner(second, candidates)
+                    if first is not None and artwork_digest(first) == selected_digest:
+                        animations.append((first, second, second_link["frame_ms"]))
+                except (ValueError, TypeError, KeyError, IndexError):
+                    continue
+            unique = {}
+            for first, second, duration in animations:
+                second_card = second.get("card") or {}
+                unique[(second_card.get("card_id"), artwork_digest(second))] = (
+                    first, second, duration)
+            return list(unique.values())
+        except (OSError, ValueError, TypeError, KeyError, IndexError):
+            return []
+
+    def export_selected_animation(self):
+        item, _widget = self._selected_library_item()
+        animations = self._selected_library_animations(item)
+        if not animations:
+            QMessageBox.information(
+                self, "No saved animation", "The selected card has no matching saved animation partner.")
+            return
+        if len(animations) == 1:
+            first, second, frame_ms = animations[0]
+        else:
+            labels = [f"{int((pair[1].get('card') or {}).get('card_id', 0)) & 0xffff:04X} · "
+                      f"{(pair[1].get('card') or {}).get('callsign', 'Unknown')}"
+                      for pair in animations]
+            label, accepted = QInputDialog.getItem(
+                self, "Choose animation", "Frame 2:", labels, 0, False)
+            if not accepted:
+                return
+            first, second, frame_ms = animations[labels.index(label)]
+        second_card = second.get("card") or {}
+        stem = Path(item.data(Qt.ItemDataRole.UserRole)).stem
+        target_name, _ = QFileDialog.getSaveFileName(
+            self, "Export selected animation", str(DATA / "exports" / f"{stem}-animation.gif"),
+            "GIF animation (*.gif)")
+        if not target_name:
+            return
+        target = Path(target_name).with_suffix(".gif")
+        try:
+            images = [self.card_image(first), self.card_image(second)]
+            if any(image is None or image.isNull() for image in images):
+                raise ValueError("Both saved animation frames must have complete artwork.")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            export_gif(target, images, frame_ms)
+            self.library_status.setText(
+                f"Exported animation {int(second_card.get('card_id', 0)) & 0xffff:04X} · {target.name}")
+        except Exception as exc:
+            QMessageBox.warning(self, "Couldn't export animation", str(exc))
+
     def export_selected_qso(self):
         item = self.log_gallery.currentItem() if hasattr(self, "log_gallery") else None
         if item is None:
@@ -3665,7 +3768,7 @@ class MainWindow(QMainWindow):
             target_name, file_filter = QFileDialog.getSaveFileName(
                 dialog_parent, "Export received-card archive" if received_archive else "Export QSO",
                 str(DATA / "exports" / f"{prefix}-{callsign}-{date}.png"),
-                "PNG contact sheet (*.png);;Pixel QSO contact archive (*.json)")
+                "PNG contact sheet (*.png);;Animated contact GIF (*.gif);;Pixel QSO contact archive (*.json)")
             if not target_name:
                 return None
             target = Path(target_name)
@@ -3677,6 +3780,11 @@ class MainWindow(QMainWindow):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if not deck_image(entry, self.card_image).save(str(target), "PNG"):
                     raise OSError("Qt could not write the PNG contact sheet")
+            elif "GIF" in file_filter:
+                entry = {**entry, "animation_candidates": self._saved_animation_candidates()}
+                target = target.with_suffix(".gif")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                self._export_contact_gif(entry, target)
             else:
                 target = target.with_suffix(".json")
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -3686,6 +3794,33 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(dialog_parent, "Couldn't export QSO", str(exc))
             return None
+
+    def _export_contact_gif(self, entry, target):
+        events = group_animation_events(
+            deck_events(entry), entry.get("animation_candidates", ()))
+        if not events:
+            raise ValueError("This contact has no saved cards to export.")
+        frames, durations = [], []
+        for direction, report in events:
+            card = report.get("card") or {}
+            paired = report.get("animation_frames") or [report]
+            duration = (int((paired[1].get("card") or {}).get("animation", {}).get("frame_ms", 500))
+                        if len(paired) > 1 else 1400)
+            for number, frame_report in enumerate(paired, 1):
+                frame_card = frame_report.get("card") or {}
+                image = self.card_image(frame_report)
+                if image is None or image.isNull():
+                    raise ValueError(
+                        f"Card {int(frame_card.get('card_id', 0)) & 0xffff:04X} has no complete image.")
+                direction_label = "Sent" if direction == "sent_cards" else "Received"
+                subtitle = (f"{direction_label} · {stage_label(report)}" +
+                            (f" · Animation frame {number}/{len(paired)}" if len(paired) > 1 else "") +
+                            (" · PROVISIONAL" if direction == "received_cards" and
+                             not frame_card.get("exact") else ""))
+                frames.append(card_art(image, str(frame_card.get("callsign") or "Unknown"),
+                                       subtitle, QSize(320, 400)))
+                durations.append(duration)
+        export_gif(target, frames, durations)
 
     def show_log_deck(self, item=None, *_):
         item = item or self.log_gallery.currentItem()
@@ -9080,8 +9215,8 @@ class MainWindow(QMainWindow):
         backend = self.selected_backend()
         host_mode = (self.selected_adapter().capabilities.kind is
                      AdapterKind.FRAME_TRANSPORT)
-        if backend is None or (not host_mode and not backend.checked):
-            QMessageBox.warning(self, "Choose resilient burst", "Automatic CQ exchanges require resilient burst cards so the message type and integrity checks are available.")
+        if backend is None or (not host_mode and not backend.checked and backend.key != "fast_avatar_crc"):
+            QMessageBox.warning(self, "Choose checked burst", "Automatic CQ exchanges require a burst mode with integrity checks.")
             return
         if host_mode and not getattr(backend, "usable", False):
             QMessageBox.warning(

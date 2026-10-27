@@ -48,6 +48,8 @@ EXPERIMENTAL_MODE_LABELS = {
        for baud in (100, 50, 25)},
     "fast_avatar_fec": "8-FSK · RS + soft Chase · 400 baud · block CRC",
     "fast_avatar_fec_v4": "8-FSK · RS + soft Chase · 400 baud · v4 CRC32",
+    "fast_avatar_crc": "8-FSK · raw pixels · whole-card CRC32",
+    "fast_avatar_fec_v4_200": "8-FSK · RS + soft Chase · 200 baud · v4 CRC32",
     "fast_avatar": "8-FSK · raw pixels · 400 baud · unchecked",
     "experimental_qpsk_5s": "QPSK · soft LDPC · copy combining",
     "experimental_qpsk_combined": "QPSK · soft LDPC + copy combining",
@@ -94,6 +96,10 @@ EXPERIMENTAL_MODE_DESCRIPTIONS = {
        for key in ("resilient_100", "resilient_50", "resilient_25", "fast_avatar_fec")},
     "fast_avatar_fec_v4": "8-tone FSK with Reed–Solomon and soft Chase recovery. "
         "Version 4 binds blocks to the image and verifies the whole raster with CRC32 and a content tag.",
+    "fast_avatar_crc": "8-tone FSK with raw image pixels and a protected whole-card CRC32. "
+        "It detects a damaged card but cannot repair it.",
+    "fast_avatar_fec_v4_200": "8-tone FSK at 200 baud with Reed–Solomon, per-block CRC16, and a whole-card CRC32/content tag. "
+        "The slower symbol rate improves timing and frequency-drift tolerance at about twice the 400-baud airtime.",
     "fast_avatar": "8-tone FSK with a protected identity header and hard-decision raw image pixels. "
         "Image pixels have no FEC or checksum verification.",
     "experimental_qpsk_5s": "Shaped QPSK with soft-decision LDPC decoding and whole-card CRC32. "
@@ -140,7 +146,8 @@ class AvatarBackend:
                     wire_version=self.wire_version)
                  if self.checked else pixel.minimal_avatar_symbols(
                      card, message_type=message_type, snr_db=snr_db,
-                     timing_pilots=self.key == "experimental_8fsk_musical_25"))
+                     timing_pilots=self.key == "experimental_8fsk_musical_25",
+                     wire_version=self.wire_version))
         return pixel.synthesize(pixel.repeat_symbol_stream(cycle, repeats), profile=self.profile)
 
     def estimate_seconds(self, card, repeats):
@@ -153,8 +160,8 @@ class AvatarBackend:
         if self.key == "experimental_8fsk_musical_25":
             symbol_count = len(pixel.minimal_avatar_symbols(card, timing_pilots=True))
             return repeats * symbol_count / self.profile.baud
-        duration = pixel.minimal_avatar_duration(card=card)
-        return repeats * duration * pixel.MINIMAL_AVATAR_PROFILE.baud / self.profile.baud
+        symbol_count = len(pixel.minimal_avatar_symbols(card, wire_version=self.wire_version))
+        return repeats * symbol_count / self.profile.baud
 
     def decode(self, audio, sample_rate):
         if sample_rate == AUDIO_RATE:
@@ -190,8 +197,9 @@ class AvatarBackend:
         return _report(pixels, decoded, sample_rate, self.profile.key)
 
     def minimum_audio_seconds(self):
-        header = (pixel.AVATAR_META_V4_TONE_COUNT if self.wire_version == 4
-                  else pixel.AVATAR_META_TONE_COUNT)
+        header = (pixel.AVATAR_META_V4_TONE_COUNT if self.wire_version == 4 else
+                  pixel.AVATAR_META_V6_TONE_COUNT if self.wire_version == 6 else
+                  pixel.AVATAR_META_TONE_COUNT)
         # A protected identity is useful before the first image block finishes.
         symbols = len(pixel.FRAME_SYNC) + header
         return symbols / self.profile.baud
@@ -661,6 +669,13 @@ BACKENDS: dict[str, CardBackend] = {
     "fast_avatar_fec": AvatarBackend("fast_avatar_fec", EXPERIMENTAL_MODE_LABELS["fast_avatar_fec"], True),
     "fast_avatar_fec_v4": AvatarBackend("fast_avatar_fec_v4", EXPERIMENTAL_MODE_LABELS["fast_avatar_fec_v4"], True,
                                          wire_version=4),
+    "fast_avatar_crc": AvatarBackend("fast_avatar_crc", EXPERIMENTAL_MODE_LABELS["fast_avatar_crc"], False,
+                                     wire_version=5),
+    "fast_avatar_fec_v4_200": AvatarBackend(
+        "fast_avatar_fec_v4_200", EXPERIMENTAL_MODE_LABELS["fast_avatar_fec_v4_200"], True,
+        pixel.ModemProfile("avatar-fec-v4-200", "Avatar FEC v4 · 200 baud", 200,
+                           (200, 400, 600, 800, 1000, 1200, 1400, 1600), 1600),
+        wire_version=4),
     "experimental_8fsk_mono_fast": AvatarBackend(
         "experimental_8fsk_mono_fast", EXPERIMENTAL_MODE_LABELS["experimental_8fsk_mono_fast"],
         True, wire_version=4, monochrome=True),
@@ -742,6 +757,9 @@ MODE_REGISTRY: dict[str, ModeSpec] = {
     "resilient_25": ModeSpec("resilient_25", EXPERIMENTAL_MODE_LABELS["resilient_25"], True, "pixelqso_audio", supports_audio_placement=True),
     "fast_avatar_fec": ModeSpec("fast_avatar_fec", EXPERIMENTAL_MODE_LABELS["fast_avatar_fec"], True, "pixelqso_audio"),
     "fast_avatar_fec_v4": ModeSpec("fast_avatar_fec_v4", EXPERIMENTAL_MODE_LABELS["fast_avatar_fec_v4"], True, "pixelqso_audio"),
+    "fast_avatar_crc": ModeSpec("fast_avatar_crc", EXPERIMENTAL_MODE_LABELS["fast_avatar_crc"], True, "pixelqso_audio"),
+    "fast_avatar_fec_v4_200": ModeSpec(
+        "fast_avatar_fec_v4_200", EXPERIMENTAL_MODE_LABELS["fast_avatar_fec_v4_200"], True, "pixelqso_audio"),
     "experimental_8fsk_mono_fast": ModeSpec(
         "experimental_8fsk_mono_fast", EXPERIMENTAL_MODE_LABELS["experimental_8fsk_mono_fast"],
         True, "pixelqso_audio"),
@@ -762,7 +780,8 @@ MODE_REGISTRY: dict[str, ModeSpec] = {
 # the protected header. The newer burst and weak-signal formats are fixed to
 # the original 32×32, eight-color envelope.
 for _key in ("resilient_100", "resilient_50", "resilient_25",
-             "fast_avatar_fec", "fast_avatar_fec_v4", "fast_avatar"):
+             "fast_avatar_fec", "fast_avatar_fec_v4", "fast_avatar_crc",
+             "fast_avatar_fec_v4_200", "fast_avatar"):
     MODE_REGISTRY[_key] = replace(
         MODE_REGISTRY[_key], supported_sizes=None,
         supported_palette_sizes=(8, 16, 32))

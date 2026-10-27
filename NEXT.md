@@ -1,5 +1,62 @@
 # Next steps: Pixel QSO UI/UX
 
+## ARAP detached proof integration — 2026-10-20
+
+The card editor now offers an **ARAP proof…** workflow for signing a saved card,
+attaching a detached COSE proof, verifying against a selected public key and
+local trust store, publishing a short reference, and resolving a reference back
+to a proof. Sidecars live beside the JSON card (`.arap.cose` and `.arap.json`);
+the PixelQSO card JSON and modem payload remain unchanged. The editor labels
+attached proofs as pending until verification, distinguishes the current policy
+result, and flags edits that make the attached proof stale. Signing does not
+transmit. `arap_bridge.py` calls the installed ARAP CLI (`ARAP_CLI` or `PATH`).
+The proof action and status now sit directly below the callsign/grid guidance;
+an Xvfb render confirmed they are visible in the initial editor viewport.
+Keyserver publishing/resolution run in a worker; controls lock while active,
+and a scheduled UI event is verified to run during a simulated slow command.
+Proof status also reloads when switching animation frames and becomes stale on
+edits, returning to pending after save. The built PixelQSO wheel contains both
+`app.py` and `arap_bridge.py`. All 30 bridge, desktop-workspace, and animation
+tests pass, along with Python compilation and a real CLI end-to-end check:
+trusted saved card accepted, one-pixel edit rejected.
+Publish/resolve through the dialog against a disposable local keyserver
+returned identical proof bytes and verified successfully. Hosted publication
+and full manual file-dialog flow remain unverified; received FEC integrity
+remains separate from ARAP identity.
+
+ARAP UI test isolation follow-up: three bridge tests now set
+`PIXELQSO_DATA_DIR` before constructing `MainWindow`, matching the app's actual
+configuration path. They also tolerate the app creating its own `cards/`
+directory. This fixed a fixture lookup failure and prevents these tests from
+touching the user's normal PixelQSO data directory. The focused bridge suite
+passes: 8 tests. Manual interaction with the full sidecar dialog and deployed
+keyserver validation remain open.
+
+ARAP dialog end-to-end follow-up: an offscreen UI run used the real ARAP CLI
+and a disposable loopback keyserver to sign a frame-2 card, verify it under
+local trust, publish it with upload authentication, resolve its reference,
+compare exact proof bytes, and verify the resolved proof again. File chooser
+and prompt responses were automated, so this validates the dialog actions and
+real CLI/server path but not hands-on native dialog behavior or deployed HTTPS.
+
+## ARAP UI deferred — 2026-10-26
+
+Removed the scattered editor and library proof controls and the Qt dialog bridge.
+PixelQSO does not currently inspect ARAP sidecars; use the standalone ARAP CLI
+for proof operations. Revisit an app integration after settling on a single
+entry point and data boundary.
+
+## Experimental avatar integrity choices — 2026-10-18
+
+Added `fast_avatar_crc`, which keeps raw pixels but adds a protected whole-card
+CRC32. It verifies only after the full raster arrives and detects corruption
+without repairing it. Added `fast_avatar_fec_v4_200`, which uses the existing
+per-block RS/CRC and whole-card CRC32/content tag at 200 baud for greater
+timing/frequency tolerance at roughly twice the 400-baud airtime. Both modes
+are available in the normal mode selector and use new versioned burst IDs;
+older wire formats remain accepted. Python syntax compilation and whitespace
+checks pass. Audio/RF performance has not been measured.
+
 ## Aseprite-inspired canvas symmetry — 2026-10-18
 
 Added an optional Mirror X canvas toggle. Draw and Erase strokes now reflect
@@ -600,3 +657,9 @@ Added an explicit session-wall action to broadcast protected requests for unveri
 ## 2026-10-18 — Offer exact-card retry for provisional reports
 
 When a received reply's reception report says a locally sent card was not fully verified, PixelQSO now offers to repeat the saved card with the same artwork and card ID. Accepting changes the reply action to a one-time retry; it still requires the operator to send. The retry uses the normal outgoing reply stage, so its current reception report metadata is prepared through the usual path. The prompt is deduplicated per reply/card pair and only appears when the matching sent card can be recovered from the QSO log. Python syntax compilation and `git diff --check` passed; interactive UI and live audio/RF behavior remain unverified.
+
+## 2026-10-18 — Separate linked-animation export
+
+My Cards now has a dedicated **Export animation…** action, separate from single-card PNG/JSON export. It resolves the selected card's two-frame pairing by the stored first-card ID and artwork fingerprint, whether the selection is frame 1 or frame 2, and exports a looping GIF at the linked frame timing. The action stays disabled unless both matching frames are available and verified. Python syntax compilation and `git diff --check` passed; GUI rendering and GIF playback were not checked.
+
+The **Export contact…** dialog also offers an animated GIF slideshow. It plays the contact's card events in order and includes both timed frames wherever a saved animation pair resolves; PNG contact-sheet and JSON archive options remain available. GIF export now accepts per-frame timing so each linked animation keeps its saved frame duration. GUI rendering and GIF playback remain unverified.

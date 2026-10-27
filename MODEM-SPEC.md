@@ -1,7 +1,7 @@
 # Pixel QSO Avatar Burst: Technical Specification
 
 **Status:** implementation reference for the current source tree; not a ratified or frozen interoperability standard.  
-**Scope:** Fast and Resilient avatar bursts (`fast_avatar`, `fast_avatar_fec`) carried by the current 8-FSK audio modem. Legacy packet/MFSK formats are out of scope.
+**Scope:** Fast and Resilient avatar bursts (`fast_avatar`, `fast_avatar_crc`, `fast_avatar_fec`, and v4 checked variants) carried by the current 8-FSK audio modem. Legacy packet/MFSK formats are out of scope.
 
 This document records the implemented wire format in `cardmodem.py`. A compatible implementation must follow the bit ordering, field sizes, palette construction, synchronization sequence, and checks below. Where this text and source disagree, the implementation is authoritative until the format version is deliberately changed.
 
@@ -137,6 +137,16 @@ v & 7
 
 These are tone indices, not frequencies; map each through the selected modem profile.
 
+### 5.4 Version 6 whole-card-checksum header
+
+`fast_avatar_crc` uses the same fields with a 37-byte body: `version` is `6`,
+`burst_code` is `3`, and a big-endian CRC32 of the packed row-major palette
+indices is appended at byte offset 33. The normal CRC16 trailer and shortened
+Reed–Solomon header protection still apply. The added field costs 10 tone
+symbols (0.025 seconds at 400 baud) relative to the 33-byte version 3 header.
+Pixels remain raw: the receiver verifies only after the complete raster arrives
+and cannot correct damaged pixels.
+
 ## 6. Fast pixel payload
 
 For each raster pixel, emit its palette index in 3, 4, or 5 bits, MSB first. Concatenate indices with no per-pixel padding. Split the bitstream into 3-bit groups, MSB first, padding the final group with zero bits if needed. Each group directly selects an 8-FSK tone index.
@@ -231,7 +241,7 @@ Actual captured airtime can differ due to sample rounding and implementation ove
 
 1. Palette ordering, metadata version, tone bit ordering, sync, block boundaries, and CRC parameters are wire-visible and must not change silently.
 2. Metadata version 3 identifies the current format. A future incompatible change must use a new version or another explicit negotiation mechanism.
-3. Older avatar metadata versions are accepted by parts of the current decoder for backward compatibility; this specification describes version 3 only.
+3. Older avatar metadata versions are accepted by parts of the current decoder. Version 6 is the whole-card-checksum raw-pixel variant; version 4 is the block-linked Resilient variant with whole-raster CRC32 and content tag.
 4. The 8-FSK audio tone map is currently required by the avatar audio decoder. A future FSK, PSK, packet, or in-band transport needs a defined adapter that preserves logical symbol order and burst boundaries, or a versioned replacement mapping.
 5. Synthetic impairment and local loopback results establish software-path behavior only. They do not establish weak-signal performance, real-radio interoperability, occupied bandwidth, or regulatory compliance.
 

@@ -54,6 +54,7 @@ AVATAR_RS_N, AVATAR_RS_K = 63, 61
 AVATAR_META_LEGACY_STRUCT = struct.Struct(">2s6BH12s8s")
 AVATAR_META_STRUCT = struct.Struct(">2s6BH12s8sBBb")
 AVATAR_META_V4_STRUCT = struct.Struct(">2s6BH12s8sBBbI4s")
+AVATAR_META_V6_STRUCT = struct.Struct(">2s6BH12s8sBBbI")
 AVATAR_META_LEGACY_DATA_SYMBOLS = (AVATAR_META_LEGACY_STRUCT.size + 2) * 8 // 6 + (((AVATAR_META_LEGACY_STRUCT.size + 2) * 8) % 6 != 0)
 AVATAR_META_LEGACY_TONE_COUNT = (AVATAR_META_LEGACY_DATA_SYMBOLS + 2) * 2
 AVATAR_META_DATA_SYMBOLS = (AVATAR_META_STRUCT.size + 2) * 8 // 6 + (((AVATAR_META_STRUCT.size + 2) * 8) % 6 != 0)
@@ -61,13 +62,15 @@ AVATAR_META_SHORTENING = AVATAR_RS_K - AVATAR_META_DATA_SYMBOLS
 AVATAR_META_TONE_COUNT = (AVATAR_META_DATA_SYMBOLS + 2) * 2
 AVATAR_META_V4_DATA_SYMBOLS = (AVATAR_META_V4_STRUCT.size + 2) * 8 // 6 + (((AVATAR_META_V4_STRUCT.size + 2) * 8) % 6 != 0)
 AVATAR_META_V4_TONE_COUNT = (AVATAR_META_V4_DATA_SYMBOLS + 2) * 2
+AVATAR_META_V6_DATA_SYMBOLS = (AVATAR_META_V6_STRUCT.size + 2) * 8 // 6 + (((AVATAR_META_V6_STRUCT.size + 2) * 8) % 6 != 0)
+AVATAR_META_V6_TONE_COUNT = (AVATAR_META_V6_DATA_SYMBOLS + 2) * 2
 AVATAR_BLOCK_ID_SYMBOLS = 2
 AVATAR_BLOCK_IMAGE_TAG_SYMBOLS = 6
 AVATAR_V4_BLOCK_OVERHEAD = AVATAR_BLOCK_ID_SYMBOLS + AVATAR_BLOCK_IMAGE_TAG_SYMBOLS
 AVATAR_V4_PIXELS_PER_BLOCK = ((AVATAR_RS_K - AVATAR_V4_BLOCK_OVERHEAD) * 6) // 3
 AVATAR_MESSAGE_CODES = {"card": 0, "cq": 1, "exchange": 2, "73": 3}
 AVATAR_MESSAGE_NAMES = {value: key for key, value in AVATAR_MESSAGE_CODES.items()}
-AVATAR_BURST_CODES = {"fast_avatar": 1, "fast_avatar_fec": 2}
+AVATAR_BURST_CODES = {"fast_avatar": 1, "fast_avatar_fec": 2, "fast_avatar_crc": 3}
 MUSICAL_TIMING_PILOT_INTERVAL = 64
 MUSICAL_TIMING_PILOT_TONES = (0, 7, 2)
 
@@ -416,7 +419,7 @@ def minimal_avatar_payload(card: Card) -> bytes:
 
 def minimal_avatar_symbols(card: Card, *, include_sync: bool = True,
                            message_type: str = "card", snr_db: int | None = None,
-                           timing_pilots: bool = False) -> tuple[int, ...]:
+                           timing_pilots: bool = False, wire_version: int = 3) -> tuple[int, ...]:
     """Identity-protected burst followed by packed raw pixels on 8-FSK tones."""
     bits = AVATAR_PALETTE_BITS[_avatar_palette_id(card)]
     palette_map = _avatar_palette_map(card)
@@ -428,7 +431,7 @@ def minimal_avatar_symbols(card: Card, *, include_sync: bool = True,
                                      if start + MUSICAL_TIMING_PILOT_INTERVAL < len(pixels)
                                      else ())))
     header = tuple(_encode_avatar_metadata(card, message_type=message_type, snr_db=snr_db,
-                                           wire_version=5 if timing_pilots else 3))
+                                           wire_version=5 if timing_pilots else wire_version))
     return (FRAME_SYNC + header + pixels) if include_sync else (header + pixels)
 
 
@@ -577,18 +580,22 @@ def _avatar_metadata(card: Card, *, resilient: bool = False,
     if snr_db is not None and not -127 <= int(snr_db) <= 127:
         raise ValueError("SNR report must be between -127 and 127 dB")
     palette_id = _avatar_palette_id(card)
-    if wire_version not in (3, 4, 5):
+    if wire_version not in (3, 4, 5, 6):
         raise ValueError("unsupported resilient avatar wire version")
-    common = (b"PQ", wire_version if resilient or wire_version == 5 else 3,
+    common = (b"PQ", wire_version if resilient or wire_version in (5, 6) else 3,
               card.width, card.height,
               palette_id, len(call), len(grid), int(card.card_id) & 0xFFFF,
               call.ljust(12, b"\0"), grid.ljust(8, b"\0"),
-              AVATAR_BURST_CODES["fast_avatar_fec" if resilient else "fast_avatar"],
+              AVATAR_BURST_CODES["fast_avatar_fec" if resilient else
+                                 "fast_avatar_crc" if wire_version == 6 else "fast_avatar"],
               AVATAR_MESSAGE_CODES[message_type], -128 if snr_db is None else int(snr_db))
     if resilient and wire_version == 4:
         packed = minimal_avatar_payload(card)
         body = AVATAR_META_V4_STRUCT.pack(
             *common, zlib.crc32(packed), hashlib.blake2s(packed, digest_size=4).digest())
+    elif not resilient and wire_version == 6:
+        packed = minimal_avatar_payload(card)
+        body = AVATAR_META_V6_STRUCT.pack(*common, zlib.crc32(packed))
     elif resilient:
         body = AVATAR_META_STRUCT.pack(*common)
     else:
@@ -602,8 +609,9 @@ def _encode_avatar_metadata(card: Card, *, resilient: bool = False,
     wire = _avatar_metadata(card, resilient=resilient, message_type=message_type,
                             snr_db=snr_db, wire_version=wire_version)["wire"]
     values = _bytes_to_gf64(wire)
-    expected_count = (AVATAR_META_V4_DATA_SYMBOLS
-                      if resilient and wire_version == 4 else AVATAR_META_DATA_SYMBOLS)
+    expected_count = (AVATAR_META_V4_DATA_SYMBOLS if resilient and wire_version == 4 else
+                      AVATAR_META_V6_DATA_SYMBOLS if not resilient and wire_version == 6 else
+                      AVATAR_META_DATA_SYMBOLS)
     if len(values) != expected_count:
         raise RuntimeError("avatar metadata symbol count changed")
     shortened = AVATAR_RS_K - len(values)
@@ -616,6 +624,9 @@ def _decode_avatar_metadata(tones: list[int]) -> dict:
     if len(tones) == AVATAR_META_V4_TONE_COUNT:
         metadata_struct = AVATAR_META_V4_STRUCT
         shortening = AVATAR_RS_K - AVATAR_META_V4_DATA_SYMBOLS
+    elif len(tones) == AVATAR_META_V6_TONE_COUNT:
+        metadata_struct = AVATAR_META_V6_STRUCT
+        shortening = AVATAR_RS_K - AVATAR_META_V6_DATA_SYMBOLS
     elif len(tones) == AVATAR_META_TONE_COUNT:
         metadata_struct = AVATAR_META_STRUCT
         shortening = AVATAR_META_SHORTENING
@@ -637,6 +648,13 @@ def _decode_avatar_metadata(tones: list[int]) -> dict:
         if version != 4 or burst_code != AVATAR_BURST_CODES["fast_avatar_fec"] or message_code not in AVATAR_MESSAGE_NAMES:
             raise ValueError("unsupported version 4 card burst metadata")
         avatar_mode = "fast_avatar_fec"
+        message_type = AVATAR_MESSAGE_NAMES[message_code]
+        snr_db = None if snr_db == -128 else snr_db
+    elif metadata_struct is AVATAR_META_V6_STRUCT:
+        burst_code, message_code, snr_db, image_crc32 = fields[10:]
+        if version != 6 or burst_code != AVATAR_BURST_CODES["fast_avatar_crc"] or message_code not in AVATAR_MESSAGE_NAMES:
+            raise ValueError("unsupported version 6 card burst metadata")
+        avatar_mode = "fast_avatar_crc"
         message_type = AVATAR_MESSAGE_NAMES[message_code]
         snr_db = None if snr_db == -128 else snr_db
     elif metadata_struct is AVATAR_META_STRUCT:
@@ -664,8 +682,8 @@ def _decode_avatar_metadata(tones: list[int]) -> dict:
             "message_type": message_type, "snr_db": snr_db, "header_version": version,
             "timing_pilots": version == 5}
     if image_crc32 is not None:
-        result.update(image_crc32=image_crc32, image_tag=image_tag.hex(),
-                      image_id=f"{image_crc32:08x}{image_tag.hex()}")
+        result.update(image_crc32=image_crc32, image_tag=image_tag.hex() if image_tag else None,
+                      image_id=f"{image_crc32:08x}{image_tag.hex()}" if image_tag else f"{image_crc32:08x}")
     return result
 
 
@@ -712,7 +730,7 @@ def _decode_avatar_metadata_soft(metrics: np.ndarray) -> dict:
 
 def _decode_avatar_metadata_after(tones: list[int] | tuple[int, ...], start: int) -> tuple[dict, int]:
     """Decode current or older protected headers and return the payload offset."""
-    for count in (AVATAR_META_V4_TONE_COUNT, AVATAR_META_TONE_COUNT,
+    for count in (AVATAR_META_V4_TONE_COUNT, AVATAR_META_V6_TONE_COUNT, AVATAR_META_TONE_COUNT,
                   AVATAR_META_LEGACY_TONE_COUNT):
         end = start + count
         if end > len(tones):
@@ -1161,7 +1179,8 @@ def decode_minimal_avatar_symbols_progress(symbols: Iterable[int], *, require_sy
         frame_end = meta_end + tone_count + (pilot_symbol_count if has_pilot_symbols else 0)
         key = (metadata["callsign"].upper(), metadata["grid"].upper(), metadata["card_id"],
                metadata["width"], metadata["height"], metadata["palette_id"],
-               metadata.get("message_type", "card"), metadata.get("snr_db"))
+               metadata.get("message_type", "card"), metadata.get("snr_db"),
+               metadata.get("image_id"))
         candidate = candidates.setdefault(key, {"metadata": metadata,
             "votes": [[0] * (1 << bpp) for _ in range(pixel_count)], "copies": 0})
         frame = tones[meta_end:frame_end]
@@ -1319,11 +1338,27 @@ def _avatar_metrics_report(symbols, metadata, combined_metrics, combined_copies,
         for pixel_index in range(first_pixel, last_pixel):
             present[pixel_index] = False
             pixels[pixel_index] = 0
-    return pixels, {**metadata, "measured_snr_db": measured_snr_db,
+    raw_integrity = {}
+    if metadata.get("header_version") == 6:
+        complete = bool(present) and all(present)
+        crc_valid = bool(complete and
+                         zlib.crc32(_pack_indices(pixels, int(metadata["bits_per_pixel"]))) ==
+                         int(metadata["image_crc32"]))
+        raw_integrity = {"whole_raster_crc32_valid": crc_valid,
+                         "whole_raster_valid": crc_valid,
+                         "whole_card_received": complete,
+                         "crc_verified_pixels": len(pixels) if crc_valid else 0}
+    return pixels, {**metadata, **raw_integrity, "measured_snr_db": measured_snr_db,
                     "acquisition": acquisition,
-                    "raw_avatar": True, "exact": False,
+                    "raw_avatar": True,
+                    "exact": bool(raw_integrity.get("whole_raster_valid", False)),
                     "pixel_coverage": present, "received_copies": max(copies, combined_copies),
-                    "color_stage": f"{sum(present)}/{metadata['width'] * metadata['height']} pixels · {copies} copies · unverified"}
+                    "color_stage": (f"{sum(present)}/{metadata['width'] * metadata['height']} pixels · whole-card CRC32 verified"
+                                    if raw_integrity.get("whole_raster_valid") else
+                                    f"{sum(present)}/{metadata['width'] * metadata['height']} pixels · {copies} copies · "
+                                    f"{'CRC32 failed' if raw_integrity.get('whole_card_received') else 'CRC32 pending'}"
+                                    if metadata.get("header_version") == 6 else
+                                    f"{sum(present)}/{metadata['width'] * metadata['height']} pixels · {copies} copies · unverified")}
 
 
 def _demodulate_musical_pilot_metrics(audio, sample_rate, start, offset, period,
@@ -1680,7 +1715,9 @@ def decode_avatar_copies(copies, sample_rate, profile, *, checked=True, wire_ver
             if cached is not None:
                 _AVATAR_DECODE_CACHE.move_to_end(cache_key)
                 return copy.deepcopy(cached)
-    header_count = AVATAR_META_V4_TONE_COUNT if checked and wire_version == 4 else AVATAR_META_TONE_COUNT
+    header_count = (AVATAR_META_V4_TONE_COUNT if checked and wire_version == 4 else
+                    AVATAR_META_V6_TONE_COUNT if not checked and wire_version == 6 else
+                    AVATAR_META_TONE_COUNT)
     frames, timing_hypotheses, best, best_metrics = [], [], None, None
     best_raw_quality = None
     pilot_results = {}
@@ -1964,7 +2001,9 @@ def _metadata_tones_from_decoded(meta):
         fields = (*common, AVATAR_BURST_CODES[meta['avatar_mode']],
                   AVATAR_MESSAGE_CODES[meta['message_type']], -128 if meta['snr_db'] is None else meta['snr_db'])
         body = (AVATAR_META_V4_STRUCT.pack(*fields, meta['image_crc32'], bytes.fromhex(meta['image_tag']))
-                if version == 4 else AVATAR_META_STRUCT.pack(*fields))
+                if version == 4 else
+                AVATAR_META_V6_STRUCT.pack(*fields, meta['image_crc32']) if version == 6 else
+                AVATAR_META_STRUCT.pack(*fields))
     else:
         body = AVATAR_META_LEGACY_STRUCT.pack(*common)
     data = _bytes_to_gf64(body+crc16(body).to_bytes(2,'big'))

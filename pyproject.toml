@@ -19,9 +19,13 @@ dependencies = [
 [project.optional-dependencies]
 # Loopback audio is optional; Data2G supplies SciPy for the bundled CPU modem.
 loopback = ["sounddevice>=0.4.6"]
+mcp = ["mcp>=1.2,<2"]
 
 [project.scripts]
 pixel-qso = "app:main"
+pixelqso = "app:main"
+pixel-qso-mcp = "pixelqso_mcp:main"
 
 [tool.setuptools]
-py-modules = ["app", "cardmodem", "card_ids", "card_animation", "animation_editor", "card_feedback", "card_requests", "transmit_preview", "musical_crc", "snr", "card_views", "ui_theme", "card_backends", "copy_combining", "modem_envelope", "backend_adapters", "card_transfer", "data2g_transport", "data2g_runtime", "data2g_receive_host", "qr_support", "weak_signal_modem", "weak_signal_ldpc", "weak_signal_ldpc_data", "experimental_burst_modem", "compressed_fsk_modem", "grid_fsk_modem", "experimental_fec", "webserver", "on_air"]
+py-modules = ["app", "pixelqso_mcp", "cardmodem", "card_ids", "card_animation", "animation_editor", "card_feedback", "card_requests", "transmit_preview", "musical_crc", "snr", "card_views", "ui_theme", "card_backends", "copy_combining", "modem_envelope", "backend_adapters", "card_transfer", "data2g_transport", "data2g_runtime", "data2g_receive_host", "qr_support", "weak_signal_modem", "weak_signal_ldpc", "weak_signal_ldpc_data", "experimental_burst_modem", "compressed_fsk_modem", "grid_fsk_modem", "experimental_fec", "webserver", "on_air"]
+packages = ["pixelqso"]

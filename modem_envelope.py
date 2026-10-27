@@ -62,6 +62,7 @@ MODE_IDS = {
     'experimental_4fsk_orthogonal': 19, 'experimental_8fsk_orthogonal': 20,
     'experimental_8fsk_musical_25': 21,
     'experimental_8fsk_mono_fast': 22,
+    'fast_avatar_crc': 23, 'fast_avatar_fec_v4_200': 24,
 }
 ID_MODES = {v: k for k, v in MODE_IDS.items()}
 # Fixed native LDPC payload sizes are part of the grouped v2 specification.

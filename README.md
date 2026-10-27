@@ -63,7 +63,7 @@ brew install portaudio
 
 ```sh
 uv sync
-uv run python app.py
+uv run python -m pixelqso
 ```
 
 With pip:
@@ -259,3 +259,14 @@ The [FSK receiver improvements](docs/FSK-RECEIVER.md) add distributed header acq
 Receive-all acquisition profiling and measured decoder latency: [profiling report](docs/RECEIVE-ALL-PROFILING.md).
 
 On-air receive diagnosis and resume notes: [2026-10-12 HF findings](docs/HF-RX-FINDINGS-2026-10-12.md).
+
+## MCP server
+
+Install the optional MCP dependency with `uv sync --extra mcp` (or
+`pip install '.[mcp]'`), then run
+`pixel-qso-mcp` (stdio transport). Configure your MCP client to launch that
+command from the PixelQSO environment. The server can list and read project and
+application data files, inspect personal/sent/starter cards, return a rendered
+PNG card image, and create cards from row-major pixels or canvas drawing
+commands. Set `PIXELQSO_DATA` when the application uses a non-default data
+directory. Created cards are written to `cards/` in that directory.

@@ -46,6 +46,14 @@ def write_pair(paths, documents):
 def export_gif(path, images, frame_ms):
     """Keep full card artwork in both frames and loop at the chosen timing."""
     from PIL import Image
+    if isinstance(frame_ms, (list, tuple)):
+        durations = [int(value) for value in frame_ms]
+        if len(durations) != len(images) or any(value <= 0 for value in durations):
+            raise ValueError('GIF frame timings must be positive and match the image count')
+    else:
+        durations = int(frame_ms)
+        if durations <= 0:
+            raise ValueError('GIF frame timing must be positive')
     frames = []
     for image in images:
         image = image.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
@@ -61,7 +69,7 @@ def export_gif(path, images, frame_ms):
     palette = atlas.quantize(colors=256)
     frames = [frame.quantize(palette=palette, dither=Image.Dither.NONE) for frame in frames]
     frames[0].save(str(path), format='GIF', save_all=True, append_images=frames[1:],
-                   duration=frame_ms, loop=0, disposal=2, optimize=False)
+                   duration=durations, loop=0, disposal=2, optimize=False)
 
 
 class AnimationAuthor(QWidget):

@@ -1,6 +1,6 @@
 """Trading-card presentation for the local contact collection."""
 from PySide6.QtCore import Qt, QSize, QRectF, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QPixmap, QIcon, QFont, QImage
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap, QIcon, QFont, QImage
 from PySide6.QtWidgets import QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget, QListWidgetItem, QSizePolicy, QStackedWidget
 from ui_theme import COLORS, SPACING
 from snr import snr_lines
@@ -227,17 +227,40 @@ def card_art(image, title, subtitle='', size=QSize(240, 300), stacked=False):
         for offset in (12, 6):
             p.setPen(QColor(COLORS['card_stack_border'])); p.setBrush(QColor(COLORS['card_stack']))
             p.drawRoundedRect(QRectF(margin-offset/2, margin-offset, width-2*margin, height-2*margin), 13, 13)
-    p.setPen(QColor(COLORS['card_frame_border'])); p.setBrush(QColor(COLORS['card_frame']))
-    p.drawRoundedRect(QRectF(margin, margin, width-2*margin, height-2*margin), 18, 18)
-    art = QRectF(margin+12, margin+12, width-2*margin-24, height-2*margin-76)
-    p.fillRect(art, QColor(COLORS['card_art_background']))
+    frame = QRectF(margin, margin, width-2*margin, height-2*margin)
+    shadow = QColor(COLORS['card_frame_shadow']); shadow.setAlpha(90)
+    p.setPen(Qt.PenStyle.NoPen); p.setBrush(shadow)
+    p.drawRoundedRect(frame.adjusted(0, 2, 0, 4), 18, 18)
+    p.setPen(QPen(QColor(COLORS['card_frame_border']), 1)); p.setBrush(QColor(COLORS['card_frame']))
+    p.drawRoundedRect(frame, 18, 18)
+    highlight = QColor('#ffffff'); highlight.setAlpha(32)
+    p.setPen(QPen(highlight, 1))
+    p.drawLine(int(frame.left()+20), int(frame.top()+1), int(frame.right()-20), int(frame.top()+1))
+    art = QRectF(margin+12, margin+12, width-2*margin-24, height-2*margin-78)
+    p.setPen(Qt.PenStyle.NoPen); p.setBrush(QColor(COLORS['card_art_background']))
+    p.drawRoundedRect(art, 8, 8)
     if image is not None and not image.isNull():
         scaled = QPixmap.fromImage(image).scaled(art.size().toSize(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)
+        clip = QPainterPath(); clip.addRoundedRect(art, 8, 8)
+        p.save(); p.setClipPath(clip)
         p.drawPixmap(int(art.center().x()-scaled.width()/2), int(art.center().y()-scaled.height()/2), scaled)
-    p.setPen(QColor(COLORS['card_title'])); font = QFont(); font.setPixelSize(max(13, width//17)); font.setBold(True); p.setFont(font)
-    p.drawText(QRectF(margin+13, height-margin-57, width-2*margin-26, 24), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, title)
-    font.setBold(False); font.setPixelSize(max(11, width//22)); p.setFont(font); p.setPen(QColor(COLORS['card_subtitle']))
-    p.drawText(QRectF(margin+13, height-margin-31, width-2*margin-26, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, subtitle)
+        p.restore()
+    p.setPen(QPen(QColor(COLORS['card_art_border']), 1))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawRoundedRect(art, 8, 8)
+    title_rect = QRectF(margin+14, height-margin-58, width-2*margin-28, 24)
+    subtitle_rect = QRectF(margin+14, height-margin-32, width-2*margin-28, 20)
+    p.setPen(QColor(COLORS['card_title']))
+    font = QFont(); font.setPixelSize(15); font.setBold(True)
+    font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 102.0)
+    p.setFont(font)
+    p.drawText(title_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+               p.fontMetrics().elidedText(str(title), Qt.TextElideMode.ElideRight, int(title_rect.width())))
+    font.setBold(False); font.setPixelSize(11)
+    font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 104.0)
+    p.setFont(font); p.setPen(QColor(COLORS['card_subtitle']))
+    p.drawText(subtitle_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+               p.fontMetrics().elidedText(str(subtitle), Qt.TextElideMode.ElideRight, int(subtitle_rect.width())))
     p.end(); return pixmap
 
 
@@ -308,8 +331,8 @@ class DeckDialog(QDialog):
         self.card_back.setWordWrap(True)
         self.card_back.setObjectName("supportingText")
         self.card_back.setStyleSheet(
-            "background:#17231d; border:1px solid #52705a; border-radius:12px; padding:24px; "
-            "font-size:16px; color:#edf1e8;")
+            f"background:{COLORS['surface_raised']}; border:1px solid {COLORS['border_control']}; "
+            f"border-radius:16px; padding:24px; font-size:16px; color:{COLORS['text']};")
         self.card_faces.addWidget(self.card_back)
         layout.addWidget(self.card_faces, 1)
         self.details = QLabel(); self.details.setAlignment(Qt.AlignmentFlag.AlignCenter)

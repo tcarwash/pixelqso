@@ -30,6 +30,7 @@ GROUP_VERSION = 2
 COMPRESSED_VERSION = 3
 INTERLACED_VERSION = 4
 ANIMATION_VERSION = 5  # Optional sidecar; never replaces a normal copy header.
+BIT_INTERLACED_VERSION = 10  # FSK LDPC interlaced payloads also permute code bits.
 REPORT_VERSIONS = (6, 7)  # Two independently checked halves of a reception report.
 REQUEST_VERSIONS = (8, 9)  # Two halves of a standalone card request.
 # Keep the musical raster's optional CRC sidecar available for quick re-enable,
@@ -43,6 +44,8 @@ GROUP_MODES = {
     'experimental_8fsk_grouped': 'experimental_8fsk_ldpc',
     'experimental_16fsk_grouped': 'experimental_16fsk_ldpc',
 }
+BIT_INTERLEAVED_MODES = frozenset((
+    'experimental_8fsk_ldpc', 'experimental_16fsk_ldpc'))
 PARITY = 20
 DATA_SYMBOLS = (BODY.size + 4) * 8 // 6
 CODE_SYMBOLS = DATA_SYMBOLS + PARITY
@@ -63,6 +66,7 @@ MODE_IDS = {
     'experimental_8fsk_musical_25': 21,
     'experimental_8fsk_mono_fast': 22,
     'fast_avatar_crc': 23, 'fast_avatar_fec_v4_200': 24,
+    'resilient_10': 25, 'resilient_5': 26,
 }
 ID_MODES = {v: k for k, v in MODE_IDS.items()}
 # Fixed native LDPC payload sizes are part of the grouped v2 specification.
@@ -165,7 +169,8 @@ def header_symbols(key, payload_samples, identity, *, trailer=False, copies=None
         if (copies is not None or int(copy_index) != copy_index or
                 not 0 <= int(copy_index) < MAX_COPIES or payload_samples >= (1 << 27)):
             raise ValueError('invalid interlaced copy header')
-        version = INTERLACED_VERSION
+        version = (BIT_INTERLACED_VERSION if key in BIT_INTERLEAVED_MODES
+                   else INTERLACED_VERSION)
         payload_samples |= int(copy_index) << 27
     body = BODY.pack(b'PQCH', version, mode, payload_samples, identity)
     return _protected_symbols(body)
@@ -366,6 +371,9 @@ def decode_header(metrics, *, soft=False):
     if zlib.crc32(body) != crc:
         raise ValueError('copy header checksum failed')
     magic, version, mode, samples, identity = BODY.unpack(body)
+    if (version == BIT_INTERLACED_VERSION and
+            ID_MODES.get(mode & 127) not in BIT_INTERLEAVED_MODES):
+        raise ValueError('bit-interleaved header is unsupported for this mode')
     from musical_crc import MODE, VERSIONS
     if magic == b'PQCH' and version in VERSIONS and ID_MODES.get(mode) == MODE:
         return dict(mode=MODE, version=version,
@@ -384,7 +392,7 @@ def decode_header(metrics, *, soft=False):
                     version=version)
     copies = 1
     copy_index = None
-    if version == INTERLACED_VERSION:
+    if version in (INTERLACED_VERSION, BIT_INTERLACED_VERSION):
         copy_index, samples = samples >> 27, samples & ((1 << 27)-1)
         if copy_index >= MAX_COPIES:
             raise ValueError('unsupported interlaced copy index')
@@ -396,11 +404,13 @@ def decode_header(metrics, *, soft=False):
             raise ValueError('group header cannot carry a trailer')
     if version == VERSION and (ID_MODES.get(mode & 127) in GROUP_MODES or ID_MODES.get(mode & 127) in COMPRESSED_MODES):
         raise ValueError('grouped modes require a supported group header')
-    if magic != b'PQCH' or version not in (VERSION, GROUP_VERSION, COMPRESSED_VERSION, INTERLACED_VERSION) or mode & 127 not in ID_MODES or not 0 < samples <= 48000*1800:
+    if magic != b'PQCH' or version not in (VERSION, GROUP_VERSION, COMPRESSED_VERSION,
+                                            INTERLACED_VERSION, BIT_INTERLACED_VERSION) or mode & 127 not in ID_MODES or not 0 < samples <= 48000*1800:
         raise ValueError('unsupported copy header')
     return dict(mode=ID_MODES[mode & 127], trailer=bool(mode & 128),
                 payload_samples=samples, identity=identity.hex(), version=version,
-                corrected_symbols=corrected, group_copies=copies, copy_index=copy_index)
+                corrected_symbols=corrected, group_copies=copies, copy_index=copy_index,
+                code_bit_interleaved=(version == BIT_INTERLACED_VERSION))
 
 
 @lru_cache(None)
@@ -762,8 +772,8 @@ def decode_capture(key, audio, sample_rate, decoder, copies=None, copy_decoder=N
             tables.add(bytes.fromhex(frame))
     matched = groups(announced, key)
     if not announced:
-        if key in GROUP_MODES or key in COMPRESSED_MODES:
-            raise ValueError('waiting for protected grouped header')
+        if key in COMPRESSED_MODES:
+            raise ValueError('waiting for protected compressed header')
         report = decoder(audio, sample_rate)  # historical native waveform
         animation_links.attach(report)
         return report

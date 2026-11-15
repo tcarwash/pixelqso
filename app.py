@@ -343,10 +343,10 @@ class RxAudioWaterfall(QWidget):
         self._window = np.hanning(self.FFT_SIZE).astype(np.float32)
         self._window_norm = 2.0 / float(np.sum(self._window))
         self._rows = np.zeros((self.ROWS, self.COLUMNS, 3), dtype=np.uint8)
-        self._rows[:] = (8, 15, 20)
+        self._rows[:] = (14, 15, 22)
         self._level_text = "Waiting for samples"
-        stops = np.asarray(((5, 12, 24), (12, 51, 81), (19, 137, 150),
-                            (205, 205, 92), (255, 105, 48)), dtype=np.float32)
+        stops = np.asarray(((6, 10, 22), (14, 46, 78), (22, 130, 148),
+                            (197, 255, 136), (255, 158, 64)), dtype=np.float32)
         positions = np.linspace(0, len(stops) - 1, 256)
         lo = np.floor(positions).astype(int)
         hi = np.minimum(lo + 1, len(stops) - 1)
@@ -357,7 +357,7 @@ class RxAudioWaterfall(QWidget):
         self.device_name = str(device_name or "Audio input")
         self.sample_rate = int(sample_rate)
         self._tail = np.empty(0, dtype=np.float32)
-        self._rows[:] = (8, 15, 20)
+        self._rows[:] = (14, 15, 22)
         self._level_text = "Waiting for samples"
         self.update()
 
@@ -1541,6 +1541,34 @@ class CardCanvas(QWidget):
                  "width": int(layer["width"]), "height": int(layer["height"]),
                  "pixels": list(layer["pixels"])} for layer in self.stamp_layers]
 
+    def import_card_image(self, image):
+        if image.isNull() or (image.width(), image.height()) != (self.card.width, self.card.height):
+            raise ValueError(f"Image must be exactly {self.card.width}×{self.card.height} pixels.")
+        colors = {tuple(v * 17 for v in color): i for i, color in reversed(list(enumerate(self.card.palette)))}
+        pixels = []
+        for y in range(image.height()):
+            for x in range(image.width()):
+                color = image.pixelColor(x, y)
+                if color.alpha() != 255:
+                    raise ValueError("The image must be opaque; Pixel QSO cards do not support transparent pixels.")
+                rgb = (color.red(), color.green(), color.blue())
+                if rgb not in colors:
+                    raise ValueError(f"Pixel ({x + 1}, {y + 1}) has a color outside this card's palette. Use the exported palette in Aseprite.")
+                pixels.append(colors[rgb])
+        self.remember_edit()
+        self.base_pixels = pixels
+        self.stamp_layers = []
+        self.selected_layer = self.drag_layer = self.hover_layer = None
+        self.selection_rect = QRect(); self.selection_handle = QRect(); self.selection_origin = None
+        self._render_layers()
+
+    def export_card_image(self):
+        image = QImage(self.card.width, self.card.height, QImage.Format.Format_Indexed8)
+        image.setColorTable([QColor(*(v * 17 for v in color)).rgba() for color in self.card.palette])
+        for i, index in enumerate(self.card.pixels):
+            image.setPixel(i % self.card.width, i // self.card.width, index)
+        return image
+
     def _render_layers(self):
         self.card.pixels = list(self.base_pixels)
         canvas_width, canvas_height = self.card.width, self.card.height
@@ -2028,14 +2056,17 @@ class ListenEncodeSignals(QObject):
 
 
 class ListenEncodeWorker(QRunnable):
-    def __init__(self, card, backend, token):
+    def __init__(self, card, backend, token, include_id_markers=True):
         super().__init__()
         self.card, self.backend, self.token = card, backend, token
+        self.include_id_markers = include_id_markers
         self.signals = ListenEncodeSignals()
 
     def run(self):
         try:
-            audio = EXPERIMENTAL_ADAPTER.encode(self.backend, self.card, 1, "cq", None)
+            audio = EXPERIMENTAL_ADAPTER.encode(
+                self.backend, self.card, 1, "cq", None,
+                include_id_markers=self.include_id_markers)
             result = (self.token, pcm16_audio_bytes(audio), None)
         except Exception as exc:
             result = (self.token, None, str(exc))
@@ -2047,6 +2078,8 @@ class CanvasListenDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Listen in")
         self.snapshot = snapshot
+        self.include_id_markers = (parent.id_markers.isChecked()
+                                   if parent is not None and hasattr(parent, "id_markers") else True)
         self.token = 0
         self.jobs = {}
         self.sink = self.buffer = None
@@ -2104,7 +2137,8 @@ class CanvasListenDialog(QDialog):
             card = self.snapshot()
         except Exception as exc:
             self.status.setText(str(exc)); return
-        worker = ListenEncodeWorker(card, get_backend(self.mode.currentData(), 300), self.token)
+        worker = ListenEncodeWorker(card, get_backend(self.mode.currentData(), 300),
+                                    self.token, self.include_id_markers)
         self.jobs[self.token] = worker
         worker.signals.finished.connect(self.audio_ready)
         self.play.setEnabled(False); self.stop_button.setEnabled(True)
@@ -2479,8 +2513,8 @@ class MainWindow(QMainWindow):
         self.editor_dialog = EditorDialog(self)
         editor_layout = QVBoxLayout(self.editor_dialog)
         editor_layout.setContentsMargins(24, 20, 24, 20); editor_layout.setSpacing(16)
-        studio_heading = QLabel("Make something worth sharing."); studio_heading.setObjectName("pageTitle")
-        studio_caption = QLabel("THE PIXEL STUDIO  ·  Draw, stamp, and bring your cards to life.")
+        studio_heading = QLabel("Card editor"); studio_heading.setObjectName("pageTitle")
+        studio_caption = QLabel("Draw, stamp, and animate your card.")
         studio_caption.setObjectName("supportingText")
         editor_layout.addWidget(studio_heading); editor_layout.addWidget(studio_caption)
         editor_layout.addWidget(editor_content, 1)
@@ -2553,31 +2587,39 @@ class MainWindow(QMainWindow):
         """Navigation is presentation only; existing page and action owners stay intact."""
         shell = QWidget(); shell_layout = QHBoxLayout(shell)
         shell_layout.setContentsMargins(0, 0, 0, 0); shell_layout.setSpacing(0)
-        rail = QFrame(); rail.setObjectName("navigationRail"); rail.setFixedWidth(172)
-        rail_layout = QVBoxLayout(rail); rail_layout.setContentsMargins(18, 28, 18, 22)
-        rail_layout.setSpacing(12)
-        brand = QLabel("▦  pixelqso"); brand.setObjectName("brandName")
+        rail = QFrame(); rail.setObjectName("navigationRail"); rail.setFixedWidth(204)
+        rail_layout = QVBoxLayout(rail); rail_layout.setContentsMargins(16, 28, 16, 20)
+        rail_layout.setSpacing(8)
+        brand = QLabel("Pixel QSO"); brand.setObjectName("brandName")
         rail_layout.addWidget(brand)
-        tagline = QLabel("SMALL ART.\nREAL CONNECTIONS."); tagline.setObjectName("eyebrow")
-        rail_layout.addWidget(tagline); rail_layout.addSpacing(32)
+        tagline = QLabel("SMALL ART · REAL CONTACTS"); tagline.setObjectName("eyebrow")
+        tagline.setWordWrap(True)
+        rail_layout.addWidget(tagline); rail_layout.addSpacing(24)
         self.workspace_navigation = QButtonGroup(self)
         for index, label in enumerate(("Operate", "My Cards", "Contacts")):
             button = QPushButton(label); button.setCheckable(True)
-            button.setObjectName("navigationItem"); button.setMinimumHeight(48)
+            button.setObjectName("navigationItem"); button.setMinimumHeight(44)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setAccessibleName(f"Open {label}")
             button.clicked.connect(lambda _checked=False, i=index: pages.setCurrentIndex(i))
             self.workspace_navigation.addButton(button, index); rail_layout.addWidget(button)
-        rail_layout.addSpacing(12)
-        studio = QPushButton("＋  Create a card"); studio.setObjectName("studioShortcut")
+        rail_layout.addSpacing(8)
+        studio = QPushButton("+  Create a card"); studio.setObjectName("studioShortcut")
+        studio.setCursor(Qt.CursorShape.PointingHandCursor)
         studio.clicked.connect(self.create_library_card); rail_layout.addWidget(studio)
         rail_layout.addStretch(1)
-        caption = QLabel("YOUR STATION\nYour art, on the air."); caption.setObjectName("railCaption")
+        rail_divider = QFrame(); rail_divider.setObjectName("shellDivider")
+        rail_divider.setFrameShape(QFrame.Shape.NoFrame)
+        rail_layout.addWidget(rail_divider)
+        caption = QLabel("Your art, on the air."); caption.setObjectName("railCaption")
+        caption.setWordWrap(True)
         rail_layout.addWidget(caption)
         settings = QPushButton("Station settings"); settings.clicked.connect(self.open_station_settings)
+        settings.setCursor(Qt.CursorShape.PointingHandCursor)
         rail_layout.addWidget(settings)
         shell_layout.addWidget(rail)
         body = QWidget(); body_layout = QVBoxLayout(body)
-        body_layout.setContentsMargins(24, 22, 24, 18); body_layout.setSpacing(16)
+        body_layout.setContentsMargins(24, 22, 24, 16); body_layout.setSpacing(12)
         header = QHBoxLayout()
         words = QVBoxLayout(); words.setSpacing(4)
         self.workspace_eyebrow = QLabel(); self.workspace_eyebrow.setObjectName("eyebrow")
@@ -2586,7 +2628,11 @@ class MainWindow(QMainWindow):
         self.workspace_description.setWordWrap(True)
         words.addWidget(self.workspace_eyebrow); words.addWidget(self.workspace_title)
         words.addWidget(self.workspace_description); header.addLayout(words, 1)
-        body_layout.addLayout(header); body_layout.addWidget(pages, 1)
+        body_layout.addLayout(header)
+        header_divider = QFrame(); header_divider.setObjectName("shellDivider")
+        header_divider.setFrameShape(QFrame.Shape.NoFrame)
+        body_layout.addWidget(header_divider)
+        body_layout.addWidget(pages, 1)
         shell_layout.addWidget(body, 1)
         def select_page(index):
             copy = (("ON THE AIR", "A little art. A real connection.", "Choose a card, listen for a friend, and start an exchange."),
@@ -2659,17 +2705,18 @@ class MainWindow(QMainWindow):
             semantic_text_style("positive" if ready else "warning", padding="2px"))
 
     def make_library_tab(self):
-        page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(SPACING["lg"])
-        heading = QHBoxLayout()
+        page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(SPACING["md"])
+        layout.setContentsMargins(SPACING["lg"], SPACING["lg"], SPACING["lg"], SPACING["md"])
+        heading = QHBoxLayout(); heading.setSpacing(SPACING["sm"])
         title = QLabel("MY CARDS"); title.setObjectName("eyebrow")
         heading.addWidget(title, 1)
-        create = QPushButton("＋ Create card"); create.setObjectName("primaryAction"); create.clicked.connect(self.create_library_card); heading.addWidget(create)
+        create = QPushButton("Create card"); create.setObjectName("primaryAction"); create.clicked.connect(self.create_library_card); heading.addWidget(create)
         self.create_library_button = create
         starter = QPushButton("Use starter card…"); starter.clicked.connect(self.open_starter_card_picker); heading.addWidget(starter)
         self.starter_library_button = starter
         open_button = QPushButton("Open selected"); open_button.clicked.connect(self._open_library_item); heading.addWidget(open_button)
         self.open_library_button = open_button
-        selection_actions = QHBoxLayout()
+        selection_actions = QHBoxLayout(); selection_actions.setSpacing(SPACING["sm"])
         selection_actions.addStretch(1)
         heading.removeWidget(open_button); selection_actions.addWidget(open_button)
         self.export_card_button = QPushButton("Export selected…")
@@ -2698,7 +2745,7 @@ class MainWindow(QMainWindow):
         self.more_card_button = more
         layout.addLayout(heading)
         layout.addLayout(selection_actions)
-        library_controls = QHBoxLayout()
+        library_controls = QHBoxLayout(); library_controls.setSpacing(SPACING["sm"])
         self.library_search = QLineEdit(); self.library_search.setPlaceholderText("Find a card…")
         self.library_search.setAccessibleName("Search cards by name or station")
         self.library_search.setToolTip("Search card names, station details, and categories · Ctrl+F")
@@ -2760,15 +2807,14 @@ class MainWindow(QMainWindow):
         empty_layout.addLayout(empty_actions); empty_layout.addStretch(1)
         self.library_stack.addWidget(self.library_empty_page)
         layout.addWidget(self.library_stack, 1)
-        self.library_status = QLabel(""); layout.addWidget(self.library_status)
+        self.library_status = QLabel(""); self.library_status.setObjectName("supportingText")
+        layout.addWidget(self.library_status)
         return page
 
     def make_qso_log_tab(self):
-        page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(SPACING["lg"])
-        heading = QLabel("Contacts")
-        heading.setObjectName("pageTitle")
-        layout.addWidget(heading)
-        controls = QHBoxLayout()
+        page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(SPACING["md"])
+        layout.setContentsMargins(SPACING["lg"], SPACING["lg"], SPACING["lg"], SPACING["md"])
+        controls = QHBoxLayout(); controls.setSpacing(SPACING["sm"])
         self.log_search = QLineEdit(); self.log_search.setPlaceholderText("Find a callsign or grid…")
         self.log_search.setAccessibleName("Search contacts by callsign or grid")
         self.log_search.setToolTip("Find contacts by callsign or grid · Ctrl+F")
@@ -2793,14 +2839,18 @@ class MainWindow(QMainWindow):
         self.log_sort = QComboBox(); self.log_sort.addItems(["Newest first", "Oldest first", "Callsign A–Z"])
         self.log_sort.setAccessibleName("Sort contacts")
         controls.addWidget(self.log_sort)
+        layout.addLayout(controls)
+        contact_actions = QHBoxLayout(); contact_actions.setSpacing(SPACING["sm"])
+        contact_actions.addStretch(1)
         self.export_qso_button = QPushButton("Export selected QSO…")
         self.export_qso_button.setEnabled(False)
         self.export_qso_button.clicked.connect(self.export_selected_qso)
-        controls.addWidget(self.export_qso_button)
+        contact_actions.addWidget(self.export_qso_button)
         self.copy_qso_button = QPushButton("Copy PNG")
         self.copy_qso_button.clicked.connect(self.copy_selected_qso)
         self.copy_qso_button.setEnabled(False)
-        controls.addWidget(self.copy_qso_button); layout.addLayout(controls)
+        contact_actions.addWidget(self.copy_qso_button)
+        layout.addLayout(contact_actions)
         self.log_gallery = QListWidget(); self.log_gallery.setViewMode(QListWidget.ViewMode.IconMode)
         self.log_gallery.setMovement(QListWidget.Movement.Static)
         self.log_gallery.setResizeMode(QListWidget.ResizeMode.Adjust)
@@ -2811,7 +2861,7 @@ class MainWindow(QMainWindow):
         self.log_gallery.setAccessibleDescription(
             "Use the arrow keys to browse contact decks. Press Enter to open the selected contact; "
             "double-click also opens it.")
-        self.log_gallery.setSpacing(SPACING["sm"]); self.log_gallery.itemClicked.connect(self.show_log_deck)
+        self.log_gallery.setSpacing(SPACING["lg"]); self.log_gallery.itemClicked.connect(self.show_log_deck)
         self.log_gallery.itemActivated.connect(self.show_log_deck)
         self.log_gallery.itemSelectionChanged.connect(self._update_export_buttons)
         contact_gallery_page = QWidget(); contact_gallery_layout = QVBoxLayout(contact_gallery_page)
@@ -2840,7 +2890,8 @@ class MainWindow(QMainWindow):
         self.contact_stack.addWidget(contact_gallery_page)
         self.contact_stack.addWidget(self.contact_empty_page)
         layout.addWidget(self.contact_stack, 1)
-        self.log_status = QLabel(); layout.addWidget(self.log_status)
+        self.log_status = QLabel(); self.log_status.setObjectName("supportingText")
+        layout.addWidget(self.log_status)
         self.log_search.textChanged.connect(self.refresh_qso_log)
         self.log_sort.currentIndexChanged.connect(self.refresh_qso_log)
         return page
@@ -3960,19 +4011,19 @@ class MainWindow(QMainWindow):
         drawing_widget = QWidget(); drawing = QVBoxLayout(drawing_widget)
         drawing.setContentsMargins(0, 0, 12, 0)
         self.editor_splitter.addWidget(drawing_widget)
-        tools = QGridLayout(); self.tool_buttons = {}
+        tools = QGridLayout(); tools.setSpacing(SPACING["sm"]); self.tool_buttons = {}
         self.tool_group = QButtonGroup(self); self.tool_group.setExclusive(True)
         for title, tool in (("Draw", "draw"), ("Erase", "erase"), ("Fill", "fill"), ("Pick", "pick"),
                             ("Move stamp", "move"), ("Box select", "select"),
-                            ("Rectangle", "rect"), ("Filled rectangle", "filled_rect"),
-                            ("Ellipse", "ellipse"), ("Filled ellipse", "filled_ellipse")):
+                            ("Rect", "rect"), ("Rect fill", "filled_rect"),
+                            ("Ellipse", "ellipse"), ("Ellipse fill", "filled_ellipse")):
             button = QPushButton(title); button.setCheckable(True)
             button.setAccessibleName(f"{title} tool")
             button.setAccessibleDescription(CardCanvas.TOOL_HELP[tool])
             button.clicked.connect(lambda _checked=False, value=tool: self.set_editor_tool(value))
             self.tool_group.addButton(button); self.tool_buttons[tool] = button
             index = len(self.tool_buttons) - 1
-            tools.addWidget(button, index // 3, index % 3)
+            tools.addWidget(button, index // 5, index % 5)
         self.tool_buttons["draw"].setChecked(True)
         drawing.addLayout(tools)
         self.canvas = CardCanvas(self.card)
@@ -4015,14 +4066,17 @@ class MainWindow(QMainWindow):
         grid = QCheckBox("Grid"); grid.setChecked(True)
         grid.toggled.connect(lambda checked: (setattr(self.canvas, "show_grid", checked), self.canvas.update()))
         history.addWidget(grid); drawing.addLayout(history)
+        shape_options = QHBoxLayout(); shape_options.setSpacing(SPACING["md"])
         mirror = QCheckBox("Mirror X")
         mirror.setToolTip("Mirror Draw and Erase strokes across the canvas center, like Aseprite X symmetry.")
         mirror.toggled.connect(lambda checked: setattr(self.canvas, "mirror_x", checked))
-        history.addWidget(mirror)
+        shape_options.addWidget(mirror)
         centered = QCheckBox("Center out")
         centered.setToolTip("Draw rectangles and ellipses outward from the first point instead of from a corner.")
         centered.toggled.connect(lambda checked: setattr(self.canvas, "shape_centered", checked))
-        history.addWidget(centered)
+        shape_options.addWidget(centered)
+        shape_options.addStretch(1)
+        drawing.addLayout(shape_options)
         for key, callback in (("Ctrl+Z", self.canvas.undo), ("Ctrl+Shift+Z", self.canvas.redo), ("Ctrl+Y", self.canvas.redo)):
             shortcut = QShortcut(QKeySequence(key), w); shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut); shortcut.activated.connect(callback)
 
@@ -4077,6 +4131,9 @@ class MainWindow(QMainWindow):
         self.paint_color_combo.setVisible(False)
         self.palette_widget = QWidget(); self.palette_widget.setFixedWidth(146); self.palette_layout = QGridLayout(self.palette_widget)
         self.palette_layout.setContentsMargins(0, 0, 0, 0); self.palette_layout.setSpacing(6)
+        colors_heading = QLabel("Colors")
+        colors_heading.setObjectName("sectionTitle")
+        side.addWidget(colors_heading)
         side.addWidget(self.palette_widget)
         self._set_editor_format(self.card)
         stamps_heading = QLabel("My stamps")
@@ -4093,11 +4150,11 @@ class MainWindow(QMainWindow):
         self.stamp_shelf_hint.setWordWrap(True)
         self.stamp_shelf_hint.setStyleSheet(semantic_text_style(padding="2px"))
         side.addWidget(self.stamp_shelf_hint)
-        stamp_buttons = QHBoxLayout()
+        stamp_buttons = QHBoxLayout(); stamp_buttons.setSpacing(SPACING["sm"])
         make_stamp = QPushButton("Text / emoji"); make_stamp.clicked.connect(self.create_text_stamp); stamp_buttons.addWidget(make_stamp)
         qr_button = QPushButton("QR code…"); qr_button.clicked.connect(self.create_qr_card); stamp_buttons.addWidget(qr_button)
         draw_stamp = QPushButton("Draw stamp"); draw_stamp.clicked.connect(self.draw_stamp); stamp_buttons.addWidget(draw_stamp)
-        import_stamp = QPushButton("Import"); import_stamp.clicked.connect(self.import_stamp); stamp_buttons.addWidget(import_stamp)
+        import_stamp = QPushButton("Import stamp"); import_stamp.clicked.connect(self.import_stamp); stamp_buttons.addWidget(import_stamp)
         side.addLayout(stamp_buttons)
         self.stamp_actions_widget = QWidget()
         stamp_actions = QHBoxLayout(self.stamp_actions_widget)
@@ -4134,8 +4191,11 @@ class MainWindow(QMainWindow):
         self.listen_canvas_button.clicked.connect(self.listen_to_canvas)
         side.addWidget(self.listen_canvas_button)
         self.load_stamps()
-        buttons = QGridLayout()
-        for index, (label, handler) in enumerate((("New", self.new_card), ("Open…", self.open_card), ("Save", self.save_card), ("Paste image", self.paste_card_image), ("Export WAV…", self.export_wav))):
+        file_heading = QLabel("Card file")
+        file_heading.setObjectName("sectionTitle")
+        side.addWidget(file_heading)
+        buttons = QGridLayout(); buttons.setSpacing(SPACING["sm"])
+        for index, (label, handler) in enumerate((("New", self.new_card), ("Open…", self.open_card), ("Save", self.save_card), ("Paste image", self.paste_card_image), ("Export PNG…", self.export_aseprite_png), ("Import PNG…", self.import_aseprite_png), ("Export WAV…", self.export_wav))):
             b = QPushButton(label); b.clicked.connect(handler); buttons.addWidget(b, index // 3, index % 3)
             if label == "Save":
                 self.editor_save_button = b
@@ -4580,6 +4640,26 @@ class MainWindow(QMainWindow):
             return
         self.place_stamp_image(image)
 
+    def export_aseprite_png(self):
+        name, _ = QFileDialog.getSaveFileName(self.editor_dialog, "Export card artwork for Aseprite", str(DATA / "card.png"), "PNG image (*.png)")
+        if not name: return
+        path = Path(name)
+        if path.suffix.lower() != ".png": path = path.with_suffix(".png")
+        if not self.canvas.export_card_image().save(str(path), "PNG"):
+            QMessageBox.warning(self, "Couldn't export artwork", "Could not write the PNG image.")
+            return
+        self.status.setText(f"Exported {path.name} for Aseprite")
+
+    def import_aseprite_png(self):
+        name, _ = QFileDialog.getOpenFileName(self.editor_dialog, "Import card artwork from Aseprite", str(DATA), "PNG image (*.png)")
+        if not name: return
+        try:
+            self.canvas.import_card_image(QImage(name))
+            self.status.setText("Imported artwork · save the card to keep it")
+            self._sync_editor_controls()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Couldn't import artwork", str(exc))
+
     def place_stamp_image(self, image):
         if image.width() > self.card.width or image.height() > self.card.height:
             image = self._fit_stamp_to_grid(image, min(16, self.card.width, self.card.height))
@@ -4764,7 +4844,7 @@ class MainWindow(QMainWindow):
     def make_exchange_tab(self):
         w = QWidget(); root = QVBoxLayout(w)
         root.setContentsMargins(*([SPACING["lg"]] * 4)); root.setSpacing(SPACING["md"])
-        top = QHBoxLayout()
+        top = QHBoxLayout(); top.setSpacing(SPACING["md"])
         self.station_button = QPushButton("Station settings"); self.station_button.clicked.connect(self.open_station_settings); top.addWidget(self.station_button)
         self.station_identity = QLabel()
         self.station_identity.setObjectName("stationIdentity")
@@ -5005,6 +5085,18 @@ class MainWindow(QMainWindow):
         self.interlaced_copies.toggled.connect(
             lambda value: self.settings.setValue("transfer/interlaced_copies", value)
             if not getattr(self, "_station_settings_editing", False) else None)
+        self.id_markers = QCheckBox("Include ID markers")
+        self.id_markers.setChecked(self.settings.value("transfer/id_markers", True, type=bool))
+        self.id_markers.setToolTip(
+            "Protected wideband markers identify the experimental mode and each copy. "
+            "Turn off for a payload-only transmission; select a compatible RX modem for reliable detection. "
+            "Marker-free copies cannot be combined by protected copy identity. "
+            "The separate CW ID setting still applies.")
+        self.id_markers.toggled.connect(
+            lambda value: self.settings.setValue("transfer/id_markers", value)
+            if not getattr(self, "_station_settings_editing", False) else None)
+        self.id_markers.toggled.connect(self._update_transfer_controls)
+        self.id_markers.toggled.connect(self._refresh_transfer_summary)
         self.card_combo = QComboBox()
         self.card_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.card_combo.setMinimumContentsLength(16)
@@ -5016,6 +5108,7 @@ class MainWindow(QMainWindow):
         mode_form.addRow("Card", self.manual_card_widget)
         self.manual_card_label = mode_form.labelForField(self.manual_card_widget)
         self.auto_stage_group = QGroupBox("Your contact · four stages")
+        self.auto_stage_group.setObjectName("senderSection")
         # Use explicit horizontal rows for the send actions. QFormLayout treats
         # its first column as label content and can collapse widget labels
         # (notably QPushButtons) after the settings dialog rebuilds the app
@@ -5085,6 +5178,7 @@ class MainWindow(QMainWindow):
         f = QFormLayout(); f.addRow("Rig frequency", self.frequency)
         self.frequency_controls = QWidget(); self.frequency_controls.setLayout(f)
         transfer_group = QGroupBox("Send details")
+        transfer_group.setObjectName("senderSection")
         transfer_form = QFormLayout(transfer_group)
         transfer_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         transfer_form.addRow("Send type", self.exchange_mode)
@@ -5158,7 +5252,7 @@ class MainWindow(QMainWindow):
             "Seconds between CQ calls while not exchanging. The first CQ sends immediately; "
             "this interval is locked while CQ calling is active.")
         self.cq_interval.valueChanged.connect(self._save_cq_interval)
-        cq_row = QHBoxLayout(); cq_row.addWidget(self.call_cq_button); cq_row.addWidget(QLabel("Repeat every")); cq_row.addWidget(self.cq_interval)
+        cq_row = QHBoxLayout(); cq_row.setSpacing(SPACING["sm"]); cq_row.addWidget(self.call_cq_button); cq_row.addWidget(QLabel("Repeat every")); cq_row.addWidget(self.cq_interval); cq_row.addStretch(1)
         self.cq_controls = QWidget(); self.cq_controls.setLayout(cq_row); transfer_form.addRow(self.cq_controls)
         self.beacon_timer = QTimer(self)
         self.beacon_timer.timeout.connect(self.transmit_beacon)
@@ -5219,7 +5313,7 @@ class MainWindow(QMainWindow):
         left.setMinimumWidth(0)
         left.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
-        right_panel = QVBoxLayout()
+        right_panel = QVBoxLayout(); right_panel.setSpacing(SPACING["md"])
         self.traffic_preview = QStackedWidget()
         self.receive_workspace = QWidget()
         received_layout = QVBoxLayout(self.receive_workspace)
@@ -5227,7 +5321,7 @@ class MainWindow(QMainWindow):
         self.traffic_preview.addWidget(self.receive_workspace)
         right_panel.addWidget(self.traffic_preview, 1)
         view_heading = QHBoxLayout()
-        session_title = QLabel("The receiving room"); session_title.setObjectName("sectionTitle")
+        session_title = QLabel("Heard this session"); session_title.setObjectName("sectionTitle")
         view_heading.addWidget(session_title, 1)
         self.listen_indicator = QLabel("● STARTING")
         self.listen_indicator.setAccessibleDescription("Current receiver activity state.")
@@ -5258,10 +5352,11 @@ class MainWindow(QMainWindow):
         wall_list_panel = QWidget()
         wall_list_layout = QVBoxLayout(wall_list_panel); wall_list_layout.setContentsMargins(0, 0, 0, 0)
         self.session_wall_empty = QLabel(
-            '<div style="font-size:54px; color:#bda5f8">▦</div><br>'
-            '<div style="font-size:24px; font-weight:600; color:#f5f1e9">A space for your next connection.</div><br>'
-            '<div>Cards will appear here as they arrive.<br>'
-            'Partial cards stay marked provisional until verified.</div>')
+            f"<div style=\"font-size:44px; color:{COLORS['card_frame']}\">▦</div><br>"
+            f"<div style=\"font-size:21px; font-weight:700; color:{COLORS['text_bright']}\">"
+            "A space for your next connection.</div><br>"
+            "<div>Cards will appear here as they arrive.<br>"
+            "Partial cards stay marked provisional until verified.</div>")
         self.session_wall_empty.setWordWrap(True)
         self.session_wall_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.session_wall_empty.setObjectName("receiverEmpty")
@@ -5292,8 +5387,8 @@ class MainWindow(QMainWindow):
         self.session_wall.setWordWrap(False)
         self.session_wall.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.session_wall.setIconSize(QSize(144, 144))
-        self.session_wall.setGridSize(QSize(148, 148))
-        self.session_wall.setSpacing(2)
+        self.session_wall.setGridSize(QSize(160, 164))
+        self.session_wall.setSpacing(8)
         self.session_wall.setObjectName("sessionWall")
         self.session_wall.setAccessibleName("Received cards for this session")
         self.session_wall.setAccessibleDescription(
@@ -5316,7 +5411,8 @@ class MainWindow(QMainWindow):
         self.receive_view.setObjectName("receiveView")
         self.receive_duplicate_label = QLabel("DUPLICATE")
         self.receive_duplicate_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.receive_duplicate_label.setStyleSheet("color: #ef5350; font-weight: 900; letter-spacing: 1px;")
+        self.receive_duplicate_label.setStyleSheet(
+            f"color: {COLORS['error']}; font-weight: 900; letter-spacing: 1px;")
         self.receive_duplicate_label.setAccessibleName("Duplicate received card")
         self.receive_duplicate_label.setObjectName("receiveDuplicateLabel")
         self.receive_duplicate_label.hide()
@@ -5566,6 +5662,7 @@ class MainWindow(QMainWindow):
         copy_options_layout.addWidget(self.interlaced_copies)
         copy_options_layout.addStretch(1)
         options_form.addRow("Copies per card", copy_options)
+        options_form.addRow(self.id_markers)
         self.repeat_count.show()
         self.repeat_count_label = options_form.labelForField(copy_options)
         advanced_page.addWidget(options)
@@ -5642,10 +5739,11 @@ class MainWindow(QMainWindow):
         self.station_settings_notice.setWordWrap(True)
         self.station_settings_notice.setStyleSheet(semantic_text_style(padding="2px"))
         layout.addWidget(self.station_settings_notice)
-        buttons = QHBoxLayout()
+        buttons = QHBoxLayout(); buttons.setSpacing(SPACING["sm"])
         buttons.addStretch(1)
         self.station_settings_apply_button = QPushButton("Apply")
         self.station_settings_apply_button.setObjectName("primaryAction")
+        self.station_settings_apply_button.setDefault(True)
         self.station_settings_apply_button.clicked.connect(
             lambda: self._apply_station_settings(reconnect=False))
         self.station_settings_reconnect_button = QPushButton("Apply and reconnect")
@@ -5737,6 +5835,7 @@ class MainWindow(QMainWindow):
             "output_device": self.output_device, "input_device": self.input_device,
             "repeat_count": self.repeat_count,
             "interlaced_copies": self.interlaced_copies,
+            "id_markers": self.id_markers,
             "rig_host": self.rig_host, "rig_port": self.rig_port,
             "auto_connect_cat": self.auto_connect_cat,
             "audio_test_mode": self.audio_test_mode,
@@ -5790,7 +5889,7 @@ class MainWindow(QMainWindow):
                     self.data2g_kiss_port, self.data2g_host_bandwidth,
                     self.data2g_rig_host, self.data2g_rig_port,
                     self.data2g_input_device, self.data2g_output_device,
-                    self.output_device, self.input_device, self.repeat_count, self.interlaced_copies, self.rig_host,
+                    self.output_device, self.input_device, self.repeat_count, self.interlaced_copies, self.id_markers, self.rig_host,
                     self.rig_port, self.auto_connect_cat, self.audio_test_mode,
                     self.show_experimental_modes, self.web_enabled, self.web_port)
         for widget in controls:
@@ -5911,6 +6010,7 @@ class MainWindow(QMainWindow):
             "output_device": self.output_device, "input_device": self.input_device,
             "repeat_count": self.repeat_count,
             "interlaced_copies": self.interlaced_copies,
+            "id_markers": self.id_markers,
             "rig_host": self.rig_host, "rig_port": self.rig_port,
             "auto_connect_cat": self.auto_connect_cat,
             "audio_test_mode": self.audio_test_mode,
@@ -7109,6 +7209,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("options/show_experimental_modes", self.show_experimental_modes.isChecked())
         self.settings.setValue("transfer/repeats", self.repeat_count.value())
         self.settings.setValue("transfer/interlaced_copies", self.interlaced_copies.isChecked())
+        self.settings.setValue("transfer/id_markers", self.id_markers.isChecked())
         self.settings.setValue("options/backend", self.backend_combo.currentData())
         self.settings.setValue("options/web_enabled", self.web_enabled.isChecked())
         self.settings.setValue("options/web_port", self.web_port.value())
@@ -8027,6 +8128,9 @@ class MainWindow(QMainWindow):
     def _update_transfer_controls(self, *_):
         if hasattr(self, "repeat_count"):
             backend = self.selected_backend()
+            if hasattr(self, "id_markers"):
+                self.id_markers.setEnabled(
+                    self.backend_combo.currentData() == "experimental" and backend is not None)
             maximum = getattr(backend, "max_repeats", 20)
             if maximum == 1 and self.repeat_count.maximum() != 1:
                 self._normal_repeat_count = self.repeat_count.value()
@@ -8038,9 +8142,10 @@ class MainWindow(QMainWindow):
                     self.repeat_count.setValue(getattr(self, "_normal_repeat_count", 1))
             else:
                 self.repeat_count.setMaximum(maximum)
-            framing = ("One protected header covers the group; airtime includes it."
-                       if getattr(backend, "requires_common_header", False) else
-                       "Each copy includes protected framing; airtime includes it.")
+            framing = ("ID markers are omitted; select a compatible RX mode."
+                       if self.backend_combo.currentData() == "experimental" and
+                       not self.id_markers.isChecked() else
+                       "Protected ID markers are included in the airtime.")
             compression = (" Compression is automatic; airtime depends on the chosen card."
                            if getattr(backend, "automatic_compression", False) else "")
             self.repeat_count.setToolTip(
@@ -8051,7 +8156,7 @@ class MainWindow(QMainWindow):
                 # Keep the global preference editable in every mode so the
                 # operator can turn it off even when the selected encoder
                 # currently ignores it (or copies are temporarily set to 1).
-                self.interlaced_copies.setEnabled(True)
+                self.interlaced_copies.setEnabled(self.id_markers.isChecked())
                 self.interlaced_copies.setToolTip(
                     "Stagger LDPC/RS block order across protected copies; the receiver restores each block before combining."
                     if supported and maximum > 1 else
@@ -8098,7 +8203,10 @@ class MainWindow(QMainWindow):
                     return
             if backend is not None:
                 card = self._prepare_outgoing_card(card, self._outgoing_message_type())
-                total_seconds = backend.estimate_seconds(card, self.repeat_count.value())
+                total_seconds = backend.estimate_seconds(
+                    card, self.repeat_count.value(),
+                    **({"include_id_markers": self.id_markers.isChecked()}
+                       if not data2g else {}))
             else:
                 symbols, profile = self._card_tx_symbols(card)
                 from modem_envelope import HEADER_SECONDS, metadata_header_count
@@ -8251,9 +8359,11 @@ class MainWindow(QMainWindow):
             if adapter.capabilities.kind is not AdapterKind.LOCAL_IMAGE_MODEM:
                 raise ValueError(f"Selected modem adapter {adapter.key!r} cannot encode local audio")
             audio = adapter.encode(backend, card, self.repeat_count.value(), wire_type, snr_db,
-                                   interlaced=self.interlaced_copies.isChecked())
+                                   interlaced=self.interlaced_copies.isChecked() and self.id_markers.isChecked(),
+                                   include_id_markers=self.id_markers.isChecked())
             self._prepared_tx_preview = LocalTransmitPreview(card, self.selected_mode(), backend,
-                self.repeat_count.value(), wire_type, snr_db, len(audio))
+                self.repeat_count.value(), wire_type, snr_db, len(audio),
+                include_id_markers=self.id_markers.isChecked())
             return audio
         encode_legacy = getattr(adapter, "encode_legacy", None)
         if not callable(encode_legacy):
@@ -10050,6 +10160,8 @@ class MainWindow(QMainWindow):
             minimum_samples = int(backend.minimum_audio_seconds() * self.rx_rate)
             interval = max(1, int((1.0 if self.selected_adapter().capabilities.kind is
                                    AdapterKind.FRAME_TRANSPORT else 0.5) * self.rx_rate))
+            if backend.key in {"resilient_10", "resilient_5"}:
+                interval = 5 * self.rx_rate
         else:
             minimum_samples = int(1.0 * self.rx_rate)
             interval = 2 * self.rx_rate

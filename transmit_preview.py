@@ -24,7 +24,8 @@ class LocalTransmitPreview:
     encoders spread image evidence throughout a burst, so use a global reveal
     rather than inventing a row/region transmission order for those modes.
     """
-    def __init__(self, card, mode, backend, copies, message_type, snr_db, samples):
+    def __init__(self, card, mode, backend, copies, message_type, snr_db, samples,
+                 *, include_id_markers=True):
         from modem_envelope import (HEADER_SECONDS, metadata_header_count, block_crc_header_count, GROUP_MODES)
         from card_backends import AvatarBackend
         self.card = copy.deepcopy(card)
@@ -34,13 +35,14 @@ class LocalTransmitPreview:
         self.serial = isinstance(backend, AvatarBackend)
         self.raw = self.serial and not backend.checked
         self.checkpoints = []
-        metadata_seconds = metadata_header_count(card, mode)*HEADER_SECONDS/2
-        crc_extra = block_crc_header_count(card, mode)*HEADER_SECONDS
+        metadata_seconds = (metadata_header_count(card, mode)*HEADER_SECONDS/2
+                            if include_id_markers else 0)
+        crc_extra = block_crc_header_count(card, mode)*HEADER_SECONDS if include_id_markers else 0
         self.crc_prefix = crc_extra/2
         self.crc_suffix = crc_extra/2
-        self.prefix = metadata_seconds + HEADER_SECONDS
-        self.suffix = metadata_seconds + HEADER_SECONDS
-        if mode in GROUP_MODES:
+        self.prefix = metadata_seconds + (HEADER_SECONDS if include_id_markers else 0)
+        self.suffix = metadata_seconds + (HEADER_SECONDS if include_id_markers else 0)
+        if mode in GROUP_MODES and include_id_markers:
             self.cycle_seconds = (self.seconds-self.prefix-metadata_seconds)/self.copies
             self.suffix = 0
             self.grouped = True

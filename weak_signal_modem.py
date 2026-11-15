@@ -92,8 +92,15 @@ def seconds():
     return ((PREAMBLE + BLOCKS*(DATA+PILOTS))*SPS + 48 + 2*GUARD)/FS
 
 
-def decode_ldpc(llrs, iterations=100, *, code_instance=None):
-    """CPU sum-product decoder, including NR punctures and known filler bits."""
+def decode_ldpc(llrs, iterations=100, *, code_instance=None, multi_copy=False):
+    """CPU sum-product decoder, including NR punctures and known filler bits.
+
+    When *multi_copy* is True the caller has combined evidence from more than
+    one physical transmission.  Combined LLRs are typically stronger, so the
+    graph is more likely to converge given more iterations; the budget is
+    raised to 200 while keeping the early-exit on syndrome satisfaction.
+    """
+    max_iter = 200 if multi_copy else iterations
     c = code() if code_instance is None else code_instance
     rows, cols = c.edges
     channel = np.zeros(c.n_cols)
@@ -101,7 +108,7 @@ def decode_ldpc(llrs, iterations=100, *, code_instance=None):
     channel[c.k:c.kb*c.z] = 50
     messages = np.zeros(len(rows))
     posterior = channel.copy()
-    for iteration in range(iterations):
+    for iteration in range(max_iter):
         outgoing = np.clip(posterior[cols] - messages, -50, 50)
         negative = outgoing < 0
         signs = np.bincount(rows, weights=negative, minlength=c.mb*c.z).astype(int) & 1
@@ -172,7 +179,7 @@ def acquire(source):
     return sorted(selected, key=lambda item: item[1])
 
 
-def soft_frame(source, candidate, *, copy_index=None):
+def soft_frame(source, candidate, *, copy_index=None, adaptive_noise=True):
     """Return noise-weighted bit evidence; never release unchecked pixels."""
     training, pilots, _permutation, _, h = constants()
     score, start, offset = candidate
@@ -218,19 +225,38 @@ def soft_frame(source, candidate, *, copy_index=None):
     blocks = np.interp(indices, np.arange(len(matched)), matched).reshape(BLOCKS,PILOTS+DATA)
     gains = np.mean(blocks[:,:PILOTS]*pilots.conj(), axis=1)
     smooth = np.convolve(np.pad(gains, (4,4), mode='edge'), np.ones(9)/9, 'valid')
-    variance = np.mean(abs(blocks[:,:PILOTS]-smooth[:,None]*pilots)**2)
+    # Per-block noise estimate from pilot residuals.
+    # Using each block's own 8 pilots avoids a deep-fade block inflating the
+    # global variance and suppressing LLRs for all other blocks (which a single
+    # mean variance does). Clip to a floor so an unusually clean block cannot
+    # produce infinite LLRs; clip to a ceiling so a silent block cannot zero
+    # out the LLR scale for neighbours during combining.
+    pilot_residuals = blocks[:, :PILOTS] - smooth[:, None] * pilots   # (BLOCKS, PILOTS)
+    local_var = np.maximum(
+        np.mean(np.abs(pilot_residuals) ** 2, axis=1), 1e-10)         # (BLOCKS,)
+    gain_power = abs(smooth) ** 2
+    gain_cv = float(np.std(gain_power) / max(float(np.mean(gain_power)), 1e-20))
+    # Eight pilots give a noisy local variance under a flat channel. Shrink
+    # those estimates to the global value unless pilot gain variation provides
+    # evidence of block fading; transition smoothly across the measured range.
+    variance = float(np.mean(local_var))
+    fade_confidence = (float(np.clip((gain_cv - .25) / .30, 0.0, 1.0))
+                       if adaptive_noise else 0.0)
+    per_block_var = variance + fade_confidence * (local_var - variance)
     values = blocks[:,PILOTS:]*smooth[:,None].conj()
     llr = np.empty(N)
-    llr[0::2] = 2*math.sqrt(2)*values.real.ravel()/max(variance,1e-10)
-    llr[1::2] = 2*math.sqrt(2)*values.imag.ravel()/max(variance,1e-10)
+    llr[0::2] = (2*math.sqrt(2)*values.real / per_block_var[:, None]).ravel()
+    llr[1::2] = (2*math.sqrt(2)*values.imag / per_block_var[:, None]).ravel()
     ordered = np.empty(N)
     ordered[copy_permutation(copy_index)] = llr
-    estimated_snr = 10*np.log10(max(float(np.mean(abs(smooth)**2)), 1e-20)/max(variance,1e-20)*2000/2500)
+    estimated_snr = 10*np.log10(max(float(np.mean(gain_power)), 1e-20)/max(variance,1e-20)*2000/2500)
     return ordered, dict(acquisition_score=float(score), carrier_offset_hz=float(offset),
                          clock_ppm=(step/SPS-1)*1e6,
                          fractional_timing_samples=float(fraction),
                          start_seconds=capture_start/FS,
-                         estimated_snr_db_2500=float(estimated_snr))
+                         estimated_snr_db_2500=float(estimated_snr),
+                         pilot_gain_power_cv=gain_cv,
+                         per_block_noise_confidence=fade_confidence)
 
 
 def decode(audio, sample_rate=48000):
@@ -257,7 +283,8 @@ def decode(audio, sample_rate=48000):
             error = exc
     for llrs, used in recovery_attempts(frames):
         try:
-            bits, iterations = decode_ldpc(llrs)
+            multi = len(used) > 1
+            bits, iterations = decode_ldpc(llrs, multi_copy=multi)
             diagnostics = dict(diagnostics_for(used, len(candidates)), ldpc_iterations=iterations)
             pixels, metadata = unpack(bits, diagnostics)
             metadata['received_copies'] = len(used)
@@ -375,7 +402,8 @@ def decode_copies(captures, sample_rate=48000):
         frames.append(variants)
     for evidence, used in hypothesis_attempts(frames):
         try:
-            bits, iterations=decode_ldpc(evidence)
+            multi = len(used) > 1
+            bits, iterations=decode_ldpc(evidence, multi_copy=multi)
             diagnostic={**diagnostics_for(used,len(frames)), 'ldpc_iterations':iterations}
             pixels,metadata=unpack(bits,diagnostic)
             metadata['received_copies']=len(used)

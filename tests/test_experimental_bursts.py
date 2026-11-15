@@ -14,6 +14,7 @@ import experimental_fec as fec
 import weak_signal_modem as weak
 from app import DecodeWorker, LiveDecodeWorker, MainWindow, decode_all_card_backends
 from backend_adapters import EXPERIMENTAL_ADAPTER, DecodeFailureKind
+import modem_envelope as envelope
 from modem_envelope import HEADER_SECONDS
 from copy_combining import MAX_COPIES, ADMITTED_IDENTITY
 from card_backends import MODE_REGISTRY, available_modes, get_backend
@@ -48,6 +49,114 @@ class ExperimentalBurstTests(unittest.TestCase):
         transmit.assert_called_once()
         self.assertEqual(transmit.call_args.args[:3],
                          ("experimental_8fsk_outer_rs", self.card, 3))
+
+    def test_fsk_ldpc_code_bit_permutation_roundtrips_each_copy_index(self):
+        for key in ("experimental_8fsk_ldpc", "experimental_16fsk_ldpc"):
+            for copy_index in (0, 1):
+                with self.subTest(key=key, copy_index=copy_index):
+                    audio = burst.encode(key, self.card, "cq", -9,
+                                         copy_index=copy_index)
+                    report = burst.decode_copies(
+                        key, [audio], 48000, copy_indices=[copy_index])
+                    self.assert_verified(key, report)
+
+    def test_legacy_interlaced_fsk_copy_uses_block_only_order(self):
+        key = "experimental_8fsk_ldpc"
+        with patch.object(burst, "_code_bit_permutation",
+                          side_effect=lambda fmt, _index: burst.format_constants_for(fmt)[2]):
+            audio = burst.encode(key, self.card, "cq", -9, copy_index=1)
+        report = burst.decode_copies(
+            key, [audio], 48000, copy_indices=[1],
+            code_bit_interleaved=[False])
+        self.assert_verified(key, report)
+
+    def test_bit_interleaved_fsk_headers_advertise_payload_version(self):
+        for key, version, enabled in (
+                ("experimental_8fsk_ldpc", envelope.BIT_INTERLACED_VERSION, True),
+                (burst.QPSK_KEY, envelope.INTERLACED_VERSION, False)):
+            with self.subTest(key=key):
+                symbols = envelope.header_symbols(
+                    key, 10000, b"copy-format-test", copy_index=1)
+                _, permutation = envelope.constants()
+                tones = np.empty_like(symbols[envelope.TRAINING:])
+                tones[permutation] = symbols[envelope.TRAINING:]
+                metrics = np.zeros((len(tones), 8))
+                metrics[np.arange(len(tones)), tones] = 1
+                header = envelope.decode_header(metrics[permutation])
+                self.assertEqual(header["version"], version)
+                self.assertEqual(header["code_bit_interleaved"], enabled)
+        # Historical v4 FSK interlaced copies remain distinguishable and use
+        # block ordering alone, so older payloads keep their original mapping.
+        with patch.object(envelope, "BIT_INTERLEAVED_MODES", frozenset()):
+            symbols = envelope.header_symbols(
+                "experimental_8fsk_ldpc", 10000, b"legacy-copy-test", copy_index=1)
+        _, permutation = envelope.constants()
+        tones = np.empty_like(symbols[envelope.TRAINING:])
+        tones[permutation] = symbols[envelope.TRAINING:]
+        metrics = np.zeros((len(tones), 8))
+        metrics[np.arange(len(tones)), tones] = 1
+        legacy = envelope.decode_header(metrics[permutation])
+        self.assertEqual(legacy["version"], envelope.INTERLACED_VERSION)
+        self.assertFalse(legacy["code_bit_interleaved"])
+
+    def test_interlaced_fsk_bit_permutation_uses_protected_header_metadata(self):
+        key = "experimental_8fsk_ldpc"
+        backend = get_backend(key)
+        audio = backend.encode(self.card, 2, "cq", -9, interlaced=True)
+        announcements = envelope.find_copies(audio, 48000)
+        self.assertEqual(len(announcements), 2)
+        self.assertEqual([item.diagnostics["copy_index"] for item in announcements], [0, 1])
+        self.assertTrue(all(item.diagnostics["version"] == envelope.BIT_INTERLACED_VERSION
+                            for item in announcements))
+        self.assertTrue(all(item.diagnostics["code_bit_interleaved"]
+                            for item in announcements))
+        outcome = EXPERIMENTAL_ADAPTER.decode_capture(backend, audio, 48000)
+        self.assertIsNone(outcome.failure)
+        self.assert_verified(key, outcome.report)
+
+    def test_fsk_copy_bit_permutation_recovers_repeated_burst_erasures(self):
+        key = "experimental_8fsk_ldpc"
+        fmt = burst.FORMATS[key]
+        packet = weak.packet(self.card, "cq", -9)
+        original_permutation = burst._code_bit_permutation
+
+        def make_copy_llrs(copy_index, permutation):
+            with patch.object(burst, "_code_bit_permutation",
+                              side_effect=permutation):
+                symbols = burst._ldpc_symbols(packet, fmt, copy_index)
+                blocks, cursor = [], 0
+                for length in fmt.block_lengths:
+                    blocks.append(symbols[cursor:cursor + length])
+                    cursor += length
+                metrics = np.full((fmt.symbol_count, fmt.tones), -30.0)
+                cursor = burst.TRAINING
+                for source_index in burst._block_order(fmt, copy_index):
+                    cursor += 4
+                    data = blocks[int(source_index)]
+                    # A repeated channel fade removes the first 60% of every
+                    # FSK data block in both copies. Copy-specific bit
+                    # permutation moves those erasures to different code bits.
+                    erased = int(len(data) * .6)
+                    metrics[cursor:cursor + erased] = 0.0
+                    for offset, tone in enumerate(data[erased:], start=erased):
+                        metrics[cursor + offset, int(tone)] = 30.0
+                    cursor += len(data)
+                return burst._ldpc_evidence(key, metrics, copy_index)
+
+        def recover(permutation):
+            combined = sum(make_copy_llrs(index, permutation) for index in (0, 1))
+            try:
+                bits, _iterations = weak.decode_ldpc(combined, multi_copy=True)
+                result = np.packbits(bits ^ weak.constants()[3]).tobytes()
+                return result == packet
+            except ValueError:
+                return False
+
+        no_bit_interleave = lambda format_, _index, **_kwargs: burst.format_constants_for(format_)[2]
+        self.assertFalse(recover(no_bit_interleave),
+                         "same-position block erasures should exceed the unpermuted decoder")
+        self.assertTrue(recover(original_permutation),
+                        "per-copy bit interleave should let the combined LDPC recover")
 
     def test_four_modes_are_gated_and_share_copy_policy(self):
         self.assertFalse(set(burst.MODE_KEYS) & {key for key, _ in available_modes()})

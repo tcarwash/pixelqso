@@ -3,7 +3,7 @@
 Pixel QSO uses Data2G's supported broadcast command and KISS interfaces from
 the merged [broadcast API](https://github.com/arodland/Data2G/blob/77856c901dd8db2642d72fcf869c727918429e4f/docs/broadcast.md).
 The Python host runtime is pinned to Data2G commit
-`20bdb05c3cbb24d7d28b613a86841f51c00ba8f9`. Pixel QSO does not import its
+`27236ec1c11ab5adc584d2d7a0d903d0fe1ea594` (the revision in `uv.lock`). Pixel QSO does not import its
 modem, waveform, or framing functions into the application process.
 
 ## Responsibilities and radio ownership
@@ -68,6 +68,12 @@ Broadcast mode changes do not narrow the host's receive mode set. The host API
 does not expose arbitrary partial decoder symbols or intra-burst pixels.
 
 ## Pixel QSO card frames
+
+The standard-library-only PQI2 framing and reassembly primitives live in
+`pixelqso/transfer.py`; `card_transfer.py` re-exports them for the desktop app.
+OpenWebRX vendors this same module for its receive-only card collection. Keep
+the two copies synchronized and run the card transfer tests when updating the
+wire format or canonical palettes.
 
 The app-level protocol in [`card_transfer.py`](card_transfer.py) uses the
 `PQI2` magic and version 1. Each frame carries card dimensions and palette,

@@ -14,6 +14,29 @@ class CardCanvasStampRemovalTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_aseprite_png_roundtrip_and_undo(self):
+        card = cardmodem.example_card()
+        canvas = CardCanvas(card)
+        original = list(card.pixels)
+        image = canvas.export_card_image()
+        image.setPixel(0, 0, (original[0] + 1) % len(card.palette))
+        canvas.import_card_image(image)
+        self.assertEqual(card.pixels[0], (original[0] + 1) % len(card.palette))
+        canvas.undo()
+        self.assertEqual(card.pixels, original)
+
+    def test_aseprite_import_rejects_invalid_images_without_changes(self):
+        card = cardmodem.example_card()
+        canvas = CardCanvas(card)
+        original = list(card.pixels)
+        with self.assertRaises(ValueError):
+            canvas.import_card_image(QImage(1, 1, QImage.Format.Format_RGB32))
+        image = canvas.export_card_image().convertToFormat(QImage.Format.Format_ARGB32)
+        image.setPixelColor(0, 0, QColor(1, 2, 3))
+        with self.assertRaises(ValueError):
+            canvas.import_card_image(image)
+        self.assertEqual(card.pixels, original)
+
     def test_close_control_stays_visible_over_transparent_stamp_pixels(self):
         canvas = CardCanvas(cardmodem.example_card())
         canvas.resize(320, 320)

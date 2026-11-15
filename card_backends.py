@@ -44,8 +44,8 @@ EXPERIMENTAL_MODE_LABELS = {
     "experimental_8fsk_orthogonal": "8-FSK · orthogonal · soft LDPC",
     "experimental_8fsk_musical_25": "8-FSK · E-major scale · 25 baud",
     "experimental_8fsk_mono_fast": "8-FSK · black & white · fast · ≈5 s",
-    **{f"resilient_{baud}": f"8-FSK · RS + soft Chase · {baud} baud · ≈{9 * baud} Hz"
-       for baud in (100, 50, 25)},
+    **{f"resilient_{baud}": f"8-FSK · RS + soft Chase · {baud} baud · ≈{9 * baud} Hz payload"
+       for baud in (100, 50, 25, 10, 5)},
     "fast_avatar_fec": "8-FSK · RS + soft Chase · 400 baud · block CRC",
     "fast_avatar_fec_v4": "8-FSK · RS + soft Chase · 400 baud · v4 CRC32",
     "fast_avatar_crc": "8-FSK · raw pixels · whole-card CRC32",
@@ -92,8 +92,9 @@ EXPERIMENTAL_MODE_DESCRIPTIONS = {
         "Reed–Solomon blocks and whole-card CRC32/content tag. A typical full card takes about 3 seconds before "
         "the common copy header; color artwork is luminance-thresholded to black and white.",
     **{key: "8-tone FSK with shortened Reed–Solomon RS(63,61), bounded soft-decision "
-       "Chase recovery, and per-block CRC16. Provisional pixels appear before block verification."
-       for key in ("resilient_100", "resilient_50", "resilient_25", "fast_avatar_fec")},
+       "Chase recovery, and per-block CRC16. Provisional pixels appear before block verification. "
+       "The common identification markers use a separate 900 Hz audio span."
+       for key in ("resilient_100", "resilient_50", "resilient_25", "resilient_10", "resilient_5", "fast_avatar_fec")},
     "fast_avatar_fec_v4": "8-tone FSK with Reed–Solomon and soft Chase recovery. "
         "Version 4 binds blocks to the image and verifies the whole raster with CRC32 and a content tag.",
     "fast_avatar_crc": "8-tone FSK with raw image pixels and a protected whole-card CRC32. "
@@ -507,7 +508,11 @@ class ExperimentalBurstBackend:
         import experimental_burst_modem as burst
         indices = [item.diagnostics.get('copy_index') for item in announcements]
         if any(index is not None for index in indices):
-            return burst.decode_copies(self.key, captures, sample_rate, copy_indices=indices)
+            bit_interleaved = [item.diagnostics.get('code_bit_interleaved', False)
+                               for item in announcements]
+            return burst.decode_copies(
+                self.key, captures, sample_rate, copy_indices=indices,
+                code_bit_interleaved=bit_interleaved)
         return burst.decode_copies(self.key, captures, sample_rate)
 
     def minimum_audio_seconds(self):
@@ -521,10 +526,15 @@ class ExperimentalBurstBackend:
 
 def _with_copy_header(cls):
     encode_payload, decode_payload, estimate_payload = cls.encode, cls.decode, cls.estimate_seconds
-    def encode(self, card, repeats, message_type, snr_db, *, interlaced=False):
+    def encode(self, card, repeats, message_type, snr_db, *, interlaced=False,
+               include_id_markers=True):
         from modem_envelope import transmit
         if getattr(self, 'monochrome', False):
             card = pixel.monochrome_card(card)
+        if not include_id_markers:
+            if interlaced:
+                raise ValueError('Interlaced copies require ID markers')
+            return encode_payload(self, card, repeats, message_type, snr_db)
         if interlaced and getattr(self, 'supports_interlaced_copies', False):
             return encode_payload(self, card, repeats, message_type, snr_db,
                                   interlaced=True)
@@ -536,11 +546,13 @@ def _with_copy_header(cls):
                               lambda x, rate: decode_payload(self, x, rate),
                               copy_decoder=(lambda xs, rate: self.decode_payload_copies(xs, rate))
                               if hasattr(self, 'decode_payload_copies') else None)
-    def estimate(self, card, repeats):
+    def estimate(self, card, repeats, *, include_id_markers=True):
         if getattr(self, 'monochrome', False):
             card = pixel.monochrome_card(card)
         from modem_envelope import HEADER_SECONDS, metadata_header_count, block_crc_header_count
         repeat_waveform(np.empty(0), repeats)
+        if not include_id_markers:
+            return estimate_payload(self, card, repeats)
         return (repeats * (estimate_payload(self, card, 1) +
                            (2+metadata_header_count(card, self.key))*HEADER_SECONDS) +
                 block_crc_header_count(card, self.key)*HEADER_SECONDS)
@@ -557,7 +569,7 @@ for _cls in (WeakSignalCombinedBackend, WeakSignalBackend, AvatarBackend, Experi
 
 @dataclass(frozen=True)
 class GroupedFSKBackend:
-    requires_common_header = True
+    requires_common_header = False
     key: str
     checked: bool = True
     max_repeats: int = MAX_COPIES
@@ -566,19 +578,22 @@ class GroupedFSKBackend:
     def label(self):
         return EXPERIMENTAL_MODE_LABELS[self.key]
 
-    def encode(self, card, repeats, message_type, snr_db):
+    def encode(self, card, repeats, message_type, snr_db, *, include_id_markers=True):
         import experimental_burst_modem as burst
         from modem_envelope import transmit_group
         payload = burst.encode(GROUPED_MODES[self.key], card, message_type, snr_db)
+        if not include_id_markers:
+            return repeat_waveform(payload, repeats)
         return transmit_group(self.key, card, payload, repeats, message_type, snr_db)
 
-    def estimate_seconds(self, card, repeats):
+    def estimate_seconds(self, card, repeats, *, include_id_markers=True):
         import experimental_burst_modem as burst
         import weak_signal_modem as weak
         from modem_envelope import HEADER_SECONDS, metadata_header_count
         repeat_waveform(np.empty(0), repeats)
         weak.packet(card)
-        return (1+metadata_header_count(card, self.key))*HEADER_SECONDS + repeats * burst.seconds(GROUPED_MODES[self.key])
+        markers = (1+metadata_header_count(card, self.key))*HEADER_SECONDS if include_id_markers else 0
+        return markers + repeats * burst.seconds(GROUPED_MODES[self.key])
 
     def minimum_audio_seconds(self):
         from modem_envelope import HEADER_SECONDS
@@ -593,7 +608,10 @@ class GroupedFSKBackend:
         return report
 
     def decode_payload(self, audio, sample_rate):
-        raise ValueError('grouped FSK requires a protected opening header')
+        import experimental_burst_modem as burst
+        report = burst.decode(GROUPED_MODES[self.key], audio, sample_rate)
+        report['receive_profile'] = GROUPED_MODES[self.key]
+        return report
 
     def decode(self, audio, sample_rate):
         from modem_envelope import decode_capture
@@ -687,8 +705,8 @@ BACKENDS: dict[str, CardBackend] = {
     **{f"resilient_{baud}": AvatarBackend(
         f"resilient_{baud}", EXPERIMENTAL_MODE_LABELS[f"resilient_{baud}"], True,
         pixel.ModemProfile(f"avatar-{baud}", f"Narrow avatar · {baud} baud", baud,
-                           tuple((i + 1) * baud for i in range(8)), 9 * baud), wire_version=4)
-       for baud in (100, 50, 25)},
+                           tuple(max(25, baud) + i * baud for i in range(8)), 9 * baud), wire_version=4)
+       for baud in (100, 50, 25, 10, 5)},
     "data2g_1200_robust": Data2GHostBackend("data2g_1200_robust", "Data2G · 1.2 kHz · robust"),
     "data2g_1200_fast": Data2GHostBackend("data2g_1200_fast", "Data2G · 1.2 kHz · fast"),
 }
@@ -755,6 +773,8 @@ MODE_REGISTRY: dict[str, ModeSpec] = {
     "resilient_100": ModeSpec("resilient_100", EXPERIMENTAL_MODE_LABELS["resilient_100"], True, "pixelqso_audio", supports_audio_placement=True),
     "resilient_50": ModeSpec("resilient_50", EXPERIMENTAL_MODE_LABELS["resilient_50"], True, "pixelqso_audio", supports_audio_placement=True),
     "resilient_25": ModeSpec("resilient_25", EXPERIMENTAL_MODE_LABELS["resilient_25"], True, "pixelqso_audio", supports_audio_placement=True),
+    "resilient_10": ModeSpec("resilient_10", EXPERIMENTAL_MODE_LABELS["resilient_10"], True, "pixelqso_audio", supports_audio_placement=True),
+    "resilient_5": ModeSpec("resilient_5", EXPERIMENTAL_MODE_LABELS["resilient_5"], True, "pixelqso_audio", supports_audio_placement=True),
     "fast_avatar_fec": ModeSpec("fast_avatar_fec", EXPERIMENTAL_MODE_LABELS["fast_avatar_fec"], True, "pixelqso_audio"),
     "fast_avatar_fec_v4": ModeSpec("fast_avatar_fec_v4", EXPERIMENTAL_MODE_LABELS["fast_avatar_fec_v4"], True, "pixelqso_audio"),
     "fast_avatar_crc": ModeSpec("fast_avatar_crc", EXPERIMENTAL_MODE_LABELS["fast_avatar_crc"], True, "pixelqso_audio"),
@@ -779,7 +799,7 @@ MODE_REGISTRY: dict[str, ModeSpec] = {
 # The resilient/raw avatar envelope carries its dimensions and palette ID in
 # the protected header. The newer burst and weak-signal formats are fixed to
 # the original 32×32, eight-color envelope.
-for _key in ("resilient_100", "resilient_50", "resilient_25",
+for _key in ("resilient_100", "resilient_50", "resilient_25", "resilient_10", "resilient_5",
              "fast_avatar_fec", "fast_avatar_fec_v4", "fast_avatar_crc",
              "fast_avatar_fec_v4_200", "fast_avatar"):
     MODE_REGISTRY[_key] = replace(
@@ -837,7 +857,7 @@ def get_backend(key: str, audio_placement: str | float = "near_carrier") -> Card
         return backend
     baud = backend.profile.baud
     if audio_placement == "near_carrier":
-        low = baud
+        low = max(25, baud)
     elif audio_placement == "centered":
         low = 1500 - 3.5 * baud
     else:

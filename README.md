@@ -141,6 +141,15 @@ It takes about 3 seconds for the card payload, plus framing. In the card editor,
 received card is fully verified, **Read QR code** shows its decoded text. New
 monochrome and QR features require the same Pixel QSO version at both stations.
 
+To draw a card in Aseprite, create or open a card in the editor and choose
+**Export PNG…**. Open that native-size indexed PNG in Aseprite, draw using its
+palette, and export a flattened PNG. Back in Pixel QSO, open the same card and
+choose **Import PNG…**, then save the card. The image must keep the exact canvas
+dimensions, use only the exported palette colors, and be fully opaque. Import
+replaces the artwork and flattens placed stamps; Undo restores them. The PNG
+contains artwork only, so keep the card JSON for its identity and metadata. For
+an animation, repeat the process for each card/frame separately.
+
 Data2G reception is selected and decoded by the connected host; it does not
 follow Pixel QSO's transmit-mode selector. The host sends checked application
 frames to Pixel QSO, where they enter the shared card assembly path. Receive-all,
@@ -197,6 +206,27 @@ the recovery prompt in Pixel QSO before resuming radio control.
 The one-shot beacon action sends through Data2G at the frequency configured on
 the host; Pixel QSO does not tune a Data2G radio. The local beacon frequency
 control applies only to Experimental modems.
+
+For experimental QRP/DX or beacon operation, select **Experimental modems** in
+Station settings and choose **resilient_10** or **resilient_5** in the transfer
+mode list. Both send checked 8-FSK card payloads near the carrier, at about
+90 Hz and 45 Hz respectively. A 32×32 eight-color card takes about 146 seconds
+at 10 baud or 289 seconds at 5 baud for one copy. The common identification
+markers before and after each copy occupy about 900 Hz of audio by default.
+For a transmission confined to the narrow payload tones, turn off **Include
+ID markers** in Station settings → Advanced → Modem options. The box is on by
+default and applies to all transmitting Experimental modes. Without markers,
+select a compatible receive mode; receive-all cannot identify the mode from the
+common header. Grouped FSK sends its underlying native burst
+format when markers are off. Interlaced copies require markers and are disabled
+while the box is off. Marker-free repeats do not have the protected copy
+identity needed for copy combining, and animation/report sidecars that use
+common markers are omitted. The separate CW ID setting still applies. Choose
+a smaller canvas and one copy for shorter beacons; set the beacon interval
+longer than the displayed airtime to leave a listening
+gap. These modes are experimental and require a receiver with the matching
+Pixel QSO mode; on-air weak-signal performance has not yet been measured.
+
 ACKMODE confirms that a local frame finished transmitting; it does not confirm
 that another station received the card. Group names and CRC masks are not
 encryption or privacy. See [the host protocol notes](DATA2G-BROADCAST-NOTES.md)
@@ -270,3 +300,7 @@ application data files, inspect personal/sent/starter cards, return a rendered
 PNG card image, and create cards from row-major pixels or canvas drawing
 commands. Set `PIXELQSO_DATA` when the application uses a non-default data
 directory. Created cards are written to `cards/` in that directory.
+
+### Aseprite extension
+
+The [Pixel QSO Card Tools extension](extensions/pixelqso-aseprite/pixelqso-card-tools.aseprite-extension) creates compatible Aseprite canvases and exports single cards or linked two-frame animations directly to JSON. See the [extension instructions](extensions/pixelqso-aseprite/README.md) for installation and use.

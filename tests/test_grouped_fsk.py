@@ -96,11 +96,12 @@ class GroupedFSKTests(unittest.TestCase):
             copies=found,copy_decoder=backend.decode_payload_copies)
         self.assertTrue(report['card']['exact'])
 
-    def test_missing_opening_header_and_noise_reject(self):
+    def test_missing_opening_header_decodes_native_payload_and_noise_rejects(self):
         card=pixel.example_card();key='experimental_8fsk_grouped';backend=get_backend(key)
         audio=backend.encode(card,2,'cq',None)
-        with self.assertRaises(ValueError):
-            backend.decode(audio[round(envelope.HEADER_SECONDS*48000):],48000)
+        report=backend.decode(audio[round(envelope.HEADER_SECONDS*48000):],48000)
+        self.assertTrue(report['card']['exact'])
+        self.assertEqual(report['receive_profile'],'experimental_8fsk_ldpc')
         noise=np.random.default_rng(234).normal(0,.1,len(audio))
         with self.assertRaises(ValueError):
             backend.decode(noise,48000)
@@ -130,15 +131,15 @@ class GroupedFSKTests(unittest.TestCase):
                     self.assertEqual(merged['pixels'],pixel.unpack_indices(pixel.minimal_avatar_payload(card),1024))
         qt.processEvents()
 
-    def test_unannounced_receive_all_skips_grouped_decoders(self):
+    def test_unannounced_receive_all_accepts_native_grouped_waveform(self):
         from app import decode_all_card_backends
         import experimental_burst_modem as burst
         card=pixel.example_card()
         audio=burst.encode('experimental_8fsk_ldpc',card,'cq',None)
-        with patch('card_backends.GroupedFSKBackend.decode',side_effect=AssertionError('blind grouped decode')):
-            result=decode_all_card_backends(audio,48000,include_experimental=True)
+        result=decode_all_card_backends(audio,48000,include_experimental=True)
         self.assertIsNone(result.failure)
         self.assertTrue(result.report['card']['exact'])
+        self.assertEqual(result.report['receive_profile'],'experimental_8fsk_ldpc')
 
     def test_receive_all_routes_group_and_content_mismatch_rejects(self):
         from app import decode_all_card_backends

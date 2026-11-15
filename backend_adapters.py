@@ -114,7 +114,8 @@ class FrameTransportAdapterProtocol(BackendAdapter, Protocol):
 
 
 class LocalImageModemAdapterProtocol(BackendAdapter, Protocol):
-    def encode(self, backend, card, repeats, message_type, snr_db): ...
+    def encode(self, backend, card, repeats, message_type, snr_db, *,
+               interlaced=False, include_id_markers=True): ...
     def decode(self, backend, audio, sample_rate): ...
     def decode_capture(self, backend, audio, sample_rate) -> DecodeOutcome: ...
     def start_receive(self, *, device, audio_format, parent, audio_source_factory,
@@ -229,10 +230,13 @@ class ExperimentalLocalAdapter:
     )
 
     @staticmethod
-    def encode(backend, card, repeats, message_type, snr_db, *, interlaced=False):
+    def encode(backend, card, repeats, message_type, snr_db, *, interlaced=False,
+               include_id_markers=True):
         if interlaced and getattr(backend, 'supports_interlaced_copies', False):
-            return backend.encode(card, repeats, message_type, snr_db, interlaced=True)
-        return backend.encode(card, repeats, message_type, snr_db)
+            return backend.encode(card, repeats, message_type, snr_db,
+                                  interlaced=True, include_id_markers=include_id_markers)
+        return backend.encode(card, repeats, message_type, snr_db,
+                              include_id_markers=include_id_markers)
 
     @staticmethod
     def encode_legacy(card, repeats, message_type, snr_db, mode, profile, *, beacon=False):

@@ -1,0 +1,11 @@
+{
+  "name": "pixelqso-card-tools",
+  "displayName": "Pixel QSO Card Tools",
+  "description": "Create and export Pixel QSO cards and two-frame animations",
+  "version": "1.0.0",
+  "author": {"name": "Pixel QSO contributors"},
+  "publisher": "pixelqso",
+  "license": "MIT",
+  "categories": ["Scripts"],
+  "contributes": {"scripts": [{"path": "./pixelqso.lua"}]}
+}

@@ -8,6 +8,23 @@ from card_backends import get_backend, is_available
 
 
 class NarrowModeTests(unittest.TestCase):
+    def test_qrp_and_beacon_modes_round_trip_checked_card(self):
+        card = pixel.Card("N0CALL", "AA00", list(pixel.MINIMAL_AVATAR_PALETTE),
+                          [index % 8 for index in range(16)], width=4, height=4)
+        for baud in (10, 5):
+            with self.subTest(baud=baud):
+                backend = get_backend(f"resilient_{baud}")
+                self.assertTrue(is_available(backend.key))
+                self.assertEqual(backend.profile.tones_hz,
+                                 tuple(25 + index * baud for index in range(8)))
+                audio = backend.encode(card, 1, "cq", -12)
+                self.assertAlmostEqual(len(audio) / 48000,
+                                       backend.estimate_seconds(card, 1))
+                report = backend.decode(audio, 48000)
+                self.assertTrue(report["card"]["exact"])
+                self.assertEqual(report["pixels"], card.pixels)
+                self.assertEqual(report["card"]["avatar_mode"], backend.key)
+
     def test_identity_and_partial_systematic_pixels_before_first_block(self):
         card = pixel.example_card()
         expected = pixel.unpack_indices(pixel.minimal_avatar_payload(card), 1024)

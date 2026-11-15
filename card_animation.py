@@ -51,7 +51,7 @@ def artwork_digest(value):
         pixels = value.get('pixels', meta.get('pixels'))
     width, height = int(meta.get('width', 32)), int(meta.get('height', 32))
     palette = meta.get('palette') or modem.AVATAR_PALETTES[int(meta.get('palette_id', 0))]
-    target = modem.AVATAR_PALETTES[{8: 0, 16: 1, 32: 2}[len(palette)]]
+    target = modem.AVATAR_PALETTES[{2: 3, 8: 0, 16: 1, 32: 2}[len(palette)]]
     if pixels is None:
         raise ValueError('Animation artwork is missing')
     if len(pixels) == height and pixels and isinstance(pixels[0], (list, tuple)):

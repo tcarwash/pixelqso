@@ -126,10 +126,20 @@ def _outer_words(packet):
     return words
 
 
-def _ldpc_symbols(packet, fmt):
-    _training, _pilots, permutation, _labels, inverse = format_constants(fmt.key)
+def _code_bit_permutation(fmt, copy_index=None, *, interleaved=True):
+    """Spread each physical copy over a different LDPC bit ordering."""
+    permutation = format_constants_for(fmt)[2]
+    if not interleaved or copy_index is None or int(copy_index) == 0:
+        return permutation
+    shift = (int(copy_index) * max(1, fmt.code_bits // MAX_COPIES)) % fmt.code_bits
+    return np.roll(permutation, shift)
+
+
+def _ldpc_symbols(packet, fmt, copy_index=None):
+    _training, _pilots, _permutation, _labels, inverse = format_constants(fmt.key)
     bits = np.unpackbits(np.frombuffer(packet, np.uint8)) ^ weak.constants()[3]
-    coded = weak.code().encode(bits[None, :])[0][:CODE_BITS][permutation]
+    coded = weak.code().encode(bits[None, :])[0][:CODE_BITS][
+        _code_bit_permutation(fmt, copy_index)]
     bps = fmt.bits_per_symbol
     coded = np.pad(coded, (0, (-len(coded)) % bps)).reshape(-1, bps)
     values = coded.dot(1 << np.arange(bps - 1, -1, -1))
@@ -145,7 +155,7 @@ def encode(key, card, message_type="card", snr_db=None, *, copy_index=None):
     if fmt.outer:
         blocks = [inverse[word] for word in _outer_words(packet)]
     else:
-        symbols = _ldpc_symbols(packet, fmt)
+        symbols = _ldpc_symbols(packet, fmt, copy_index)
         blocks, offset = [], 0
         for length in fmt.block_lengths:
             blocks.append(symbols[offset:offset + length])
@@ -515,10 +525,10 @@ def _restore_block_order(key, evidence, copy_index):
     return restored
 
 
-def _ldpc_evidence(key, evidence, copy_index=None):
+def _ldpc_evidence(key, evidence, copy_index=None, *, code_bit_interleaved=None):
     fmt = FORMATS[key]
     evidence = _restore_block_order(key, evidence, copy_index)
-    _training, _pilots, permutation, labels, _inverse = format_constants(key)
+    _training, _pilots, _permutation, labels, _inverse = format_constants(key)
     cursor, data = TRAINING, []
     for length in fmt.block_lengths:
         cursor += 4
@@ -532,7 +542,10 @@ def _ldpc_evidence(key, evidence, copy_index=None):
         logsumexp(metrics[:, (labels & (1 << bit)) != 0], axis=1)
         for bit in range(fmt.bits_per_symbol - 1, -1, -1)]).ravel()[:CODE_BITS]
     ordered = np.zeros(weak.N)
-    ordered[permutation] = llrs
+    if code_bit_interleaved is None:
+        code_bit_interleaved = copy_index is not None
+    ordered[_code_bit_permutation(fmt, copy_index,
+                                  interleaved=code_bit_interleaved)] = llrs
     return ordered
 
 
@@ -544,8 +557,8 @@ def _decode_ldpc(key, evidence, diagnostics):
     return _decode_ldpc_llrs(key, ordered, diagnostics)
 
 
-def _decode_ldpc_llrs(key, ordered, diagnostics):
-    bits, iterations = weak.decode_ldpc(ordered)
+def _decode_ldpc_llrs(key, ordered, diagnostics, *, multi_copy=False):
+    bits, iterations = weak.decode_ldpc(ordered, multi_copy=multi_copy)
     packet = np.packbits(bits ^ weak.constants()[3]).tobytes()
     return _whole_report(key, packet, {**diagnostics, "ldpc_iterations": iterations,
                          "information_bits": weak.K, "coded_bits": CODE_BITS})
@@ -828,7 +841,8 @@ def decode_equalized(audio, sample_rate=48000):
     raise error
 
 
-def decode_copies(key, captures, sample_rate=48000, *, grouped=False, copy_indices=None):
+def decode_copies(key, captures, sample_rate=48000, *, grouped=False,
+                  copy_indices=None, code_bit_interleaved=None):
     """Use protected payload boundaries for independent copy acquisition."""
     frames, partial = [], None
     checked_by_copy = []
@@ -894,7 +908,7 @@ def decode_copies(key, captures, sample_rate=48000, *, grouped=False, copy_indic
             copies=[item[receiver] for item in hypotheses]
             for evidence,used in hypothesis_attempts(copies):
                 try:
-                    bits,iterations=weak.decode_ldpc(evidence)
+                    bits,iterations=weak.decode_ldpc(evidence, multi_copy=len(used)>1)
                     packet=np.packbits(bits^weak.constants()[3]).tobytes()
                     return _whole_report(key,packet,{**diagnostics_for(used,len(copies)),
                         'ldpc_iterations':iterations,'successful_receiver':receiver,
@@ -909,6 +923,10 @@ def decode_copies(key, captures, sample_rate=48000, *, grouped=False, copy_indic
     indices = list(copy_indices) if copy_indices is not None else [None] * len(captures)
     if len(indices) != len(captures):
         raise ValueError('copy indices do not match captures')
+    interleaved_bits = (list(code_bit_interleaved) if code_bit_interleaved is not None
+                        else [index is not None for index in indices])
+    if len(interleaved_bits) != len(captures):
+        raise ValueError('code-bit interleave flags do not match captures')
     for capture_index, audio in enumerate(captures):
         copy_index = 0 if indices[capture_index] is None else indices[capture_index]
         source=_resample(audio,sample_rate,FS)
@@ -922,7 +940,8 @@ def decode_copies(key, captures, sample_rate=48000, *, grouped=False, copy_indic
         for evidence,timing in announced_fsk_candidates(analytic,fmt,radius=radius):
             diagnostic = timing
             try:
-                evidence = _restore_block_order(key, evidence, copy_index)
+                if fmt.outer:
+                    evidence = _restore_block_order(key, evidence, copy_index)
                 if len(evidence)<fmt.symbol_count:
                     partial=partial or (_decode_outer(key,evidence,diagnostic) if fmt.outer else activity(key,diagnostic))
                     continue
@@ -930,7 +949,11 @@ def decode_copies(key, captures, sample_rate=48000, *, grouped=False, copy_indic
                     shards, corrected = _checked_outer_shards(key, evidence)
                     if len(shards) > len(best_checked[0]):
                         best_checked = shards, corrected
-                variants.append(SoftCopy(evidence[:fmt.symbol_count] if fmt.outer else _ldpc_evidence(key,evidence),diagnostic))
+                variants.append(SoftCopy(
+                    evidence[:fmt.symbol_count] if fmt.outer else
+                    _ldpc_evidence(key, evidence, copy_index,
+                                   code_bit_interleaved=interleaved_bits[capture_index]),
+                    diagnostic))
             except ValueError as exc:
                 error=exc
         if variants: frames.append(variants)
@@ -939,7 +962,7 @@ def decode_copies(key, captures, sample_rate=48000, *, grouped=False, copy_indic
     for evidence,used in hypothesis_attempts(frames):
         try:
             diagnostic=diagnostics_for(used,len(frames))
-            report=(_decode_outer(key,evidence,diagnostic) if fmt.outer else _decode_ldpc_llrs(key,evidence,diagnostic))
+            report=(_decode_outer(key,evidence,diagnostic) if fmt.outer else _decode_ldpc_llrs(key,evidence,diagnostic,multi_copy=len(used)>1))
             if report.get('card',{}).get('exact'):
                 return report
             if partial is None or sum(report.get('card',{}).get('pixel_coverage') or [])>sum(partial.get('card',{}).get('pixel_coverage') or []):

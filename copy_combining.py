@@ -48,7 +48,13 @@ def compatible(left, right):
 
 
 def recovery_attempts(copies):
-    """Singles first, then compatible cumulative groups; bounded CPU and memory."""
+    """Singles first, then compatible cumulative groups of calibrated LLRs.
+
+    Each receiver's soft demapper has already divided its LLRs by its own
+    estimated noise variance. Adding those log-likelihood ratios is the MRC
+    operation; applying an additional SNR multiplier would count channel
+    quality twice and over-weight strong copies.
+    """
     copies = list(copies)[:MAX_COPIES]
     for copy in copies:
         yield copy.evidence, [copy]
@@ -59,7 +65,8 @@ def recovery_attempts(copies):
             groups.append([copy])
         else:
             group.append(copy)
-            yield np.sum([c.evidence for c in group], axis=0), list(group)
+            combined = np.sum([np.asarray(c.evidence, float) for c in group], axis=0)
+            yield combined, list(group)
 
 
 def diagnostics_for(used, acquired):

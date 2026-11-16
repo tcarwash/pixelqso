@@ -44,7 +44,7 @@ JSON files in Pixel QSO to edit or use them as the basis for a card.
 
 ## Install and run
 
-Python 3.10 or newer is required. The standard install includes the pinned
+Python 3.11 or newer is required. The standard install includes the pinned
 Data2G host runtime without PyTorch:
 
 The managed host uses [PyAudio, a PortAudio binding](https://people.csail.mit.edu/hubert/pyaudio/).

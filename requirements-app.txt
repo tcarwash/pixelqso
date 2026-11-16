@@ -5,4 +5,4 @@ PySide6>=6.6
 Pillow>=10
 qrcode>=7.4
 zxing-cpp>=2.2
-data2g[tnc] @ git+https://github.com/arodland/Data2G.git@20bdb05c3cbb24d7d28b613a86841f51c00ba8f9
+data2g[tnc] @ git+https://github.com/arodland/Data2G.git@dc9a95a3065074e354c502674f82f81c3f5d89bd

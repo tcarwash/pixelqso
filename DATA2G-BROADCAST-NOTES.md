@@ -2,8 +2,8 @@
 
 Pixel QSO uses Data2G's supported broadcast command and KISS interfaces from
 the merged [broadcast API](https://github.com/arodland/Data2G/blob/77856c901dd8db2642d72fcf869c727918429e4f/docs/broadcast.md).
-The Python host runtime is pinned to Data2G commit
-`27236ec1c11ab5adc584d2d7a0d903d0fe1ea594` (the revision in `uv.lock`). Pixel QSO does not import its
+The Python host runtime is pinned to Data2G release `v0.5.1`, commit
+`dc9a95a3065074e354c502674f82f81c3f5d89bd` (the revision in `uv.lock`). Pixel QSO does not import its
 modem, waveform, or framing functions into the application process.
 
 ## Responsibilities and radio ownership

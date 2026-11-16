@@ -2568,6 +2568,33 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(250, self._ensure_session_receive)
             QTimer.singleShot(0, self._ensure_data2g_background_monitor)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        splitter = getattr(self, "operate_splitter", None)
+        if splitter is None:
+            return
+        # Keep the send choices and the receive workspace side by side while
+        # there is room; stack them on compact windows so neither is squeezed
+        # into an unusable sliver. The sender remains scrollable in that mode.
+        compact = splitter.width() < 760
+        orientation = (Qt.Orientation.Vertical if compact
+                       else Qt.Orientation.Horizontal)
+        if splitter.orientation() == orientation:
+            return
+        splitter.setOrientation(orientation)
+        if compact:
+            splitter.widget(0).setMinimumWidth(0)
+            splitter.widget(1).setMinimumWidth(0)
+            splitter.widget(0).setMinimumHeight(0)
+            splitter.widget(1).setMinimumHeight(0)
+            splitter.setSizes([360, max(280, splitter.height() - 360)])
+        else:
+            splitter.widget(0).setMinimumHeight(0)
+            splitter.widget(1).setMinimumHeight(0)
+            splitter.widget(0).setMinimumWidth(370)
+            splitter.widget(1).setMinimumWidth(320)
+            splitter.setSizes([390, max(320, splitter.width() - 390)])
+
     def _configure_workspace_splitter(self, splitter, key, sizes):
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(10)

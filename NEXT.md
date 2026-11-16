@@ -1,5 +1,23 @@
 # Next steps: Pixel QSO UI/UX
 
+## Desktop visual-streamlining pass — 2026-11-16
+
+Refreshed the dark violet design system without changing behavior. `ui_theme.py`
+keeps every token key and helper signature; values were retuned for clearer
+elevation (deeper window, cohesive input/nav surfaces, softer hairlines, dimmer
+disabled text) and radii moved to 8/12/16/18 per the style guide. The
+stylesheet keeps all object-name selectors: nav items gain a lime selected-edge
+indicator, text inputs lift on focus, list rows use a tighter corner radius,
+scrollbars slim to 8 px, and the test-mode banner becomes a pill. Workspace
+title grows 26 → 28. `app.py` shell changes are spacing metrics only (rail
+padding/spacing, body spacing, Operate status-strip spacing); all widgets,
+labels, signals, and page copy are untouched. `card_views.py` card frames get
+a deeper shadow, brighter top edge, and 10 px art corners. No widget was added,
+removed, renamed, or rewired. Validation is open: the sandbox shell was
+unavailable in this session, so offscreen renders and the UI test suites
+(`test_desktop_workspace.py`, `test_live_preview.py`, `test_transfer_controls.py`)
+still need a local run.
+
 ## ARAP detached proof integration — 2026-10-20
 
 The card editor now offers an **ARAP proof…** workflow for signing a saved card,

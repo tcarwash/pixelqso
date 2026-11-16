@@ -1,42 +1,43 @@
 """Shared visual tokens for the Pixel QSO desktop interface.
 
-The dark palette is the only supported theme while the UI is being migrated to
-semantic tokens. Add another appearance only after the full surface is audited.
+The dark violet theme is the only supported appearance while the UI is being
+migrated to semantic tokens. Add another appearance only after the full
+surface is audited.
 """
 
 COLORS = {
-    "window": "#0e0f16",
-    "surface": "#20212e",
-    "surface_raised": "#2a2b3a",
-    "surface_hover": "#34324a",
-    "surface_item_hover": "#2c2a3d",
-    "surface_selected": "#2e3a28",
-    "surface_tab": "#16171f",
-    "surface_tab_selected": "#2c3526",
-    "surface_scrollbar": "#14141d",
-    "surface_scrollbar_handle": "#4c485e",
-    "surface_header": "#23242f",
-    "surface_disabled": "#1c1d27",
-    "surface_primary_disabled": "#2b3127",
-    "surface_sunken": "#12131c",
+    "window": "#0c0d13",
+    "surface": "#16171f",
+    "surface_raised": "#232430",
+    "surface_hover": "#2c2d3b",
+    "surface_item_hover": "#22232f",
+    "surface_selected": "#2a3324",
+    "surface_tab": "#14151d",
+    "surface_tab_selected": "#262b20",
+    "surface_scrollbar": "#101116",
+    "surface_scrollbar_handle": "#4a4658",
+    "surface_header": "#1d1e27",
+    "surface_disabled": "#191a23",
+    "surface_primary_disabled": "#242a20",
+    "surface_sunken": "#0f1017",
     "text": "#f5f1e9",
     "text_bright": "#faf7f0",
-    "text_primary": "#1e241a",
-    "text_muted": "#b0adbf",
+    "text_primary": "#20251c",
+    "text_muted": "#aaa8b9",
     "text_soft": "#d8cdf2",
     "text_header": "#e8e4f2",
-    "text_disabled": "#8b8998",
-    "text_primary_disabled": "#9aa393",
+    "text_disabled": "#7d7b8a",
+    "text_primary_disabled": "#8f978a",
     "border": "#2e2d3a",
-    "border_subtle": "#26252f",
-    "border_control": "#3f3d4e",
-    "border_button": "#3a3947",
+    "border_subtle": "#22212b",
+    "border_control": "#3b3a48",
+    "border_button": "#34333f",
     "border_selected": "#c5ff88",
     "border_primary_disabled": "#3d4436",
     "accent": "#c5ff88",
-    "accent_hover": "#d8ffab",
+    "accent_hover": "#d6ffa8",
     "accent_pressed": "#a9e56f",
-    "accent_dim": "#2c3526",
+    "accent_dim": "#232a1e",
     "accent_selection": "#4a405f",
     "accent_checked": "#2e3a28",
     "accent_checked_border": "#c5ff88",
@@ -74,8 +75,8 @@ COLORS = {
 }
 
 SPACING = {"xs": 4, "sm": 8, "md": 12, "lg": 16, "xl": 24, "xxl": 32}
-RADIUS = {"control": 8, "button": 10, "panel": 14, "card": 16, "pill": 999}
-TYPE_SIZE = {"body": 14, "section": 16, "title": 26}
+RADIUS = {"control": 8, "button": 12, "panel": 16, "card": 18, "pill": 999}
+TYPE_SIZE = {"body": 14, "section": 16, "title": 28}
 
 
 def status_label_style(tone, *, bold=True, letter_spaced=True):
@@ -131,25 +132,29 @@ def build_app_stylesheet(text_scale=1.0):
         QFrame#navigationRail {{ background: {c['surface_tab']};
                                  border-right: 1px solid {c['border_subtle']}; }}
         QFrame#navigationRail QLabel {{ background: transparent; }}
-        QLabel#brandName {{ color: {c['text_bright']}; font-size: 21px; font-weight: 800;
+        QLabel#brandName {{ color: {c['text_bright']}; font-size: 22px; font-weight: 800;
                             letter-spacing: -0.5px; }}
         QLabel#eyebrow {{ color: {c['text_muted']}; font-size: 11px; font-weight: 700;
-                          letter-spacing: 1.2px; }}
+                          letter-spacing: 1.4px; }}
         QLabel#railCaption {{ color: {c['text_muted']}; font-size: 12px; padding: 10px 2px; }}
         QLabel#workspaceTitle {{ color: {c['text_bright']}; font-size: {type_size['title']}px;
                                  font-weight: 800; letter-spacing: -0.5px; }}
         QFrame#shellDivider {{ background: {c['border_subtle']}; border: 0;
                                min-height: 1px; max-height: 1px; }}
-        QPushButton#navigationItem {{ text-align: left; border: 1px solid transparent;
-                                      background: transparent; padding: 10px 12px; font-weight: 600;
+        QPushButton#navigationItem {{ text-align: left; background: transparent;
+                                      padding: 10px 12px; font-weight: 600;
+                                      border: 1px solid transparent;
+                                      border-left: 3px solid transparent;
                                       border-radius: {r['control']}px; }}
         QPushButton#navigationItem:hover {{ background: {c['surface_hover']}; color: {c['text_bright']}; }}
         QPushButton#navigationItem:checked {{ background: {c['surface_tab_selected']};
                                               color: {c['accent']};
-                                              border-color: {c['border_subtle']}; }}
+                                              border: 1px solid {c['border_subtle']};
+                                              border-left: 3px solid {c['accent']}; }}
         QPushButton#navigationItem:pressed {{ background: {c['surface_item_hover']}; }}
-        QPushButton#navigationItem:focus {{ border: 1px solid {c['focus_ring']}; }}
-        QPushButton#studioShortcut {{ color: {c['accent']}; text-align: left; padding: 10px 12px;
+        QPushButton#navigationItem:focus {{ border: 1px solid {c['focus_ring']};
+                                           border-left: 3px solid {c['focus_ring']}; }}
+        QPushButton#studioShortcut {{ color: {c['accent']}; text-align: left; padding: 11px 12px;
                                       background: {c['accent_dim']};
                                       border: 1px solid {c['border_subtle']};
                                       border-radius: {r['control']}px; font-weight: 700; }}
@@ -170,13 +175,13 @@ def build_app_stylesheet(text_scale=1.0):
         QPushButton#activityDisclosure:hover {{ color: {c['text_soft']}; }}
         QTabWidget::pane {{ border: 1px solid {c['border_subtle']};
                             border-radius: {r['panel']}px; top: -1px; }}
-        QTabBar::tab {{ background: transparent; color: {c['text_muted']}; padding: 8px 16px;
+        QTabBar::tab {{ background: transparent; color: {c['text_muted']}; padding: 9px 18px;
                         margin-right: 4px; border-radius: {r['control']}px; font-weight: 600; }}
         QTabBar::tab:hover {{ background: {c['surface_hover']}; color: {c['text']}; }}
         QTabBar::tab:selected {{ background: {c['surface_tab_selected']}; color: {c['accent']}; }}
         QTabBar::tab:disabled {{ color: {c['text_disabled']}; }}
         QGroupBox {{ border: 1px solid {c['border_subtle']}; border-radius: {r['panel']}px;
-                     margin-top: 12px; padding: 12px; font-weight: 600; }}
+                     margin-top: 14px; padding: 14px; font-weight: 600; }}
         QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 8px;
                             color: {c['text_soft']}; }}
         QGroupBox#senderSection {{ border: 0; border-top: 1px solid {c['border_subtle']};
@@ -191,8 +196,8 @@ def build_app_stylesheet(text_scale=1.0):
         QLabel#emptyStateTitle {{ font-size: {empty_title_size}px; font-weight: 700; color: {c['text']}; }}
         QLabel#supportingText {{ font-size: {type_size['body']}px; color: {c['text_muted']}; }}
         QLabel#stationIdentity {{ font-weight: 700; color: {c['text']}; padding: 0 8px; }}
-        QLabel#testModeBanner {{ background: {c['warning']}; color: {c['text_primary']}; padding: 6px 12px;
-                                 border-radius: {r['button']}px; font-weight: 700; }}
+        QLabel#testModeBanner {{ background: {c['warning']}; color: {c['text_primary']}; padding: 6px 14px;
+                                 border-radius: {r['pill']}px; font-weight: 700; }}
         QLabel#receiverEmpty, QLabel#receiveView, QLabel#receiveWaterfallUnavailable {{
             background: {c['surface_sunken']}; color: {c['text_muted']};
             border: 1px solid {c['border_subtle']}; border-radius: {r['panel']}px; padding: 12px; }}
@@ -217,8 +222,9 @@ def build_app_stylesheet(text_scale=1.0):
             selection-background-color: {c['accent_selection']}; }}
         QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QTextEdit:hover {{
             border-color: {c['text_muted']}; }}
-        QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QTextEdit:focus {{
-            border-color: {c['accent']}; }}
+        QLineEdit:focus, QSpinBox:focus, QTextEdit:focus {{
+            border-color: {c['accent']}; background: {c['surface_raised']}; }}
+        QComboBox:focus {{ border-color: {c['accent']}; }}
         QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QTextEdit:disabled {{
             background: {c['surface_disabled']}; color: {c['text_disabled']};
             border-color: {c['border_subtle']}; }}
@@ -231,7 +237,7 @@ def build_app_stylesheet(text_scale=1.0):
         QComboBox QAbstractItemView::item {{ padding: 8px 10px;
                                              border-radius: {r['control']}px; border: 0; }}
         QPushButton {{ background: {c['surface_raised']}; border: 1px solid {c['border_button']};
-                       border-radius: {r['button']}px; padding: 10px 16px; font-weight: 600; }}
+                       border-radius: {r['button']}px; padding: 9px 16px; font-weight: 600; }}
         QPushButton#stageSelector {{ text-align: left; padding: 7px 10px; }}
         QPushButton#stageSelector:checked {{ background: {c['accent_checked']};
                                              border-color: {c['accent_checked_border']};
@@ -243,7 +249,7 @@ def build_app_stylesheet(text_scale=1.0):
                                color: {c['accent_checked_text']}; }}
         QPushButton:disabled {{ color: {c['text_disabled']}; background: {c['surface_disabled']};
                                 border-color: {c['border_subtle']}; }}
-        QListWidget::item {{ border-radius: {r['panel']}px; padding: 6px; border: 1px solid transparent; }}
+        QListWidget::item {{ border-radius: {r['control']}px; padding: 6px; border: 1px solid transparent; }}
         QListWidget::item:hover {{ background: {c['surface_item_hover']}; }}
         QListWidget::item:selected {{ background: {c['surface_selected']};
                                       border: 1px solid {c['border_selected']}; }}
@@ -261,14 +267,14 @@ def build_app_stylesheet(text_scale=1.0):
         QRadioButton::indicator:hover {{ border-color: {c['accent']}; }}
         QRadioButton::indicator:checked {{ background: {c['accent']};
                                            border-color: {c['accent']}; }}
-        QScrollBar:vertical {{ background: transparent; width: 10px; margin: 4px 2px 4px 0; }}
+        QScrollBar:vertical {{ background: transparent; width: 8px; margin: 4px 2px 4px 0; }}
         QScrollBar::handle:vertical {{ background: {c['surface_scrollbar_handle']};
-                                       border-radius: 4px; min-height: 36px; }}
+                                       border-radius: 4px; min-height: 40px; }}
         QScrollBar::handle:vertical:hover {{ background: {c['border_control']}; }}
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
-        QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 0 4px 2px 4px; }}
+        QScrollBar:horizontal {{ background: transparent; height: 8px; margin: 0 4px 2px 4px; }}
         QScrollBar::handle:horizontal {{ background: {c['surface_scrollbar_handle']};
-                                         border-radius: 4px; min-width: 36px; }}
+                                         border-radius: 4px; min-width: 40px; }}
         QScrollBar::handle:horizontal:hover {{ background: {c['border_control']}; }}
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
         QPushButton#primaryAction {{ background: {c['accent']}; color: {c['text_primary']};
@@ -294,7 +300,7 @@ def build_app_stylesheet(text_scale=1.0):
         QMenu::item:disabled {{ color: {c['text_disabled']}; }}
         QMenu::separator {{ height: 1px; background: {c['border_subtle']}; margin: 6px 8px; }}
         QToolTip {{ background: {c['surface_raised']}; color: {c['text']};
-                    border: 1px solid {c['border_control']}; padding: 8px;
+                    border: 1px solid {c['border_control']}; padding: 8px 10px;
                     border-radius: {r['control']}px; }}
         QHeaderView::section {{ background: {c['surface_header']}; color: {c['text_header']};
                                 border: 0; padding: 8px; font-weight: 700; }}

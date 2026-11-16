@@ -48,14 +48,17 @@ Python 3.11 or newer is required. The standard install includes the pinned
 Data2G host runtime without PyTorch:
 
 The managed host uses [PyAudio, a PortAudio binding](https://people.csail.mit.edu/hubert/pyaudio/).
-On Debian or Ubuntu, install the PortAudio
-development package before installing Pixel QSO; on macOS, install PortAudio
-with Homebrew first. These are the same system prerequisites used by the
-desktop build workflow.
+On Debian or Ubuntu, install PortAudio's development package before installing
+from source. Linux desktop bundles also need the PulseAudio runtime library for
+Qt Multimedia. On macOS, install PortAudio with Homebrew first. These are the
+system prerequisites used by the desktop build workflow.
 
 ```sh
-# Debian / Ubuntu
+# Debian / Ubuntu, Python install from source
 sudo apt-get install portaudio19-dev
+
+# Debian / Ubuntu, frozen desktop bundle
+sudo apt-get install libpulse0
 
 # macOS
 brew install portaudio

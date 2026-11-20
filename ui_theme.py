@@ -202,7 +202,7 @@ def build_app_stylesheet(text_scale=1.0):
             background: {c['surface_sunken']}; color: {c['text_muted']};
             border: 1px solid {c['border_subtle']}; border-radius: {r['panel']}px; padding: 12px; }}
         QLabel#receiveView {{ padding: 0px; }}
-        QLabel#receiverEmpty {{ padding: 28px; font-size: {type_size['section']}px; }}
+        QLabel#receiverEmpty {{ padding: 16px; font-size: {type_size['section']}px; }}
         QLabel#receiveStatus {{ color: {c['text_soft']}; padding: 2px; }}
         QLabel#quickDrawStatus {{ color: {c['positive']}; padding: 2px; }}
         QListWidget#sessionWall {{ background: {c['surface_sunken']};
@@ -229,6 +229,9 @@ def build_app_stylesheet(text_scale=1.0):
             background: {c['surface_disabled']}; color: {c['text_disabled']};
             border-color: {c['border_subtle']}; }}
         QComboBox::drop-down {{ border: 0; width: 28px; }}
+        QComboBox#stageCardPicker {{ padding: 4px 8px; }}
+        QComboBox#stageCardPicker::drop-down {{ width: 22px; }}
+        QPushButton#chooseOutgoingCard {{ padding: 6px 10px; }}
         QComboBox QAbstractItemView {{ background: {c['surface_raised']};
                                       border: 1px solid {c['border_control']};
                                       border-radius: {r['control']}px; padding: 6px;

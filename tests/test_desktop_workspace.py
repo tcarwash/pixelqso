@@ -7,17 +7,85 @@ from PySide6.QtWidgets import QApplication
 import app as pixelqso
 
 @pytest.fixture
-def workspace(tmp_path, monkeypatch):
+def fresh_workspace(tmp_path, monkeypatch):
     qt = QApplication.instance() or QApplication([])
     monkeypatch.setenv('PIXELQSO_DATA_DIR', str(tmp_path))
     (tmp_path/'settings.ini').write_text('[radio]\nauto_connect_cat=false\n')
     old_data = pixelqso.DATA
     with patch('app.QTimer.singleShot'):
         window = pixelqso.MainWindow()
-    window.resize(1280, 900); window.show(); qt.processEvents()
+    window.show()
+    for _ in range(5):
+        qt.processEvents()
     yield window
     window.editor_baseline = window.editor_signature()
     window.close(); qt.processEvents(); pixelqso.DATA = old_data
+
+@pytest.fixture
+def workspace(fresh_workspace):
+    fresh_workspace.resize(1280, 900)
+    QApplication.processEvents()
+    return fresh_workspace
+
+
+def test_startup_shows_artwork_and_card_picker_without_resizing(fresh_workspace):
+    from PySide6.QtCore import Qt
+    w = fresh_workspace
+    assert w.operate_splitter.width() >= 760
+    assert w.operate_splitter.orientation() == Qt.Orientation.Horizontal
+    for widget in (w.outgoing_art, w.browse_outgoing_cards, w.session_wall_empty):
+        assert widget.visibleRegion().boundingRect().contains(widget.rect())
+    assert w.outgoing_art.pixmap() and not w.outgoing_art.pixmap().isNull()
+    with patch.object(w, 'transmit_exchange') as send:
+        w.browse_outgoing_cards.click()
+        assert w.tabs.currentIndex() == 1
+        send.assert_not_called()
+
+
+def test_compact_layout_keeps_artwork_and_send_actions_visible(workspace):
+    from PySide6.QtCore import Qt
+    w = workspace
+    splitter = w.operate_splitter
+    splitter.moveSplitter(455, 1)
+    wide_size = splitter.sizes()[0]
+    for size in [(1000, 800), (930, 800)]:
+        w.resize(*size)
+        for _ in range(5):
+            QApplication.processEvents()
+        assert splitter.width() < 760
+        assert splitter.orientation() == Qt.Orientation.Vertical
+        for widget in (w.outgoing_art, w.browse_outgoing_cards, *w.stage_send_buttons.values()):
+            assert widget.visibleRegion().boundingRect().contains(widget.rect())
+        assert not w.session_wall_empty.visibleRegion().isEmpty()
+    w.resize(1280, 900)
+    for _ in range(5):
+        QApplication.processEvents()
+    assert splitter.orientation() == Qt.Orientation.Horizontal
+    assert abs(splitter.sizes()[0] - wide_size) <= 2
+    assert w.outgoing_art.visibleRegion().boundingRect().contains(w.outgoing_art.rect())
+
+
+def test_card_requests_disclosed_on_demand_or_when_heard(workspace):
+    w = workspace
+    assert w.card_requests_panel.isHidden()
+    assert w.incoming_requests.isHidden()
+    w.card_requests_toggle.click()
+    assert w.card_requests_panel.isVisible()
+    assert w.broadcast_requests_button.isVisible()
+    assert w.incoming_requests.isHidden()
+    w.card_requests_toggle.click()
+    assert w.card_requests_panel.isHidden()
+    with patch.object(w, 'transmit_exchange') as send:
+        w._receive_card_requests([dict(requester='W7TEST', target=w.station_call.text(),
+                                       card_id=123, reason=0)])
+        assert w.card_requests_toggle.isChecked()
+        assert w.incoming_requests.count() == 1
+        assert w.incoming_requests.isVisible()
+        assert '1 heard' in w.card_requests_toggle.text()
+        w.incoming_requests.setCurrentRow(0)
+        assert w.queue_resend_button.isEnabled()
+        send.assert_not_called()
+
 
 def test_navigation_stays_in_sync_with_existing_page_actions(workspace):
     workspace.workspace_navigation.button(1).click()

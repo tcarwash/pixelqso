@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QListWidget
     QFormLayout, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QInputDialog,
     QMessageBox, QPushButton, QSpinBox, QTabWidget, QTextEdit, QDialog,
     QVBoxLayout, QWidget, QButtonGroup, QScrollArea, QTableView, QAbstractItemView, QFrame, QCheckBox, QGroupBox,
-    QStackedWidget, QProgressBar, QMenu, QSizePolicy, QSplitter)
+    QStackedWidget, QProgressBar, QMenu, QSizePolicy, QSplitter, QBoxLayout)
 
 import cardmodem as modem
 from card_ids import allocate_card_id
@@ -2200,6 +2200,14 @@ class ContentScrollArea(QScrollArea):
         return hint
 
 
+class OperateSplitter(QSplitter):
+    resized = Signal(int)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.resized.emit(self.width())
+
+
 class EditorDialog(QDialog):
     def reject(self):
         if self.parent().confirm_editor_close():
@@ -2568,32 +2576,50 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(250, self._ensure_session_receive)
             QTimer.singleShot(0, self._ensure_data2g_background_monitor)
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        splitter = getattr(self, "operate_splitter", None)
-        if splitter is None:
+    def _sync_operate_layout(self, width):
+        """Respond to the real splitter width, including its initial layout."""
+        splitter = self.operate_splitter
+        if width <= 0 or getattr(self, "_changing_operate_layout", False):
             return
-        # Keep the send choices and the receive workspace side by side while
-        # there is room; stack them on compact windows so neither is squeezed
-        # into an unusable sliver. The sender remains scrollable in that mode.
-        compact = splitter.width() < 760
+        compact = width < 760
         orientation = (Qt.Orientation.Vertical if compact
                        else Qt.Orientation.Horizontal)
-        if splitter.orientation() == orientation:
+        if splitter.orientation() == orientation and self._operate_compact == compact:
             return
-        splitter.setOrientation(orientation)
-        if compact:
-            splitter.widget(0).setMinimumWidth(0)
-            splitter.widget(1).setMinimumWidth(0)
-            splitter.widget(0).setMinimumHeight(0)
-            splitter.widget(1).setMinimumHeight(0)
-            splitter.setSizes([360, max(280, splitter.height() - 360)])
-        else:
-            splitter.widget(0).setMinimumHeight(0)
-            splitter.widget(1).setMinimumHeight(0)
-            splitter.widget(0).setMinimumWidth(370)
-            splitter.widget(1).setMinimumWidth(320)
-            splitter.setSizes([390, max(320, splitter.width() - 390)])
+        self._changing_operate_layout = True
+        try:
+            self._operate_compact = compact
+            sender, receiver = splitter.widget(0), splitter.widget(1)
+            # On narrow screens stack the two workspaces, but place the
+            # artwork beside the dock instead of squeezing it above the dock.
+            sender.setMinimumWidth(0 if compact else 370)
+            receiver.setMinimumWidth(0 if compact else 320)
+            self.operate_sender_layout.setDirection(
+                QBoxLayout.Direction.LeftToRight if compact
+                else QBoxLayout.Direction.TopToBottom)
+            self.operate_sender_scroll.setMinimumWidth(220 if compact else 300)
+            self.operate_sender_scroll.setHorizontalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAsNeeded if compact
+                else Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.session_wall_empty.setAlignment(
+                Qt.AlignmentFlag.AlignHCenter | (Qt.AlignmentFlag.AlignTop if compact else Qt.AlignmentFlag.AlignVCenter))
+            splitter.setOrientation(orientation)
+            splitter.setStretchFactor(0, 0)
+            splitter.setStretchFactor(1, 1)
+            key = "ui/operate/compact_height" if compact else "ui/operate/wide_width"
+            default = max(300, int(splitter.height() * .52)) if compact else 390
+            first = self.settings.value(key, self._operate_sizes.get(compact, default), type=int)
+            extent = splitter.height() if compact else width
+            splitter.setSizes([first, max(0, extent - splitter.handleWidth() - first)])
+        finally:
+            self._changing_operate_layout = False
+
+    def _remember_operate_splitter(self, *_):
+        if self._operate_compact is None or getattr(self, "_changing_operate_layout", False):
+            return
+        first = self.operate_splitter.sizes()[0]
+        key = "ui/operate/compact_height" if self._operate_compact else "ui/operate/wide_width"
+        self.settings.setValue(key, first)
 
     def _configure_workspace_splitter(self, splitter, key, sizes):
         splitter.setChildrenCollapsible(False)
@@ -3001,6 +3027,8 @@ class MainWindow(QMainWindow):
                 index = combo.findData(path)
                 if index >= 0: combo.setCurrentIndex(index)
         del stage_blockers
+        for combo in self.stage_card_combos.values():
+            combo.setToolTip(combo.currentText())
         self.filter_card_library()
         self._refresh_transfer_summary()
 
@@ -5156,9 +5184,14 @@ class MainWindow(QMainWindow):
         self.stage_picker.hide()  # Kept as a synchronized selection model; stages stay visible.
         self.manual_stage_group = QButtonGroup(self); self.manual_stage_group.setExclusive(True)
         self.manual_stage_buttons = {}
-        for stage, title in (("cq", "CQ"), ("exchange", "response"),
-                              ("report73", "signal report"), ("final73", "73 goodbye")):
+        for stage, title in (("cq", "CQ"), ("exchange", "reply"),
+                              ("report73", "report"), ("final73", "73")):
             combo = QComboBox(); combo.setIconSize(QSize(24, 24))
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(10)
+            combo.setObjectName("stageCardPicker")
+            combo.setAccessibleName(f"{title} card")
+            combo.currentTextChanged.connect(combo.setToolTip)
             combo.currentIndexChanged.connect(self._save_auto_stage_cards)
             combo.currentIndexChanged.connect(
                 lambda _index, s=stage: self._select_manual_stage(s))
@@ -5326,15 +5359,20 @@ class MainWindow(QMainWindow):
         receive_layout.addWidget(self.receive_status_hint, 1)
         receive_layout.addWidget(wav_button)
 
-        left_panel = QVBoxLayout(); left_panel.setContentsMargins(0, 0, 0, 0); left_panel.setSpacing(12)
+        left_panel = QVBoxLayout(); left_panel.setContentsMargins(0, 0, 0, 0); left_panel.setSpacing(SPACING["sm"])
         self.outgoing_art = QLabel(); self.outgoing_art.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.outgoing_art.setMinimumHeight(190)
-        outgoing_label = QLabel("YOUR OUTGOING CARD"); outgoing_label.setObjectName("eyebrow")
-        outgoing_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        left_panel.addWidget(outgoing_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        outgoing_header = QHBoxLayout(); outgoing_header.setSpacing(SPACING["xs"])
+        outgoing_label = QLabel("YOUR CARD"); outgoing_label.setObjectName("eyebrow")
+        outgoing_header.addWidget(outgoing_label)
+        outgoing_header.addStretch(1)
+        self.browse_outgoing_cards = QPushButton("Choose card…")
+        self.browse_outgoing_cards.setObjectName("chooseOutgoingCard")
+        self.browse_outgoing_cards.setToolTip("Open My Cards to create, edit or select your outgoing artwork.")
+        self.browse_outgoing_cards.clicked.connect(lambda: self.tabs.setCurrentIndex(1))
+        outgoing_header.addWidget(self.browse_outgoing_cards)
+        left_panel.addLayout(outgoing_header)
         left_panel.addWidget(self.outgoing_art, 0, Qt.AlignmentFlag.AlignHCenter)
-        choose = QPushButton("Browse collection"); choose.clicked.connect(lambda: self.tabs.setCurrentIndex(1))
-        left_panel.addWidget(choose, 0, Qt.AlignmentFlag.AlignHCenter)
         left_panel.addWidget(transfer_group)
         left = QWidget(); left.setLayout(left_panel)
         left.setMinimumWidth(0)
@@ -5379,11 +5417,11 @@ class MainWindow(QMainWindow):
         wall_list_panel = QWidget()
         wall_list_layout = QVBoxLayout(wall_list_panel); wall_list_layout.setContentsMargins(0, 0, 0, 0)
         self.session_wall_empty = QLabel(
-            f"<div style=\"font-size:44px; color:{COLORS['card_frame']}\">▦</div><br>"
-            f"<div style=\"font-size:21px; font-weight:700; color:{COLORS['text_bright']}\">"
-            "A space for your next connection.</div><br>"
-            "<div>Cards will appear here as they arrive.<br>"
-            "Partial cards stay marked provisional until verified.</div>")
+            f"<div style=\"font-size:32px; color:{COLORS['card_frame']}\">▦</div>"
+            f"<div style=\"font-size:19px; font-weight:700; color:{COLORS['text_bright']}\">"
+            "Waiting for your next contact</div>"
+            "<div>Received artwork appears here.<br>"
+            "Partial cards are marked provisional.</div>")
         self.session_wall_empty.setWordWrap(True)
         self.session_wall_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.session_wall_empty.setObjectName("receiverEmpty")
@@ -5391,22 +5429,36 @@ class MainWindow(QMainWindow):
         self.session_wall_empty.setAccessibleDescription(
             "Identified provisional cards appear here while integrity checks are still in progress.")
         wall_list_layout.addWidget(self.session_wall_empty, 1)
+        self.card_requests_toggle = QPushButton("Card requests")
+        self.card_requests_toggle.setCheckable(True)
+        self.card_requests_toggle.setObjectName("activityDisclosure")
+        self.card_requests_toggle.setToolTip("Request missing cards or review requests from other stations.")
+        self.card_requests_panel = QWidget()
+        request_layout = QVBoxLayout(self.card_requests_panel)
+        request_layout.setContentsMargins(0, 0, 0, 0)
+        request_layout.setSpacing(SPACING["xs"])
         self.broadcast_requests_button = QPushButton("Broadcast missing card requests…")
         self.broadcast_requests_button.clicked.connect(self._confirm_broadcast_missing_cards)
-        wall_list_layout.addWidget(self.broadcast_requests_button)
+        request_layout.addWidget(self.broadcast_requests_button)
         self.request_status = QLabel("No card requests heard this session")
         self.request_status.setWordWrap(True)
         self.request_status.setObjectName("supportingText")
-        wall_list_layout.addWidget(self.request_status)
+        request_layout.addWidget(self.request_status)
         self.incoming_requests = QListWidget()
         self.incoming_requests.setMaximumHeight(96)
         self.incoming_requests.setAccessibleName("Card requests heard this session")
         self.incoming_requests.currentRowChanged.connect(self._sync_queue_resend_button)
-        wall_list_layout.addWidget(self.incoming_requests)
+        request_layout.addWidget(self.incoming_requests)
         self.queue_resend_button = QPushButton("Queue selected resend")
         self.queue_resend_button.setEnabled(False)
         self.queue_resend_button.clicked.connect(self._queue_requested_resend)
-        wall_list_layout.addWidget(self.queue_resend_button)
+        request_layout.addWidget(self.queue_resend_button)
+        self.incoming_requests.hide()
+        self.queue_resend_button.hide()
+        self.card_requests_toggle.toggled.connect(self.card_requests_panel.setVisible)
+        self.card_requests_toggle.toggled.connect(self._refresh_card_requests_toggle)
+        self.card_requests_panel.hide()
+        self._refresh_card_requests_toggle()
         self.session_wall = QListWidget()
         self.session_wall.setViewMode(QListWidget.ViewMode.IconMode)
         self.session_wall.setMovement(QListWidget.Movement.Static)
@@ -5422,6 +5474,8 @@ class MainWindow(QMainWindow):
             "Newest cards appear first. A card may be provisional until whole-card integrity checks pass.")
         self.session_wall.hide()
         wall_list_layout.addWidget(self.session_wall, 1)
+        wall_list_layout.addWidget(self.card_requests_toggle)
+        wall_list_layout.addWidget(self.card_requests_panel)
         wall_layout.addWidget(wall_list_panel, 1)
         self.receive_preview_box = QGroupBox("Live preview")
         self.receive_preview_box.setFixedWidth(218)
@@ -5537,12 +5591,21 @@ class MainWindow(QMainWindow):
         sender = QWidget(); sender.setObjectName("senderWorkspace")
         sender_layout = QVBoxLayout(sender); sender_layout.setContentsMargins(12, 12, 12, 12)
         sender_layout.addWidget(left_scroll, 1)
+        dock = QWidget()
+        dock_layout = QVBoxLayout(dock)
+        dock_layout.setContentsMargins(0, 0, 0, 0)
+        dock_layout.setSpacing(SPACING["sm"])
         transfer_form.removeWidget(self.auto_stage_group)
-        sender_layout.addWidget(self.auto_stage_group)
+        dock_layout.addWidget(self.auto_stage_group)
         for controls in (self.manual_tx_controls, self.auto_controls, self.cq_controls, self.beacon_controls):
-            transfer_form.removeWidget(controls); sender_layout.addWidget(controls)
+            transfer_form.removeWidget(controls); dock_layout.addWidget(controls)
+        sender_layout.addWidget(dock)
         left_panel.addStretch(1)
-        self.operate_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.operate_sender_layout = sender_layout
+        self.operate_sender_scroll = left_scroll
+        self._operate_compact = None
+        self._operate_sizes = {}
+        self.operate_splitter = OperateSplitter(Qt.Orientation.Horizontal)
         sender.setMinimumWidth(370); right.setMinimumWidth(300)
         receive_scroll = ContentScrollArea(); receive_scroll.setWidgetResizable(True)
         receive_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -5551,6 +5614,13 @@ class MainWindow(QMainWindow):
         self.operate_splitter.addWidget(sender); self.operate_splitter.addWidget(receive_scroll)
         self.operate_splitter.setStretchFactor(0, 0); self.operate_splitter.setStretchFactor(1, 1)
         self._configure_workspace_splitter(self.operate_splitter, "operate", [390, 740])
+        # restoreState also restores orientation; retain that orientation's
+        # saved sizes until the first resize determines the actual layout.
+        if isinstance(self.settings.value("ui/operate/splitter"), QByteArray):
+            saved_compact = self.operate_splitter.orientation() == Qt.Orientation.Vertical
+            self._operate_sizes[saved_compact] = self.operate_splitter.sizes()[0]
+        self.operate_splitter.splitterMoved.connect(self._remember_operate_splitter)
+        self.operate_splitter.resized.connect(self._sync_operate_layout)
         root.addWidget(self.operate_splitter, 1)
         self.combine = QLineEdit(str(DATA / f"receive-session-v{modem.VERSION}.json")); self.combine.setVisible(False)
         self._update_exchange_controls()
@@ -7790,7 +7860,16 @@ class MainWindow(QMainWindow):
             self.incoming_requests.insertItem(0, item)
         if accepted:
             self.request_status.setText(f"{len(accepted)} new card request(s) heard · choose one to queue a resend")
+            self.incoming_requests.show()
+            self.queue_resend_button.show()
+            self.card_requests_toggle.setChecked(True)
+            self._refresh_card_requests_toggle()
         self._sync_queue_resend_button()
+
+    def _refresh_card_requests_toggle(self, *_):
+        count = self.incoming_requests.count()
+        action = "Hide" if self.card_requests_toggle.isChecked() else "Show"
+        self.card_requests_toggle.setText(f"{action} card requests" + (f" · {count} heard" if count else ""))
 
     def _sync_queue_resend_button(self, *_):
         item = self.incoming_requests.currentItem() if hasattr(self, "incoming_requests") else None

@@ -166,10 +166,47 @@ def build_app_stylesheet(text_scale=1.0):
                                    border: 1px solid {c['border_subtle']};
                                    border-radius: {r['card']}px; }}
         QListWidget#collectionGallery {{ background: transparent; border: 0; padding: 4px; }}
+        QFrame#libraryInspector {{ background: {c['surface_tab']};
+                                   border: 1px solid {c['border_subtle']};
+                                   border-radius: {r['panel']}px; }}
+        QFrame#libraryInspector QLabel {{ background: transparent; }}
+        QFrame#libraryInspector QLabel#libraryInspectorPreview {{ background: {c['surface_sunken']}; }}
+        QLabel#libraryInspectorPreview {{ color: {c['text_muted']};
+                                          background: {c['surface_sunken']};
+                                          border: 1px solid {c['border_control']};
+                                          border-radius: {r['panel']}px; font-size: 34px; }}
         QPushButton#stageNumber {{ padding: 8px 0; color: {c['text_soft']}; background: transparent;
                                    border: 0; font-weight: 700; }}
         QPushButton#stageNumber:hover {{ color: {c['accent']}; }}
         QPushButton#stageNumber:focus {{ border: 2px solid {c['focus_ring']}; }}
+        QLabel#editorStudioHeading {{ color: {c['text_soft']}; font-size: 12px;
+                                       font-weight: 800; letter-spacing: 1.4px; }}
+        QFrame#editorToolRail {{ background: {c['surface_tab']};
+                                 border: 1px solid {c['border_subtle']};
+                                 border-radius: {r['panel']}px; }}
+        QPushButton#editorRailTool {{ border: 1px solid transparent;
+                                      border-radius: {r['control']}px;
+                                      background: transparent; padding: 2px;
+                                      color: {c['text_soft']}; font-size: 22px; }}
+        QPushButton#editorRailTool:hover {{ background: {c['surface_hover']};
+                                            border-color: {c['border_control']}; }}
+        QPushButton#editorRailTool:checked {{ color: {c['accent']};
+                                              background: {c['accent_dim']};
+                                              border-color: {c['accent_checked_border']}; }}
+        QPushButton#editorRailTool:focus {{ border-color: {c['focus_ring']}; }}
+        QScrollArea#editorCanvasViewport {{ background: {c['surface_sunken']};
+                                             border: 1px solid {c['border_subtle']};
+                                             border-radius: {r['panel']}px; }}
+        QFrame#editorDock {{ border: 1px solid {c['border_subtle']};
+                              border-radius: {r['panel']}px;
+                              background: {c['surface_tab']}; }}
+        QPushButton#editorDockToggle {{ text-align: left; color: {c['text_soft']};
+                                        background: transparent; border: 0;
+                                        padding: 5px 7px; font-size: 12px;
+                                        letter-spacing: 1px; }}
+        QPushButton#editorDockToggle:hover {{ color: {c['accent']};
+                                               background: {c['surface_hover']}; }}
+        QPushButton#editorMenuButton {{ padding: 6px 11px; }}
         QPushButton#editorDisclosure {{ text-align: left; color: {c['text_muted']};
                                           background: transparent; border: 0; padding: 6px 3px; }}
         QPushButton#editorDisclosure:hover {{ color: {c['text_soft']};

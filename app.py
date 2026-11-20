@@ -2200,6 +2200,14 @@ class ContentScrollArea(QScrollArea):
         return hint
 
 
+class CanvasViewport(QScrollArea):
+    resized = Signal()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.resized.emit()
+
+
 class OperateSplitter(QSplitter):
     resized = Signal(int)
 
@@ -2520,15 +2528,21 @@ class MainWindow(QMainWindow):
         editor_content = self.make_card_tab()
         self.editor_dialog = EditorDialog(self)
         editor_layout = QVBoxLayout(self.editor_dialog)
-        editor_layout.setContentsMargins(24, 20, 24, 20); editor_layout.setSpacing(16)
-        studio_heading = QLabel("Card editor"); studio_heading.setObjectName("pageTitle")
-        studio_caption = QLabel("Draw, stamp, and animate your card.")
-        studio_caption.setObjectName("supportingText")
-        editor_layout.addWidget(studio_heading); editor_layout.addWidget(studio_caption)
+        editor_layout.setContentsMargins(12, 10, 12, 10)
+        editor_layout.setSpacing(7)
+        title_row = QHBoxLayout()
+        studio_heading = QLabel("PIXEL QSO  /  CARD STUDIO")
+        studio_heading.setObjectName("editorStudioHeading")
+        title_row.addWidget(studio_heading)
+        title_row.addStretch(1)
+        self.editor_done_button = QPushButton("Save and close")
+        self.editor_done_button.setObjectName("primaryAction")
+        self.editor_done_button.setToolTip("Save your card and return to the collection")
+        self.editor_done_button.clicked.connect(self.editor_primary_action)
+        title_row.addWidget(self.editor_done_button)
+        editor_layout.addLayout(title_row)
         editor_layout.addWidget(editor_content, 1)
         self.animation_author.attach_shortcuts(self.editor_dialog)
-        self.editor_done_button = QPushButton("Save and close"); self.editor_done_button.setObjectName("primaryAction")
-        self.editor_done_button.clicked.connect(self.editor_primary_action); editor_layout.addWidget(self.editor_done_button)
         self.editor_baseline = self.editor_signature()
         self._set_editor_title("Create or edit card")
         editor_screen = self.editor_dialog.screen() or QApplication.primaryScreen()
@@ -2587,7 +2601,7 @@ class MainWindow(QMainWindow):
         splitter = self.operate_splitter
         if width <= 0 or getattr(self, "_changing_operate_layout", False):
             return
-        compact = width < 760
+        compact = width < 820
         orientation = (Qt.Orientation.Vertical if compact
                        else Qt.Orientation.Horizontal)
         if splitter.orientation() == orientation and self._operate_compact == compact:
@@ -2646,8 +2660,8 @@ class MainWindow(QMainWindow):
         """Navigation is presentation only; existing page and action owners stay intact."""
         shell = QWidget(); shell_layout = QHBoxLayout(shell)
         shell_layout.setContentsMargins(0, 0, 0, 0); shell_layout.setSpacing(0)
-        rail = QFrame(); rail.setObjectName("navigationRail"); rail.setFixedWidth(204)
-        rail_layout = QVBoxLayout(rail); rail_layout.setContentsMargins(16, 24, 16, 16)
+        rail = QFrame(); rail.setObjectName("navigationRail"); rail.setFixedWidth(180)
+        rail_layout = QVBoxLayout(rail); rail_layout.setContentsMargins(12, 20, 12, 12)
         rail_layout.setSpacing(6)
         brand = QLabel("Pixel QSO"); brand.setObjectName("brandName")
         rail_layout.addWidget(brand)
@@ -2678,7 +2692,7 @@ class MainWindow(QMainWindow):
         rail_layout.addWidget(settings)
         shell_layout.addWidget(rail)
         body = QWidget(); body_layout = QVBoxLayout(body)
-        body_layout.setContentsMargins(24, 20, 24, 16); body_layout.setSpacing(10)
+        body_layout.setContentsMargins(14, 14, 14, 12); body_layout.setSpacing(8)
         header = QHBoxLayout()
         words = QVBoxLayout(); words.setSpacing(4)
         self.workspace_eyebrow = QLabel(); self.workspace_eyebrow.setObjectName("eyebrow")
@@ -2702,6 +2716,11 @@ class MainWindow(QMainWindow):
             if index == 1:
                 self._update_export_buttons()
         pages.currentChanged.connect(select_page); select_page(pages.currentIndex())
+        for index in range(3):
+            shortcut = QShortcut(QKeySequence(f"Ctrl+{index + 1}"), shell)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.activated.connect(
+                lambda i=index: pages.setCurrentIndex(i))
         return shell
 
     def _refresh_send_workspace(self):
@@ -2780,24 +2799,25 @@ class MainWindow(QMainWindow):
         self.use_library_card_button.setToolTip("Assign the selected saved card to the outgoing stage. Does not transmit.")
         self.use_library_card_button.clicked.connect(self._use_selected_library_card)
         self.use_library_card_button.hide()
-        heading.addWidget(self.use_library_card_button)
         open_button = QPushButton("Open selected"); open_button.clicked.connect(self._open_library_item); heading.addWidget(open_button)
         self.open_library_button = open_button
-        selection_actions = QHBoxLayout(); selection_actions.setSpacing(SPACING["sm"])
-        selection_actions.addStretch(1)
-        heading.removeWidget(open_button); selection_actions.addWidget(open_button)
+        selection_actions = QGridLayout()
+        selection_actions.setSpacing(SPACING["xs"])
+        heading.removeWidget(open_button)
+        selection_actions.addWidget(self.use_library_card_button, 0, 0, 1, 2)
+        selection_actions.addWidget(open_button, 1, 0, 1, 2)
         self.export_card_button = QPushButton("Export selected…")
         self.export_card_button.setEnabled(False)
         self.export_card_button.clicked.connect(self.export_selected_card)
-        selection_actions.addWidget(self.export_card_button)
+        selection_actions.addWidget(self.export_card_button, 2, 0)
         self.export_animation_button = QPushButton("Export animation…")
         self.export_animation_button.setEnabled(False)
         self.export_animation_button.clicked.connect(self.export_selected_animation)
-        selection_actions.addWidget(self.export_animation_button)
+        selection_actions.addWidget(self.export_animation_button, 3, 0, 1, 2)
         self.copy_card_button = QPushButton("Copy PNG")
         self.copy_card_button.clicked.connect(self.copy_selected_card)
         self.copy_card_button.setEnabled(False)
-        selection_actions.addWidget(self.copy_card_button)
+        selection_actions.addWidget(self.copy_card_button, 2, 1)
         more_menu = QMenu(self)
         duplicate = more_menu.addAction("Duplicate card")
         duplicate.triggered.connect(self.duplicate_library_card)
@@ -2808,10 +2828,9 @@ class MainWindow(QMainWindow):
         delete = more_menu.addAction("Delete card…")
         delete.triggered.connect(self.delete_library_card)
         more = QPushButton("More"); more.setMenu(more_menu); more.setToolTip("More card actions")
-        selection_actions.addWidget(more)
+        selection_actions.addWidget(more, 4, 0, 1, 2)
         self.more_card_button = more
         layout.addLayout(heading)
-        layout.addLayout(selection_actions)
         library_controls = QHBoxLayout(); library_controls.setSpacing(SPACING["sm"])
         self.library_search = QLineEdit(); self.library_search.setPlaceholderText("Find a card…")
         self.library_search.setAccessibleName("Search cards by name or station")
@@ -2838,7 +2857,6 @@ class MainWindow(QMainWindow):
         self.library_choice_hint = QLabel()
         self.library_choice_hint.setObjectName("supportingText")
         self.library_choice_hint.setWordWrap(True)
-        layout.addWidget(self.library_choice_hint)
         self.library_list = QListWidget(); self.library_list.setViewMode(QListWidget.ViewMode.IconMode)
         self.library_list.setIconSize(QSize(190, 238)); self.library_list.setGridSize(QSize(218, 288))
         self.library_list.setMovement(QListWidget.Movement.Static); self.library_list.setSpacing(SPACING["lg"])
@@ -2851,6 +2869,7 @@ class MainWindow(QMainWindow):
             "double-click also opens it.")
         self.library_list.itemClicked.connect(lambda _item: self._activate_library_list(self.library_list))
         self.library_list.itemSelectionChanged.connect(self._update_export_buttons)
+        self.library_list.currentItemChanged.connect(self._update_export_buttons)
         self.library_list.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.library_list.itemActivated.connect(lambda _item: self._open_library_item())
         self.active_library_list = self.library_list
@@ -2877,7 +2896,34 @@ class MainWindow(QMainWindow):
         empty_actions.addWidget(empty_starter); empty_actions.addStretch(1)
         empty_layout.addLayout(empty_actions); empty_layout.addStretch(1)
         self.library_stack.addWidget(self.library_empty_page)
-        layout.addWidget(self.library_stack, 1)
+        collection_row = QHBoxLayout()
+        collection_row.setSpacing(SPACING["md"])
+        collection_row.addWidget(self.library_stack, 1)
+        inspector = QFrame()
+        inspector.setObjectName("libraryInspector")
+        inspector.setFixedWidth(260)
+        inspector_layout = QVBoxLayout(inspector)
+        inspector_layout.setContentsMargins(12, 12, 12, 12)
+        inspector_layout.setSpacing(10)
+        inspector_title = QLabel("SELECTED CARD")
+        inspector_title.setObjectName("eyebrow")
+        inspector_layout.addWidget(inspector_title)
+        self.library_inspector_preview = QLabel()
+        self.library_inspector_preview.setObjectName("libraryInspectorPreview")
+        self.library_inspector_preview.setFixedSize(232, 274)
+        self.library_inspector_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.library_inspector_preview.setAccessibleName("Selected card artwork preview")
+        inspector_layout.addWidget(self.library_inspector_preview)
+        self.library_inspector_name = QLabel("Choose a card to see its details")
+        self.library_inspector_name.setObjectName("sectionTitle")
+        self.library_inspector_name.setWordWrap(True)
+        inspector_layout.addWidget(self.library_inspector_name)
+        inspector_layout.addWidget(self.library_choice_hint)
+        inspector_layout.addSpacing(4)
+        inspector_layout.addLayout(selection_actions)
+        inspector_layout.addStretch(1)
+        collection_row.addWidget(inspector)
+        layout.addLayout(collection_row, 1)
         self.library_status = QLabel(""); self.library_status.setObjectName("supportingText")
         layout.addWidget(self.library_status)
         return page
@@ -3010,7 +3056,11 @@ class MainWindow(QMainWindow):
                 item = QListWidgetItem(f"{section} · {path.stem}{animation_note}")
                 item.setToolTip(card_details)
                 item.setData(Qt.ItemDataRole.AccessibleTextRole, card_details)
-                item.setIcon(QIcon(card_art(preview, card.callsign, card.grid, QSize(190, 238))))
+                thumbnail = card_art(preview, card.callsign, card.grid, QSize(190, 238))
+                thumbnail_icon = QIcon(thumbnail)
+                # Qt otherwise color-tints QIcon.Selected and shifts pixel-art hues.
+                thumbnail_icon.addPixmap(thumbnail, QIcon.Mode.Selected)
+                item.setIcon(thumbnail_icon)
                 item.setData(Qt.ItemDataRole.UserRole, str(path))
                 item.setData(Qt.ItemDataRole.UserRole + 1, kind)
                 self.library_list.addItem(item)
@@ -3284,7 +3334,10 @@ class MainWindow(QMainWindow):
                         QColor(*(int(channel) * 17 for channel in card.palette[color_index])))
                 title = path.stem.replace("-", " ").title()
                 item = QListWidgetItem(title)
-                item.setIcon(QIcon(card_art(image, title, "Starter card", QSize(190, 238))))
+                thumbnail = card_art(image, title, "Starter card", QSize(190, 238))
+                thumbnail_icon = QIcon(thumbnail)
+                thumbnail_icon.addPixmap(thumbnail, QIcon.Mode.Selected)
+                item.setIcon(thumbnail_icon)
                 item.setData(Qt.ItemDataRole.UserRole, str(path))
                 gallery.addItem(item)
             except (OSError, ValueError, KeyError, TypeError, IndexError):
@@ -3748,6 +3801,18 @@ class MainWindow(QMainWindow):
             selected = item is not None
             kind = item.data(Qt.ItemDataRole.UserRole + 1) if selected else None
             saved = selected and kind in {"my", "sent"}
+            if hasattr(self, "library_inspector_preview"):
+                if selected:
+                    icon = item.icon()
+                    pixmap = icon.pixmap(QSize(200, 250))
+                    self.library_inspector_preview.setPixmap(pixmap)
+                    self.library_inspector_name.setText(item.text().splitlines()[0])
+                    self.library_inspector_preview.setAccessibleDescription(item.toolTip())
+                else:
+                    self.library_inspector_preview.clear()
+                    self.library_inspector_preview.setText("▦")
+                    self.library_inspector_name.setText("Choose a card to preview")
+                    self.library_inspector_preview.setAccessibleDescription("No card selected")
             self.open_library_button.setVisible(selected)
             self.open_library_button.setText("Personalize starter" if kind == "starter" else "Edit selected")
             if hasattr(self, "library_choice_hint"):
@@ -4152,197 +4217,302 @@ class MainWindow(QMainWindow):
         self.library_status.setText(f"Added {target.stem} · copied from {source_call}")
         return "added"
 
-    def make_card_tab(self):
-        w = QWidget(); outer = QHBoxLayout(w)
-        self.editor_splitter = QSplitter(Qt.Orientation.Horizontal)
-        outer.addWidget(self.editor_splitter)
-        drawing_widget = QWidget(); drawing = QVBoxLayout(drawing_widget)
-        drawing.setContentsMargins(0, 0, 12, 0)
-        self.editor_splitter.addWidget(drawing_widget)
-        self.tool_buttons = {}
-        self.tool_group = QButtonGroup(self); self.tool_group.setExclusive(True)
-        tool_bar = QHBoxLayout(); tool_bar.setSpacing(SPACING["xs"])
-        for title, tool in (("Draw", "draw"), ("Erase", "erase"), ("Fill", "fill"),
-                            ("Pick", "pick"), ("Select", "select"), ("Stamp", "move")):
-            button = QPushButton(title); button.setCheckable(True)
-            button.setObjectName("editorTool")
-            button.setAccessibleName(f"{title} tool")
-            button.setAccessibleDescription(CardCanvas.TOOL_HELP[tool])
-            button.setToolTip(CardCanvas.TOOL_HELP[tool])
-            button.clicked.connect(lambda _checked=False, value=tool: self.set_editor_tool(value))
-            self.tool_group.addButton(button); self.tool_buttons[tool] = button
-            tool_bar.addWidget(button, 1)
-        self.tool_buttons["draw"].setChecked(True)
-        drawing.addLayout(tool_bar)
+    def _editor_dock(self, parent_layout, title, *, expanded=True):
+        """Small collapsible panel; its contents remain the existing live controls."""
+        frame = QFrame()
+        frame.setObjectName("editorDock")
+        frame_layout = QVBoxLayout(frame)
+        frame_layout.setContentsMargins(8, 5, 8, 8)
+        frame_layout.setSpacing(6)
+        toggle = QPushButton()
+        toggle.setObjectName("editorDockToggle")
+        toggle.setCheckable(True)
+        toggle.setAccessibleName(f"Show {title} panel")
+        frame_layout.addWidget(toggle)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(2, 2, 2, 2)
+        content_layout.setSpacing(7)
+        frame_layout.addWidget(content)
+        toggle.toggled.connect(content.setVisible)
+        toggle.toggled.connect(
+            lambda checked, btn=toggle, name=title:
+                btn.setText(("▾  " if checked else "▸  ") + name.upper()))
+        toggle.setChecked(expanded)
+        toggle.setText(("▾  " if expanded else "▸  ") + title.upper())
+        content.setVisible(expanded)
+        parent_layout.addWidget(frame)
+        return content_layout, toggle
 
-        self.editor_shapes_toggle = QPushButton()
-        self.editor_shapes_toggle.setObjectName("editorDisclosure")
-        self.editor_shapes_toggle.setCheckable(True)
-        self.editor_shapes_toggle.setAccessibleName("Show shape drawing tools")
-        self.editor_shapes_toggle.setToolTip("Outline and filled rectangle or ellipse tools.")
-        self.editor_shapes_toggle.toggled.connect(self._toggle_editor_shapes)
-        drawing.addWidget(self.editor_shapes_toggle)
-        self.editor_shapes_widget = QWidget()
-        shapes_row = QHBoxLayout(self.editor_shapes_widget)
-        shapes_row.setContentsMargins(0, 0, 0, 0)
-        shapes_row.setSpacing(SPACING["xs"])
-        for title, tool in (("Rectangle", "rect"), ("Filled rect", "filled_rect"),
-                            ("Ellipse", "ellipse"), ("Filled ellipse", "filled_ellipse")):
-            button = QPushButton(title); button.setCheckable(True)
-            button.setObjectName("editorTool")
+    def make_card_tab(self):
+        """Pixel-art workbench with persistent tools and contextual docks."""
+        w = QWidget()
+        outer = QVBoxLayout(w)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(8)
+
+        top = QHBoxLayout()
+        top.setSpacing(5)
+        file_button = QPushButton("File ▾")
+        file_button.setObjectName("editorMenuButton")
+        file_menu = QMenu(file_button)
+        for label, callback in (
+            ("New card", self.new_card),
+            ("Open card…", self.open_card),
+            ("Paste image", self.paste_card_image),
+            ("Import indexed PNG…", self.import_aseprite_png),
+            ("Export indexed PNG…", self.export_aseprite_png),
+            ("Make QR card…", self.create_qr_card),
+            ("Export audio WAV…", self.export_wav),
+            ("Listen to artwork…", self.listen_to_canvas),
+        ):
+            file_menu.addAction(label, callback)
+        file_button.setMenu(file_menu)
+        top.addWidget(file_button)
+        self.editor_save_button = QPushButton("Save")
+        self.editor_save_button.setObjectName("editorMenuButton")
+        self.editor_save_button.setToolTip("Save artwork to My Cards · Ctrl+S")
+        self.editor_save_button.setAccessibleDescription(
+            "Save the card after its call sign and grid meet the card format limits.")
+        self.editor_save_button.clicked.connect(self.save_card)
+        top.addWidget(self.editor_save_button)
+        top.addSpacing(12)
+        self.undo_button = QPushButton("↶")
+        self.undo_button.setToolTip("Undo · Ctrl+Z")
+        self.undo_button.setAccessibleName("Undo card edit")
+        top.addWidget(self.undo_button)
+        self.redo_button = QPushButton("↷")
+        self.redo_button.setToolTip("Redo · Ctrl+Shift+Z / Ctrl+Y")
+        self.redo_button.setAccessibleName("Redo card edit")
+        top.addWidget(self.redo_button)
+        self.copy_pixels_button = QPushButton("Copy")
+        self.copy_pixels_button.setAccessibleName("Copy box selected pixels")
+        self.copy_pixels_button.setToolTip("Copy selection · Ctrl+C")
+        top.addWidget(self.copy_pixels_button)
+        self.paste_pixels_button = QPushButton("Paste")
+        self.paste_pixels_button.setAccessibleName("Paste copied pixels")
+        self.paste_pixels_button.setToolTip("Paste selection as movable pixels · Ctrl+V")
+        top.addWidget(self.paste_pixels_button)
+        top.addStretch(1)
+        self.editor_zoom_out = QPushButton("−")
+        self.editor_zoom_out.setAccessibleName("Zoom out")
+        self.editor_zoom_out.setToolTip("Zoom out · Ctrl+-")
+        self.editor_zoom_in = QPushButton("+")
+        self.editor_zoom_in.setAccessibleName("Zoom in")
+        self.editor_zoom_in.setToolTip("Zoom in · Ctrl++")
+        self.editor_zoom_combo = QComboBox()
+        self.editor_zoom_combo.setAccessibleName("Artwork zoom")
+        self.editor_zoom_combo.setToolTip("Fit canvas or select a pixel-perfect zoom level")
+        for label, value in (("Fit", "fit"), ("50%", 50), ("75%", 75),
+                             ("100%", 100), ("150%", 150), ("200%", 200),
+                             ("300%", 300)):
+            self.editor_zoom_combo.addItem(label, value)
+        top.addWidget(self.editor_zoom_out)
+        top.addWidget(self.editor_zoom_combo)
+        top.addWidget(self.editor_zoom_in)
+        outer.addLayout(top)
+
+        self.editor_splitter = QSplitter(Qt.Orientation.Horizontal)
+        outer.addWidget(self.editor_splitter, 1)
+        work = QWidget()
+        work_layout = QHBoxLayout(work)
+        work_layout.setContentsMargins(0, 0, 0, 0)
+        work_layout.setSpacing(8)
+        self.editor_splitter.addWidget(work)
+
+        rail = QFrame()
+        rail.setObjectName("editorToolRail")
+        rail.setFixedWidth(56)
+        rail_layout = QVBoxLayout(rail)
+        rail_layout.setContentsMargins(5, 7, 5, 7)
+        rail_layout.setSpacing(4)
+        work_layout.addWidget(rail)
+
+        self.tool_buttons = {}
+        self.tool_group = QButtonGroup(self)
+        self.tool_group.setExclusive(True)
+        for title, symbol, tool in (
+            ("Pencil", "✎", "draw"),
+            ("Eraser", "⌫", "erase"),
+            ("Fill", "▧", "fill"),
+            ("Eyedropper", "◉", "pick"),
+            ("Select pixels", "▤", "select"),
+            ("Move stamp", "✥", "move"),
+        ):
+            button = QPushButton(symbol)
+            button.setObjectName("editorRailTool")
+            button.setCheckable(True)
+            button.setFixedSize(44, 42)
+            button.setToolTip(f"{title} · {CardCanvas.TOOL_HELP[tool]}")
             button.setAccessibleName(f"{title} tool")
             button.setAccessibleDescription(CardCanvas.TOOL_HELP[tool])
-            button.setToolTip(CardCanvas.TOOL_HELP[tool])
             button.clicked.connect(lambda _checked=False, value=tool: self.set_editor_tool(value))
-            self.tool_group.addButton(button); self.tool_buttons[tool] = button
-            shapes_row.addWidget(button, 1)
-        drawing.addWidget(self.editor_shapes_widget)
+            self.tool_group.addButton(button)
+            self.tool_buttons[tool] = button
+            rail_layout.addWidget(button)
+        rail_layout.addSpacing(4)
+        self.editor_shapes_toggle = QPushButton("▱")
+        self.editor_shapes_toggle.setObjectName("editorRailTool")
+        self.editor_shapes_toggle.setCheckable(True)
+        self.editor_shapes_toggle.setFixedSize(44, 38)
+        self.editor_shapes_toggle.setToolTip("Show rectangle and ellipse tools")
+        self.editor_shapes_toggle.setAccessibleName("Show shape drawing tools")
+        self.editor_shapes_toggle.toggled.connect(self._toggle_editor_shapes)
+        rail_layout.addWidget(self.editor_shapes_toggle)
+        self.editor_shapes_widget = QWidget()
+        shapes_layout = QVBoxLayout(self.editor_shapes_widget)
+        shapes_layout.setContentsMargins(0, 0, 0, 0)
+        shapes_layout.setSpacing(3)
+        for title, symbol, tool in (
+            ("Rectangle", "▭", "rect"),
+            ("Filled rectangle", "▰", "filled_rect"),
+            ("Ellipse", "◯", "ellipse"),
+            ("Filled ellipse", "●", "filled_ellipse"),
+        ):
+            button = QPushButton(symbol)
+            button.setObjectName("editorRailTool")
+            button.setCheckable(True)
+            button.setFixedSize(44, 38)
+            button.setToolTip(f"{title} · {CardCanvas.TOOL_HELP[tool]}")
+            button.setAccessibleName(f"{title} tool")
+            button.setAccessibleDescription(CardCanvas.TOOL_HELP[tool])
+            button.clicked.connect(lambda _checked=False, value=tool: self.set_editor_tool(value))
+            self.tool_group.addButton(button)
+            self.tool_buttons[tool] = button
+            shapes_layout.addWidget(button)
+        rail_layout.addWidget(self.editor_shapes_widget)
         self.editor_shapes_toggle.setChecked(
             self.settings.value("ui/editor/show_shapes", False, type=bool))
         self._toggle_editor_shapes(self.editor_shapes_toggle.isChecked())
-        self.editor_tool_hint = QLabel()
-        self.editor_tool_hint.setObjectName("editorToolHint")
-        self.editor_tool_hint.setWordWrap(True)
-        self.editor_tool_hint.setAccessibleName("Selected tool instructions")
-        drawing.addWidget(self.editor_tool_hint)
+        rail_layout.addStretch(1)
+        self.tool_buttons["draw"].setChecked(True)
+
+        center = QWidget()
+        center_layout = QVBoxLayout(center)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(6)
+        work_layout.addWidget(center, 1)
+        context = QHBoxLayout()
+        context.setSpacing(10)
+        art_label = QLabel("ARTWORK")
+        art_label.setObjectName("eyebrow")
+        context.addWidget(art_label)
+        self.editor_canvas_info = QLabel("32 × 32 px")
+        self.editor_canvas_info.setObjectName("supportingText")
+        context.addWidget(self.editor_canvas_info)
+        context.addStretch(1)
+        self.editor_mirror = QCheckBox("Mirror")
+        self.editor_mirror.setToolTip("Mirror pencil and eraser strokes across X")
+        self.editor_centered = QCheckBox("Center out")
+        self.editor_centered.setToolTip("Start rectangles and ellipses at their center")
+        context.addWidget(self.editor_mirror)
+        context.addWidget(self.editor_centered)
+        self.editor_grid = QCheckBox("Grid")
+        self.editor_grid.setChecked(True)
+        context.addWidget(self.editor_grid)
+        center_layout.addLayout(context)
+
         self.canvas = CardCanvas(self.card)
         self.canvas.setToolTip(
-            "Keyboard: focus the canvas; arrows or hjkl move the cursor; v starts/ends a "
-            "rectangular selection, y copies it, d deletes it (or the pixel under the cursor), "
-            "and p places an image from the clipboard at the cursor. Uppercase HJKL nudges "
-            "a selection. f fills a selection or the connected region under the cursor. "
-            "0/A jump to row start, $/a to row end, gg/G to column ends, and a number "
-            "repeats movement. Type :wq then Enter to save and close, or :q then Enter "
-            "to close with the usual unsaved-change prompt. "
-            "Hold Space or press i to draw while moving; Escape cancels i mode. "
-            "Ctrl+C copies a box selection and Ctrl+V pastes a movable copy; "
-            "n/N cycles colors forward/backward, u undoes, U redoes, x deletes the pixel, "
-            "and Enter applies "
-            "Draw, Erase, Fill, or Pick. In Move stamp mode, Space/Enter selects a stamp, "
-            "arrows move it, and Escape deselects. Mouse: drag stamps; hover a placed "
-            "stamp to reveal its resize and remove controls.")
-        drawing.addWidget(self.canvas, 1)
-        self._update_editor_tool_hint()
-        history = QHBoxLayout()
-        self.undo_button = QPushButton("↶ Undo"); self.undo_button.clicked.connect(self.canvas.undo)
-        self.redo_button = QPushButton("↷ Redo"); self.redo_button.clicked.connect(self.canvas.redo)
-        self.undo_button.setAccessibleName("Undo card edit")
-        self.undo_button.setAccessibleDescription("Undo the last card edit. Keyboard shortcut: Ctrl+Z.")
-        self.undo_button.setToolTip("Undo the last card edit · Ctrl+Z")
-        self.redo_button.setAccessibleName("Redo card edit")
-        self.redo_button.setAccessibleDescription("Redo the last undone card edit. Keyboard shortcut: Ctrl+Shift+Z or Ctrl+Y.")
-        self.redo_button.setToolTip("Redo the last undone card edit · Ctrl+Shift+Z")
-        history.addWidget(self.undo_button); history.addWidget(self.redo_button)
-        self.copy_pixels_button = QPushButton("Copy")
-        self.copy_pixels_button.setAccessibleName("Copy box selected pixels")
-        self.copy_pixels_button.setToolTip("Copy the selected box as pixels · Ctrl+C")
-        self.copy_pixels_button.clicked.connect(self.canvas.copy_selection_pixels)
-        history.addWidget(self.copy_pixels_button)
-        self.paste_pixels_button = QPushButton("Paste")
-        self.paste_pixels_button.setAccessibleName("Paste copied pixels")
-        self.paste_pixels_button.setToolTip("Paste copied pixels as a movable stamp · Ctrl+V")
-        self.paste_pixels_button.clicked.connect(self.canvas.paste_selection_pixels)
-        history.addWidget(self.paste_pixels_button); history.addStretch()
-        grid = QCheckBox("Grid"); grid.setChecked(True)
-        grid.toggled.connect(lambda checked: (setattr(self.canvas, "show_grid", checked), self.canvas.update()))
-        history.addWidget(grid); drawing.addLayout(history)
-        shape_options = QHBoxLayout(); shape_options.setSpacing(SPACING["md"])
-        mirror = QCheckBox("Mirror X")
-        mirror.setToolTip("Mirror Draw and Erase strokes across the canvas center, like Aseprite X symmetry.")
-        mirror.toggled.connect(lambda checked: setattr(self.canvas, "mirror_x", checked))
-        shape_options.addWidget(mirror)
-        centered = QCheckBox("Center out")
-        centered.setToolTip("Draw rectangles and ellipses outward from the first point instead of from a corner.")
-        centered.toggled.connect(lambda checked: setattr(self.canvas, "shape_centered", checked))
-        shape_options.addWidget(centered)
-        shape_options.addStretch(1)
-        drawing.addLayout(shape_options)
-        for key, callback in (("Ctrl+Z", self.canvas.undo), ("Ctrl+Shift+Z", self.canvas.redo), ("Ctrl+Y", self.canvas.redo)):
-            shortcut = QShortcut(QKeySequence(key), w); shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut); shortcut.activated.connect(callback)
+            "Pixel editor: drag to draw. Focus canvas for hjkl/arrows, u/U for undo/redo, "
+            "n/N for colors, v for selection, i for keyboard-draw, and :wq to save.")
+        self.editor_canvas_view = CanvasViewport()
+        self.editor_canvas_view.setObjectName("editorCanvasViewport")
+        self.editor_canvas_view.setWidgetResizable(False)
+        self.editor_canvas_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.editor_canvas_view.setFrameShape(QFrame.Shape.NoFrame)
+        self.editor_canvas_view.setWidget(self.canvas)
+        self.canvas.setFixedSize(448, 448)
+        center_layout.addWidget(self.editor_canvas_view, 1)
 
-        sidebar = QWidget(); side = QVBoxLayout(sidebar); side.setContentsMargins(4, 0, 4, 0)
-        sidebar_scroll = ContentScrollArea(); sidebar_scroll.setWidgetResizable(True); sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.editor_tool_hint = QLabel()
+        self.editor_tool_hint.setObjectName("editorToolHint")
+        self.editor_tool_hint.setWordWrap(False)
+        self.editor_tool_hint.setMaximumHeight(22)
+        self.editor_tool_hint.setAccessibleName("Selected tool instructions")
+        center_layout.addWidget(self.editor_tool_hint)
+        self._update_editor_tool_hint()
+        self.status = QLabel("Ready")
+        self.status.setObjectName("supportingText")
+        self.status.setMaximumHeight(24)
+        center_layout.addWidget(self.status)
+
+        self.undo_button.clicked.connect(self.canvas.undo)
+        self.redo_button.clicked.connect(self.canvas.redo)
+        self.copy_pixels_button.clicked.connect(self.canvas.copy_selection_pixels)
+        self.paste_pixels_button.clicked.connect(self.canvas.paste_selection_pixels)
+        self.editor_mirror.toggled.connect(
+            lambda checked: setattr(self.canvas, "mirror_x", checked))
+        self.editor_centered.toggled.connect(
+            lambda checked: setattr(self.canvas, "shape_centered", checked))
+        self.editor_grid.toggled.connect(
+            lambda checked: (setattr(self.canvas, "show_grid", checked), self.canvas.update()))
+        self.editor_zoom_combo.currentIndexChanged.connect(self._refresh_editor_zoom)
+        self.editor_zoom_in.clicked.connect(lambda: self._step_editor_zoom(1))
+        self.editor_zoom_out.clicked.connect(lambda: self._step_editor_zoom(-1))
+        self.editor_canvas_view.resized.connect(self._refresh_editor_zoom)
+        for key, callback in (("Ctrl+Z", self.canvas.undo),
+                              ("Ctrl+Shift+Z", self.canvas.redo),
+                              ("Ctrl+Y", self.canvas.redo),
+                              ("Ctrl++", lambda: self._step_editor_zoom(1)),
+                              ("Ctrl+-", lambda: self._step_editor_zoom(-1))):
+            shortcut = QShortcut(QKeySequence(key), w)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(callback)
+
+        sidebar = QWidget()
+        side = QVBoxLayout(sidebar)
+        side.setContentsMargins(4, 0, 4, 0)
+        side.setSpacing(7)
+        sidebar_scroll = ContentScrollArea()
+        sidebar_scroll.setObjectName("editorSidebar")
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
         sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        sidebar_scroll.setWidget(sidebar); sidebar_scroll.setMinimumWidth(400)
+        sidebar_scroll.setWidget(sidebar)
+        sidebar_scroll.setMinimumWidth(320)
         self.editor_splitter.addWidget(sidebar_scroll)
-        self.editor_splitter.setStretchFactor(0, 3); self.editor_splitter.setStretchFactor(1, 2)
-        self._configure_workspace_splitter(self.editor_splitter, "editor", [680, 380])
-        form = QFormLayout()
-        self.call = QLineEdit(self.card.callsign); self.grid = QLineEdit(self.card.grid)
-        self.call.textChanged.connect(self._update_card_identity_hint)
-        self.grid.textChanged.connect(self._update_card_identity_hint)
-        self.call.textChanged.connect(self._update_editor_saved_state)
-        self.grid.textChanged.connect(self._update_editor_saved_state)
-        form.addRow("Call sign", self.call); form.addRow("Grid", self.grid)
-        side.addLayout(form)
-        self.card_identity_hint = QLabel()
-        self.card_identity_hint.setObjectName("supportingText")
-        self.card_identity_hint.setWordWrap(True)
-        self.card_identity_hint.setAccessibleName("Card identity format guidance")
-        side.addWidget(self.card_identity_hint)
-        self._update_card_identity_hint()
-        card_identity_hint = QLabel(
-            "This identity travels with the card. New cards start with Station settings; "
-            "editing it here does not change your station identity.")
-        card_identity_hint.setObjectName("supportingText")
-        card_identity_hint.setAccessibleName("Card identity help")
-        card_identity_hint.setWordWrap(True)
-        side.addWidget(card_identity_hint)
-        self.editor_format_expanded = False
-        self.editor_format_toggle = QPushButton()
-        self.editor_format_toggle.setAccessibleDescription(
-            "Show or hide exact canvas dimensions and palette size.")
-        self.editor_format_toggle.clicked.connect(self._toggle_editor_format)
-        side.addWidget(self.editor_format_toggle)
-        self.editor_format_widget = QWidget()
-        format_form = QFormLayout()
-        self.canvas_size_combo = QComboBox()
-        for value in (16, 32, 64): self.canvas_size_combo.addItem(f"{value} × {value}", f"{value}x{value}")
-        self.color_count_combo = QComboBox()
-        for value in (2, 8, 16, 32): self.color_count_combo.addItem(f"{value} colors", value)
-        self.canvas_size_combo.currentIndexChanged.connect(self.change_card_format)
-        self.color_count_combo.currentIndexChanged.connect(self.change_card_format)
-        format_form.addRow("Canvas", self.canvas_size_combo); format_form.addRow("Palette", self.color_count_combo)
-        self.editor_format_widget.setLayout(format_form)
-        self.editor_format_widget.setVisible(False)
-        side.addWidget(self.editor_format_widget)
-        self._update_editor_format_disclosure()
-        self.paint_color_combo = QComboBox(); self.paint_color_combo.currentIndexChanged.connect(self.select_color)
+        self.editor_splitter.setStretchFactor(0, 3)
+        self.editor_splitter.setStretchFactor(1, 2)
+        self._configure_workspace_splitter(self.editor_splitter, "editor", [760, 340])
+
+        # Palette — always immediately available when editing.
+        palette_side, self.editor_palette_toggle = self._editor_dock(side, "Palette")
+        colors_heading = QHBoxLayout()
+        self.palette_selected_label = QLabel()
+        self.palette_selected_label.setObjectName("supportingText")
+        self.palette_selected_label.setAccessibleName("Selected paint color")
+        colors_heading.addWidget(self.palette_selected_label)
+        colors_heading.addStretch()
+        palette_side.addLayout(colors_heading)
+        self.paint_color_combo = QComboBox()
         self.paint_color_combo.setVisible(False)
+        self.paint_color_combo.currentIndexChanged.connect(self.select_color)
         self.palette_widget = QWidget()
         self.palette_layout = QGridLayout(self.palette_widget)
         self.palette_layout.setContentsMargins(0, 0, 0, 0)
         self.palette_layout.setHorizontalSpacing(5)
         self.palette_layout.setVerticalSpacing(5)
         self.palette_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        colors_heading = QHBoxLayout()
-        title = QLabel("Colors"); title.setObjectName("sectionTitle")
-        colors_heading.addWidget(title)
-        colors_heading.addStretch(1)
-        self.palette_selected_label = QLabel()
-        self.palette_selected_label.setObjectName("supportingText")
-        self.palette_selected_label.setAccessibleName("Selected paint color")
-        colors_heading.addWidget(self.palette_selected_label)
-        side.addLayout(colors_heading)
-        side.addWidget(self.palette_widget)
-        self._set_editor_format(self.card)
-        stamps_heading = QLabel("My stamps")
-        stamps_heading.setObjectName("sectionTitle")
-        side.addWidget(stamps_heading)
-        self.stamp_list = StampShelf(); self.stamp_list.setMaximumHeight(180)
-        self.stamp_list.setViewMode(QListWidget.ViewMode.IconMode); self.stamp_list.setIconSize(QSize(48, 48))
-        self.stamp_list.setGridSize(QSize(82, 78)); self.stamp_list.setResizeMode(QListWidget.ResizeMode.Adjust)
+        palette_side.addWidget(self.palette_widget)
+
+        # Stamps — one tool shelf, with actions shown only when relevant.
+        stamps_side, self.editor_stamps_toggle = self._editor_dock(side, "Stamps")
+        self.stamp_list = StampShelf()
+        self.stamp_list.setMaximumHeight(172)
+        self.stamp_list.setViewMode(QListWidget.ViewMode.IconMode)
+        self.stamp_list.setIconSize(QSize(48, 48))
+        self.stamp_list.setGridSize(QSize(82, 78))
+        self.stamp_list.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.stamp_list.itemDoubleClicked.connect(lambda _item: self.stamp_selected())
         self.stamp_list.currentItemChanged.connect(lambda *_: self._sync_editor_controls())
-        side.addWidget(self.stamp_list)
-        self.stamp_shelf_hint = QLabel(
-            "Select a saved stamp to place or edit it. Double-click places it on the card.")
+        stamps_side.addWidget(self.stamp_list)
+        self.stamp_shelf_hint = QLabel("Choose a stamp and double-click to place it.")
+        self.stamp_shelf_hint.setObjectName("supportingText")
         self.stamp_shelf_hint.setWordWrap(True)
-        self.stamp_shelf_hint.setStyleSheet(semantic_text_style(padding="2px"))
-        side.addWidget(self.stamp_shelf_hint)
-        stamp_buttons = QHBoxLayout(); stamp_buttons.setSpacing(SPACING["sm"])
-        self.new_stamp_button = QPushButton("New stamp…")
-        self.new_stamp_button.setToolTip("Create a reusable text, drawn, or imported stamp.")
+        stamps_side.addWidget(self.stamp_shelf_hint)
+        stamp_buttons = QHBoxLayout()
+        self.new_stamp_button = QPushButton("New stamp ▾")
         stamp_menu = QMenu(self.new_stamp_button)
         stamp_menu.addAction("Text / emoji…", self.create_text_stamp)
         stamp_menu.addAction("Draw a stamp…", self.draw_stamp)
@@ -4351,59 +4521,89 @@ class MainWindow(QMainWindow):
         stamp_buttons.addWidget(self.new_stamp_button)
         self.place_stamp_button = QPushButton("Place selected stamp")
         self.place_stamp_button.clicked.connect(self.stamp_selected)
-        stamp_buttons.addWidget(self.place_stamp_button, 1)
-        side.addLayout(stamp_buttons)
+        stamp_buttons.addWidget(self.place_stamp_button)
+        stamps_side.addLayout(stamp_buttons)
         self.stamp_actions_widget = QWidget()
-        stamp_actions = QHBoxLayout(self.stamp_actions_widget)
-        stamp_actions.setContentsMargins(0, 0, 0, 0)
-        self.edit_stamp_button = QPushButton("Edit stamp…")
+        actions = QHBoxLayout(self.stamp_actions_widget)
+        actions.setContentsMargins(0, 0, 0, 0)
+        self.edit_stamp_button = QPushButton("Edit…")
         self.edit_stamp_button.clicked.connect(self.edit_stamp)
-        stamp_actions.addWidget(self.edit_stamp_button)
-        self.delete_stamp_button = QPushButton("Delete saved stamp")
+        actions.addWidget(self.edit_stamp_button)
+        self.delete_stamp_button = QPushButton("Delete")
         self.delete_stamp_button.clicked.connect(self.remove_stamp)
-        stamp_actions.addWidget(self.delete_stamp_button)
-        side.addWidget(self.stamp_actions_widget)
+        actions.addWidget(self.delete_stamp_button)
+        stamps_side.addWidget(self.stamp_actions_widget)
         self.stamp_resize_controls = QWidget()
         stamp_size_row = QHBoxLayout(self.stamp_resize_controls)
         stamp_size_row.setContentsMargins(0, 0, 0, 0)
-        self.placed_stamp_width = QSpinBox(); self.placed_stamp_width.setRange(1, 64); self.placed_stamp_width.setSuffix(" px")
-        self.resize_stamp_button = QPushButton("Resize placed stamp")
+        self.placed_stamp_width = QSpinBox()
+        self.placed_stamp_width.setRange(1, 64)
+        self.placed_stamp_width.setSuffix(" px")
+        self.resize_stamp_button = QPushButton("Resize")
         self.resize_stamp_button.clicked.connect(self.resize_placed_stamp)
-        stamp_size_row.addWidget(self.placed_stamp_width); stamp_size_row.addWidget(self.resize_stamp_button)
-        side.addWidget(self.stamp_resize_controls)
-        self.remove_placed_stamp_button = QPushButton("Remove placed stamp")
+        stamp_size_row.addWidget(self.placed_stamp_width)
+        stamp_size_row.addWidget(self.resize_stamp_button)
+        stamps_side.addWidget(self.stamp_resize_controls)
+        stamp_extra = QHBoxLayout()
+        self.remove_placed_stamp_button = QPushButton("Remove placed")
         self.remove_placed_stamp_button.clicked.connect(self.remove_placed_stamp)
-        side.addWidget(self.remove_placed_stamp_button)
-        self.convert_stamp_button = QPushButton("Convert stamp to pixels")
-        self.convert_stamp_button.setToolTip("Merge the selected stamp and stamps beneath it into editable pixels. Undo restores stamps.")
+        stamp_extra.addWidget(self.remove_placed_stamp_button)
+        self.convert_stamp_button = QPushButton("Flatten to pixels")
         self.convert_stamp_button.clicked.connect(lambda: self.canvas.convert_stamp_to_pixels())
-        side.addWidget(self.convert_stamp_button)
-        self.save_selection_stamp_button = QPushButton("Convert selection to stamp")
+        stamp_extra.addWidget(self.convert_stamp_button)
+        stamps_side.addLayout(stamp_extra)
+        self.save_selection_stamp_button = QPushButton("Save selection as stamp")
         self.save_selection_stamp_button.clicked.connect(self.save_canvas_selection_stamp)
-        side.addWidget(self.save_selection_stamp_button)
-        self.listen_canvas_button = QPushButton("Listen in…")
-        self.listen_canvas_button.clicked.connect(self.listen_to_canvas)
-        side.addWidget(self.listen_canvas_button)
+        stamps_side.addWidget(self.save_selection_stamp_button)
         self.load_stamps()
-        file_heading = QLabel("Card file")
-        file_heading.setObjectName("sectionTitle")
-        side.addWidget(file_heading)
-        buttons = QGridLayout(); buttons.setSpacing(SPACING["sm"])
-        for index, (label, handler) in enumerate((("New", self.new_card), ("Open…", self.open_card), ("Save", self.save_card), ("Paste image", self.paste_card_image), ("Make QR card…", self.create_qr_card), ("Import PNG…", self.import_aseprite_png), ("Export PNG…", self.export_aseprite_png), ("Export WAV…", self.export_wav))):
-            b = QPushButton(label); b.clicked.connect(handler); buttons.addWidget(b, index // 3, index % 3)
-            if label == "Save":
-                self.editor_save_button = b
-                self.editor_save_button.setAccessibleDescription(
-                    "Save the card after its call sign and grid meet the card format limits.")
-        side.addLayout(buttons)
+
+        # Card identity/format are properties, not part of the primary painting flow.
+        props_side, self.editor_properties_toggle = self._editor_dock(
+            side, "Card properties", expanded=False)
+        form = QFormLayout()
+        self.call = QLineEdit(self.card.callsign)
+        self.grid = QLineEdit(self.card.grid)
+        self.call.textChanged.connect(self._update_card_identity_hint)
+        self.grid.textChanged.connect(self._update_card_identity_hint)
+        self.call.textChanged.connect(self._update_editor_saved_state)
+        self.grid.textChanged.connect(self._update_editor_saved_state)
+        form.addRow("Call sign", self.call)
+        form.addRow("Grid", self.grid)
+        props_side.addLayout(form)
+        self.card_identity_hint = QLabel()
+        self.card_identity_hint.setObjectName("supportingText")
+        self.card_identity_hint.setWordWrap(True)
+        self.card_identity_hint.setAccessibleName("Card identity format guidance")
+        props_side.addWidget(self.card_identity_hint)
+        self.editor_format_expanded = False
+        self.editor_format_toggle = QPushButton()
+        self.editor_format_toggle.setAccessibleDescription(
+            "Show or hide exact canvas dimensions and palette size.")
+        self.editor_format_toggle.clicked.connect(self._toggle_editor_format)
+        props_side.addWidget(self.editor_format_toggle)
+        self.editor_format_widget = QWidget()
+        format_form = QFormLayout(self.editor_format_widget)
+        self.canvas_size_combo = QComboBox()
+        for value in (16, 32, 64):
+            self.canvas_size_combo.addItem(f"{value} × {value}", f"{value}x{value}")
+        self.color_count_combo = QComboBox()
+        for value in (2, 8, 16, 32):
+            self.color_count_combo.addItem(f"{value} colors", value)
+        self.canvas_size_combo.currentIndexChanged.connect(self.change_card_format)
+        self.color_count_combo.currentIndexChanged.connect(self.change_card_format)
+        format_form.addRow("Canvas", self.canvas_size_combo)
+        format_form.addRow("Palette", self.color_count_combo)
+        self.editor_format_widget.hide()
+        props_side.addWidget(self.editor_format_widget)
+        self._update_editor_format_disclosure()
+        self._set_editor_format(self.card)
         self._update_card_identity_hint()
-        side.addStretch()
-        self.status = QLabel("Ready")
-        self.status.setWordWrap(True)
-        side.addWidget(self.status)
+
         self.animation_author = AnimationAuthor(self)
-        drawing.insertWidget(0, self.animation_author)
+        center_layout.insertWidget(2, self.animation_author)
+        # This panel appears only once frame 2 exists.
         side.insertWidget(0, self.animation_author.preview_panel)
+        side.addStretch(1)
         self.call.textChanged.connect(self.animation_author.changed)
         self.grid.textChanged.connect(self.animation_author.changed)
         self.canvas.image_dropped.connect(self.place_stamp_image)
@@ -4412,7 +4612,33 @@ class MainWindow(QMainWindow):
         self.canvas.changed.connect(self._update_editor_saved_state)
         self.canvas.placed_stamp_removed.connect(self._on_placed_stamp_removed)
         self._sync_editor_controls()
+        self._refresh_editor_zoom()
         return w
+
+    def _refresh_editor_zoom(self, *_):
+        if not hasattr(self, "editor_canvas_view"):
+            return
+        value = self.editor_zoom_combo.currentData()
+        if value == "fit":
+            viewport = self.editor_canvas_view.viewport().size()
+            side = max(320, min(viewport.width() - 18, viewport.height() - 18))
+        else:
+            side = max(320, round(512 * int(value or 100) / 100))
+        if self.canvas.width() != side or self.canvas.height() != side:
+            self.canvas.setFixedSize(side, side)
+        self.editor_canvas_info.setText(f"{self.card.width} × {self.card.height} px")
+
+    def _step_editor_zoom(self, direction):
+        current = self.editor_zoom_combo.currentIndex()
+        choices = [50, 75, 100, 150, 200, 300]
+        value = self.editor_zoom_combo.currentData()
+        if value == "fit":
+            value = max(50, round(self.canvas.width() * 100 / 512))
+        if direction > 0:
+            new = next((x for x in choices if x > value), 300)
+        else:
+            new = next((x for x in reversed(choices) if x < value), 50)
+        self.editor_zoom_combo.setCurrentIndex(self.editor_zoom_combo.findData(new))
 
     def _on_placed_stamp_removed(self):
         self.status.setText("Placed stamp removed from the card.")
@@ -4420,8 +4646,9 @@ class MainWindow(QMainWindow):
 
     def _toggle_editor_shapes(self, expanded):
         self.editor_shapes_widget.setVisible(expanded)
-        self.editor_shapes_toggle.setText(
-            ("▾" if expanded else "▸") + " Shape tools · rectangles and ellipses")
+        self.editor_shapes_toggle.setText("▾" if expanded else "▱")
+        self.editor_shapes_toggle.setToolTip(
+            "Hide shapes" if expanded else "Show rectangles and ellipses")
         self.settings.setValue("ui/editor/show_shapes", bool(expanded))
 
     def _update_editor_tool_hint(self):
@@ -4443,11 +4670,21 @@ class MainWindow(QMainWindow):
             self.canvas.selection_rect = QRect(); self.canvas.selection_handle = QRect()
         self.canvas.update_accessible_description()
         self.tool_buttons[tool].setChecked(True)
+        self._sync_editor_tool_options()
         if tool in {"rect", "filled_rect", "ellipse", "filled_ellipse"}:
             self.editor_shapes_toggle.setChecked(True)
         self._update_editor_tool_hint()
 
+    def _sync_editor_tool_options(self):
+        if not hasattr(self, "editor_mirror"):
+            return
+        tool = self.canvas.tool
+        self.editor_mirror.setVisible(tool in {"draw", "erase"})
+        self.editor_centered.setVisible(
+            tool in {"rect", "filled_rect", "ellipse", "filled_ellipse"})
+
     def _sync_editor_controls(self):
+        self._sync_editor_tool_options()
         self.undo_button.setEnabled(bool(self.canvas.undo_stack))
         self.redo_button.setEnabled(bool(self.canvas.redo_stack))
         self.tool_buttons[self.canvas.tool].setChecked(True)
@@ -4489,6 +4726,8 @@ class MainWindow(QMainWindow):
             self.canvas_size_combo.setCurrentIndex(index)
             self.color_count_combo.setCurrentIndex(max(0, self.color_count_combo.findData(len(card.palette))))
         self._update_editor_format_disclosure()
+        if hasattr(self, "editor_canvas_info"):
+            self.editor_canvas_info.setText(f"{card.width} × {card.height} px")
         self._refresh_paint_colors()
 
     def _update_editor_format_disclosure(self):

@@ -246,7 +246,7 @@ def test_preview_and_editor_sidebar_fit_default_window(editor):
     editor.animation_author.start()
     QApplication.processEvents()
     from PySide6.QtWidgets import QScrollArea
-    sidebar = editor.editor_dialog.findChild(QScrollArea)
+    sidebar = editor.editor_dialog.findChild(QScrollArea, "editorSidebar")
     assert sidebar.widget().width() <= sidebar.viewport().width()
 
 

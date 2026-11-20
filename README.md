@@ -29,16 +29,28 @@ Example cards made in the editor:
 
 ### Card editor
 
-The default toolbar keeps **Draw**, **Erase**, **Fill**, **Pick**, **Select** and
-**Stamp** available beside the canvas. Expand **Shape tools** for rectangle and
-ellipse drawing. The selected color is highlighted in the palette, with its
-index and hex value shown alongside. **New stamp…** offers reusable text/emoji,
-drawn, and imported stamps; double-click a stamp in the shelf to place it.
+The card editor uses an Aseprite-inspired workbench: select pencil, eraser,
+fill, eyedropper, marquee, or stamp movement from the **left tool rail**.
+Expand the shape icon for outline/filled rectangles and ellipses. The **canvas**
+is centered in a scrollable viewport; use **Fit**, 50–300% zoom, or Ctrl++ /
+Ctrl+- to inspect pixels. The top bar holds File, Save, Undo/Redo and clipboard
+actions. Mirror or Center-out options appear only for tools that support them.
 
-Select **Add frame 2** to animate a card. Frame 2 begins as a copy of frame 1;
+The **right dock** has collapsible Palette, Stamps and Card properties. The
+selected color displays its index and hex value; New stamp offers reusable
+text/emoji, drawn or imported stamps. Double-click a stamp to place it.
+Card properties contain callsign, grid and technical image-format settings.
+
+Select **Add frame 2** in the timeline beneath the canvas to animate a card.
+Frame 2 begins as a copy of frame 1;
 draw a change or move a placed stamp, then use the live preview. Onion skin,
 frame duration and switching remain visible; **More tools** exposes copying
 selections or replacing the other frame. Frame switching does not transmit.
+
+**My Cards** uses a gallery with a selected-card inspector. Selecting a card
+reveals edit, send-stage assignment, export, copy and advanced actions without
+changing the artwork or transmitting. Use Ctrl+1, Ctrl+2, Ctrl+3 to navigate
+Operate, My Cards, and Contacts.
 
 ### Two-frame animation
 

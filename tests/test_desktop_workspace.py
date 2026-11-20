@@ -52,7 +52,7 @@ def test_compact_layout_keeps_artwork_and_send_actions_visible(workspace):
         w.resize(*size)
         for _ in range(5):
             QApplication.processEvents()
-        assert splitter.width() < 760
+        assert splitter.width() < 820
         assert splitter.orientation() == Qt.Orientation.Vertical
         for widget in (w.outgoing_art, w.browse_outgoing_cards, *w.stage_send_buttons.values()):
             assert widget.visibleRegion().boundingRect().contains(widget.rect())
@@ -192,7 +192,7 @@ def test_large_text_keeps_editor_form_inside_column(workspace):
     workspace.editor_dialog.show()
     workspace._apply_interface_text_size(115)
     QApplication.processEvents()
-    sidebar = workspace.editor_dialog.findChild(QScrollArea)
+    sidebar = workspace.editor_dialog.findChild(QScrollArea, "editorSidebar")
     assert sidebar.widget().width() <= sidebar.viewport().width()
     workspace._apply_interface_text_size(100)
     workspace.editor_baseline = workspace.editor_signature()
@@ -365,3 +365,96 @@ def test_editor_canvas_has_usable_space_at_common_display_sizes(workspace):
     assert w.canvas.visibleRegion().boundingRect().width() >= 320
     assert w.editor_done_button.isVisible()
     w._apply_interface_text_size(100)
+
+
+def test_editor_workbench_rail_docks_and_zoom_do_not_transmit(workspace):
+    from PySide6.QtCore import Qt
+    w = workspace
+    w.editor_dialog.show()
+    for _ in range(5):
+        QApplication.processEvents()
+    assert w.editor_canvas_view.objectName() == "editorCanvasViewport"
+    assert w.editor_zoom_combo.currentData() == "fit"
+    assert w.editor_palette_toggle.isChecked()
+    assert w.editor_stamps_toggle.isChecked()
+    assert not w.editor_properties_toggle.isChecked()
+    assert w.tool_buttons["draw"].isVisible()
+    assert w.editor_mirror.isVisible()
+    assert not w.editor_centered.isVisible()
+    assert w.canvas.width() >= 320
+
+    baseline = w.editor_signature()
+    with patch.object(w, "transmit_exchange") as send:
+        w.editor_zoom_combo.setCurrentIndex(w.editor_zoom_combo.findData(200))
+        assert w.canvas.width() == 1024
+        assert w.editor_canvas_view.horizontalScrollBar().maximum() > 0
+        w.editor_zoom_out.click()
+        assert w.editor_zoom_combo.currentData() == 150
+        w.editor_zoom_combo.setCurrentIndex(w.editor_zoom_combo.findData("fit"))
+        assert w.canvas.width() <= max(320, w.editor_canvas_view.viewport().width())
+
+        w.tool_buttons["erase"].click()
+        assert w.canvas.tool == "erase"
+        assert w.editor_mirror.isVisible()
+        w.tool_buttons["select"].click()
+        assert not w.editor_mirror.isVisible()
+        assert not w.editor_centered.isVisible()
+        w.tool_buttons["rect"].click()
+        assert w.editor_shapes_widget.isVisible()
+        assert w.editor_centered.isVisible()
+
+        w.editor_properties_toggle.click()
+        assert w.editor_properties_toggle.isChecked()
+        assert w.call.isVisible()
+        w.editor_stamps_toggle.click()
+        assert not w.stamp_list.isVisible()
+        w.editor_stamps_toggle.click()
+        assert w.stamp_list.isVisible()
+        send.assert_not_called()
+    assert w.editor_signature() == baseline
+
+
+def test_editor_file_menu_and_animation_timeline(workspace):
+    w = workspace
+    w.editor_dialog.show()
+    for _ in range(5):
+        QApplication.processEvents()
+    menu = next(button.menu() for button in w.editor_dialog.findChildren(pixelqso.QPushButton)
+                if button.text().startswith("File") and button.menu() is not None)
+    labels = [action.text() for action in menu.actions()]
+    for name in ("New card", "Open card…", "Import indexed PNG…",
+                 "Export indexed PNG…", "Make QR card…"):
+        assert name in labels
+    assert w.editor_done_button.isVisible()
+    w.animation_author.start()
+    QApplication.processEvents()
+    assert w.animation_author.controls.isVisible()
+    assert w.animation_author.preview_panel.isVisible()
+    assert w.animation_author.frames[1]["card"].card_id != w.animation_author.frames[0]["card"].card_id
+    assert w.canvas.visibleRegion().boundingRect().height() >= 320
+
+
+def test_card_collection_inspector_is_contextual(workspace, tmp_path):
+    import json
+    from PySide6.QtCore import Qt
+    w = workspace
+    w.tabs.setCurrentIndex(1)
+    QApplication.processEvents()
+    assert w.library_inspector_preview.pixmap().isNull()
+    path = tmp_path / "cards" / "choice.json"
+    path.write_text(json.dumps({
+        "callsign": "W7TEST", "grid": "CN85", "card_id": 123,
+        "width": 32, "height": 32, "palette": w.card.palette,
+        "pixels": [1] * 1024,
+    }))
+    w.refresh_card_library()
+    target = next(w.library_list.item(i) for i in range(w.library_list.count())
+                  if w.library_list.item(i).data(Qt.ItemDataRole.UserRole) == str(path))
+    w.library_list.setCurrentItem(target)
+    assert "choice" in w.library_inspector_name.text()
+    assert not w.library_inspector_preview.pixmap().isNull()
+    assert w.open_library_button.isVisible()
+    assert w.use_library_card_button.isVisible()
+    w.library_list.clearSelection()
+    w.library_list.setCurrentRow(-1)
+    assert w.library_inspector_preview.pixmap().isNull()

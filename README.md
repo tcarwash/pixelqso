@@ -181,8 +181,11 @@ checksum verification. Version 4 transmissions require a peer with v4 support.
 
 ## Data2G host
 
-On a new install, Pixel QSO selects Data2G and starts the managed local host
-when the app opens, using the configured host audio and rigctld settings. To
+On a new install, Pixel QSO selects Data2G and guides you through entering your
+station identity, personalizing a card, and connecting the host. The placeholder
+call sign does not automatically connect. Once you have a valid station identity,
+Pixel QSO starts the configured Data2G host when the app opens, using the
+configured host audio and rigctld settings. To
 change those settings after startup, disconnect the Data2G host in Station
 settings, edit its settings, then connect again. To connect to a remote host,
 disconnect the managed host, select **Remote Data2G host**, and enter its

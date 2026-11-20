@@ -2569,7 +2569,10 @@ class MainWindow(QMainWindow):
         self.refresh_qso_log()
         self._update_data2g_host_controls()
         if self.backend_combo.currentData() == "data2g":
-            QTimer.singleShot(0, self._connect_data2g_host)
+            # A fresh placeholder identity must not open a group and lock
+            # the call-sign field before the operator can enter their own.
+            if self._station_identity_feedback().startswith("Station details look valid"):
+                QTimer.singleShot(0, self._connect_data2g_host)
         else:
             if self._should_auto_connect_rig():
                 QTimer.singleShot(0, self.connect_rig)
@@ -2693,6 +2696,8 @@ class MainWindow(QMainWindow):
                     ("YOUR CONTACTS", "Every card has a story.", "Revisit the people and artwork you have met on the air."))[index]
             self.workspace_eyebrow.setText(copy[0]); self.workspace_title.setText(copy[1])
             self.workspace_description.setText(copy[2]); self.workspace_navigation.button(index).setChecked(True)
+            if index == 1:
+                self._update_export_buttons()
         pages.currentChanged.connect(select_page); select_page(pages.currentIndex())
         return shell
 
@@ -2767,6 +2772,12 @@ class MainWindow(QMainWindow):
         self.create_library_button = create
         starter = QPushButton("Use starter card…"); starter.clicked.connect(self.open_starter_card_picker); heading.addWidget(starter)
         self.starter_library_button = starter
+        self.use_library_card_button = QPushButton("Use for reply")
+        self.use_library_card_button.setObjectName("primaryAction")
+        self.use_library_card_button.setToolTip("Assign the selected saved card to the outgoing stage. Does not transmit.")
+        self.use_library_card_button.clicked.connect(self._use_selected_library_card)
+        self.use_library_card_button.hide()
+        heading.addWidget(self.use_library_card_button)
         open_button = QPushButton("Open selected"); open_button.clicked.connect(self._open_library_item); heading.addWidget(open_button)
         self.open_library_button = open_button
         selection_actions = QHBoxLayout(); selection_actions.setSpacing(SPACING["sm"])
@@ -2821,6 +2832,10 @@ class MainWindow(QMainWindow):
         self.library_clear_button.setVisible(False)
         library_controls.addWidget(self.library_clear_button)
         layout.addLayout(library_controls)
+        self.library_choice_hint = QLabel()
+        self.library_choice_hint.setObjectName("supportingText")
+        self.library_choice_hint.setWordWrap(True)
+        layout.addWidget(self.library_choice_hint)
         self.library_list = QListWidget(); self.library_list.setViewMode(QListWidget.ViewMode.IconMode)
         self.library_list.setIconSize(QSize(190, 238)); self.library_list.setGridSize(QSize(218, 288))
         self.library_list.setMovement(QListWidget.Movement.Static); self.library_list.setSpacing(SPACING["lg"])
@@ -3029,8 +3044,12 @@ class MainWindow(QMainWindow):
         del stage_blockers
         for combo in self.stage_card_combos.values():
             combo.setToolTip(combo.currentText())
+        self._has_saved_library_cards = any(
+            self.library_list.item(row).data(Qt.ItemDataRole.UserRole + 1) in {"my", "sent"}
+            for row in range(self.library_list.count()))
         self.filter_card_library()
         self._refresh_transfer_summary()
+        self._refresh_getting_started()
 
     def filter_card_library(self, *_):
         if not hasattr(self, "library_list"): return
@@ -3226,6 +3245,7 @@ class MainWindow(QMainWindow):
         self._update_editor_saved_state()
         self.editor_dialog.exec()
         self.refresh_card_library()
+        self._highlight_saved_library_card()
 
     def open_starter_card_picker(self):
         paths = sorted(STARTER_CARDS_PATH.glob("*.json"), key=lambda path: path.stem.casefold())
@@ -3314,6 +3334,7 @@ class MainWindow(QMainWindow):
         self.editor_baseline = self.editor_signature()
         self._set_editor_title("Create or edit card")
         self.refresh_card_library()
+        self._highlight_saved_library_card()
         return True
 
     def open_selected_library_card(self):
@@ -3337,6 +3358,61 @@ class MainWindow(QMainWindow):
             self._load_starter_card(path)
         else:
             self.open_selected_library_card()
+
+    def _browse_outgoing_cards(self):
+        """Open the gallery with the selected stage intact, without sending."""
+        if self._station_operation_active():
+            return
+        self.tabs.setCurrentIndex(1)
+        self.library_search.clear()
+        has_starters = any(
+            self.library_list.item(row).data(Qt.ItemDataRole.UserRole + 1) == "starter"
+            for row in range(self.library_list.count()))
+        self.library_filter.setCurrentIndex(self.library_filter.findData(
+            "starter" if not self._has_saved_library_cards and has_starters else "all"))
+        self._update_export_buttons()
+
+    def _highlight_saved_library_card(self):
+        if self.card_path is None or self.tabs.currentIndex() != 1:
+            return
+        target = Path(self.card_path)
+        for row in range(self.library_list.count()):
+            item = self.library_list.item(row)
+            if Path(item.data(Qt.ItemDataRole.UserRole)) == target:
+                self.library_search.clear()
+                self.library_filter.setCurrentIndex(self.library_filter.findData(
+                    item.data(Qt.ItemDataRole.UserRole + 1)))
+                self.library_list.setCurrentItem(item)
+                self.library_list.scrollToItem(item)
+                return
+
+    def _library_outgoing_destination(self):
+        if self.exchange_mode.currentIndex() == 2:
+            return "beacon", self.card_combo
+        stage = self._outgoing_message_type()
+        label = {"cq": "CQ", "exchange": "reply", "report73": "report", "final73": "73"}.get(stage, "reply")
+        return label, self.stage_card_combos.get(stage)
+
+    def _use_selected_library_card(self):
+        """Assign an existing card to the current stage, never transmit it."""
+        if self._station_operation_active():
+            QMessageBox.information(self, "Exchange in progress",
+                "Finish the current operation before changing its outgoing card.")
+            return
+        item, _ = self._selected_library_item()
+        if item is None or item.data(Qt.ItemDataRole.UserRole + 1) not in {"my", "sent"}:
+            return
+        label, combo = self._library_outgoing_destination()
+        path = item.data(Qt.ItemDataRole.UserRole)
+        index = combo.findData(path) if combo is not None else -1
+        if index < 0 or not Path(path).is_file():
+            QMessageBox.information(self, "Card unavailable",
+                "Refresh My Cards and choose a saved card.")
+            self.refresh_card_library()
+            return
+        combo.setCurrentIndex(index)
+        self._refresh_transfer_summary()
+        self.tabs.setCurrentIndex(0)
 
     def delete_library_card(self):
         item, widget = self._selected_library_item()
@@ -3670,7 +3746,21 @@ class MainWindow(QMainWindow):
             kind = item.data(Qt.ItemDataRole.UserRole + 1) if selected else None
             saved = selected and kind in {"my", "sent"}
             self.open_library_button.setVisible(selected)
-            self.open_library_button.setText("Use starter card" if kind == "starter" else "Open selected")
+            self.open_library_button.setText("Personalize starter" if kind == "starter" else "Edit selected")
+            if hasattr(self, "library_choice_hint"):
+                label, _ = self._library_outgoing_destination()
+                self.use_library_card_button.setText(f"Use for {label}")
+                self.use_library_card_button.setVisible(saved)
+                self.use_library_card_button.setEnabled(saved and not self._station_operation_active())
+                if kind == "starter":
+                    hint = "Personalize this starter in the editor, then save your own copy."
+                elif saved:
+                    hint = f"Use this card for {label}, or edit it first. Assigning a card does not transmit."
+                elif not getattr(self, "_has_saved_library_cards", False):
+                    hint = "Start with any design below, or create a card from scratch. Save it before assigning it to a send stage."
+                else:
+                    hint = f"Select a saved card to assign it to {label}, or choose a starter to personalize."
+                self.library_choice_hint.setText(hint)
             self.export_card_button.setVisible(saved)
             self.copy_card_button.setVisible(saved)
             self.more_card_button.setVisible(saved)
@@ -4900,7 +4990,7 @@ class MainWindow(QMainWindow):
         w = QWidget(); root = QVBoxLayout(w)
         root.setContentsMargins(*([SPACING["lg"]] * 4)); root.setSpacing(SPACING["md"])
         top = QHBoxLayout(); top.setSpacing(SPACING["sm"])
-        self.station_button = QPushButton("Station settings"); self.station_button.clicked.connect(self.open_station_settings); top.addWidget(self.station_button)
+        self.station_button = QPushButton("Station settings"); self.station_button.clicked.connect(self._open_operate_station_settings); top.addWidget(self.station_button)
         self.station_identity = QLabel()
         self.station_identity.setObjectName("stationIdentity")
         self.station_identity.setAccessibleDescription("Current station callsign and grid square.")
@@ -5192,7 +5282,8 @@ class MainWindow(QMainWindow):
             combo.setObjectName("stageCardPicker")
             combo.setAccessibleName(f"{title} card")
             combo.currentTextChanged.connect(combo.setToolTip)
-            combo.currentIndexChanged.connect(self._save_auto_stage_cards)
+            combo.currentIndexChanged.connect(
+                lambda _index, s=stage: self._save_auto_stage_cards(s))
             combo.currentIndexChanged.connect(
                 lambda _index, s=stage: self._select_manual_stage(s))
             combo.currentIndexChanged.connect(self._refresh_transfer_summary)
@@ -5368,8 +5459,8 @@ class MainWindow(QMainWindow):
         outgoing_header.addStretch(1)
         self.browse_outgoing_cards = QPushButton("Choose card…")
         self.browse_outgoing_cards.setObjectName("chooseOutgoingCard")
-        self.browse_outgoing_cards.setToolTip("Open My Cards to create, edit or select your outgoing artwork.")
-        self.browse_outgoing_cards.clicked.connect(lambda: self.tabs.setCurrentIndex(1))
+        self.browse_outgoing_cards.setToolTip("Open My Cards to choose artwork for the selected send stage.")
+        self.browse_outgoing_cards.clicked.connect(self._browse_outgoing_cards)
         outgoing_header.addWidget(self.browse_outgoing_cards)
         left_panel.addLayout(outgoing_header)
         left_panel.addWidget(self.outgoing_art, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -5429,6 +5520,11 @@ class MainWindow(QMainWindow):
         self.session_wall_empty.setAccessibleDescription(
             "Identified provisional cards appear here while integrity checks are still in progress.")
         wall_list_layout.addWidget(self.session_wall_empty, 1)
+        self.getting_started_button = QPushButton()
+        self.getting_started_button.setObjectName("primaryAction")
+        self.getting_started_button.clicked.connect(self._getting_started_action)
+        self.getting_started_button.hide()
+        wall_list_layout.addWidget(self.getting_started_button)
         self.card_requests_toggle = QPushButton("Card requests")
         self.card_requests_toggle.setCheckable(True)
         self.card_requests_toggle.setObjectName("activityDisclosure")
@@ -5634,6 +5730,67 @@ class MainWindow(QMainWindow):
         if callsign and grid:
             identity += f" · {grid}"
         self.station_identity.setText(identity)
+        self._refresh_getting_started()
+
+    def _refresh_getting_started(self):
+        """Keep the empty session useful until setup and artwork are ready."""
+        if not hasattr(self, "getting_started_button"):
+            return
+        valid = self._station_identity_feedback().startswith("Station details look valid")
+        saved = getattr(self, "_has_saved_library_cards", False)
+        connected = self._station_connection_is_active()
+        if not valid:
+            action, title = "identity", "Make Pixel QSO yours"
+            message = "Set your station call sign and optional grid square."
+            button = "Set up station identity"
+        elif not saved:
+            action, title = "card", "Create your first card"
+            message = "Choose a starter design or draw your own, then save it."
+            button = "Explore starter cards"
+        elif not connected:
+            action, title = "radio", "Connect your station"
+            message = "Configure your modem and radio to receive cards."
+            button = "Open Audio & Radio"
+        else:
+            action, title = None, "Waiting for your next contact"
+            message = "Received artwork appears here.<br>Partial cards are marked provisional."
+            button = ""
+        self._getting_started_next = action
+        state = (action, valid, saved, connected)
+        if state == getattr(self, "_getting_started_state", None):
+            return
+        self._getting_started_state = state
+        if action:
+            step = ('1 · Identity' if not valid else '✓ Identity') + " &nbsp;·&nbsp; " + (
+                '✓ Card' if saved else '2 · Card') + " &nbsp;·&nbsp; " + (
+                '✓ Connected' if connected else '3 · Connection')
+            content = (f'<div style="color:{COLORS["text_soft"]};font-size:12px">{step}</div>'
+                       f'<div style="font-size:19px;color:{COLORS["text_bright"]};font-weight:700">{title}</div>'
+                       f'<div>{message}</div>')
+        else:
+            content = (f'<div style="font-size:32px;color:{COLORS["card_frame"]}">▦</div>'
+                       f'<div style="font-size:19px;color:{COLORS["text_bright"]};font-weight:700">{title}</div>'
+                       f'<div>{message}</div>')
+        self.session_wall_empty.setText(content)
+        self.getting_started_button.setText(button)
+        self.getting_started_button.setVisible(bool(action) and not self.session_wall_empty.isHidden())
+
+    def _open_operate_station_settings(self):
+        if not self._station_identity_feedback().startswith("Station details look valid"):
+            self.open_station_settings(0)
+        elif not self._station_connection_is_active():
+            self.open_station_settings(3)
+        else:
+            self.open_station_settings()
+
+    def _getting_started_action(self):
+        action = getattr(self, "_getting_started_next", None)
+        if action == "identity":
+            self.open_station_settings(0)
+        elif action == "card":
+            self._browse_outgoing_cards()
+        elif action == "radio":
+            self.open_station_settings(3)
 
     def _set_advanced_controls(self, enabled):
         """Reveal technical controls while preserving their saved values."""
@@ -5859,6 +6016,8 @@ class MainWindow(QMainWindow):
         width = min(900, max(560, int(available.width() * 0.92)))
         height = min(760, max(440, int(available.height() * 0.90)))
         dialog.resize(min(width, available.width()), min(height, available.height()))
+        if page_index is not None:
+            self.station_settings_tabs.setCurrentIndex(page_index)
         self._run_station_settings_dialog()
 
     def _station_operation_active(self):
@@ -7103,6 +7262,7 @@ class MainWindow(QMainWindow):
                     "CAT connected" if self.rig.connected() else "CAT disconnected")
                 self.rig_status.setStyleSheet(
                     status_label_style("muted", bold=False, letter_spaced=False))
+        self._refresh_getting_started()
         if hasattr(self, "station_button"):
             connected = (DATA2G_ADAPTER.is_connected(self.data2g_session)
                          if selected_data2g else self.rig.connected())
@@ -8014,11 +8174,15 @@ class MainWindow(QMainWindow):
         return (f"Listening · RX mode: {self._receive_mode_label(self.receive_mode())} · "
                 f"{self.session_wall_count} cards heard this session")
 
-    def _save_auto_stage_cards(self, *_):
-        for stage, combo in getattr(self, "stage_card_combos", {}).items():
-            path = combo.currentData()
-            if path:
-                self.settings.setValue("transfer/card_" + stage, path)
+    def _save_auto_stage_cards(self, stage):
+        combo = self.stage_card_combos.get(stage)
+        if combo is None:
+            return
+        path = combo.currentData()
+        if path:
+            self.settings.setValue("transfer/card_" + stage, path)
+        else:
+            self.settings.remove("transfer/card_" + stage)
 
     def _select_manual_stage(self, stage):
         """Select a stage/card for compatibility and summary updates, without sending."""
@@ -8626,6 +8790,7 @@ class MainWindow(QMainWindow):
             self.beacon_button.setEnabled(
                 self.beacon_button.isChecked() or (ready and not local_audio_test))
         self._refresh_operate_primary_action()
+        self._refresh_getting_started()
 
     def rig_changed(self, connected, message):
         self.rig_status.setText(message)
@@ -10722,6 +10887,7 @@ class MainWindow(QMainWindow):
             card_face.setIcon(icon)
             card_face.setAccessibleName(accessible_label + " · card front; activate to read receive details")
         self.session_wall_empty.hide()
+        self.getting_started_button.hide()
         self.session_wall.show()
         self._update_wall_animations()
 

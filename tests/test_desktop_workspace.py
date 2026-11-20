@@ -230,3 +230,88 @@ def test_outgoing_card_and_details_fit_sender_viewport(workspace, text_size, wid
         left = control.mapTo(viewport, QPoint(0, 0)).x()
         assert left >= 0
         assert left + control.width() <= viewport.width()
+
+
+def test_getting_started_follows_real_setup_state(workspace, tmp_path):
+    import json
+    w = workspace
+    assert w._getting_started_next == "identity"
+    assert "call sign" in w.session_wall_empty.text()
+    assert w.getting_started_button.isVisible()
+    with patch.object(w, "open_station_settings") as settings:
+        w.getting_started_button.click()
+        settings.assert_called_once_with(0)
+    w.station_call.setText("W7TEST")
+    w.station_grid.setText("CN85")
+    w._refresh_station_identity()
+    assert w._getting_started_next == "card"
+    w.getting_started_button.click()
+    assert w.tabs.currentIndex() == 1
+    assert w.library_filter.currentData() == "starter"
+    w.tabs.setCurrentIndex(0)
+    (tmp_path / "cards" / "ready.json").write_text(json.dumps({
+        "callsign": "W7TEST", "grid": "CN85", "card_id": 123,
+        "width": 32, "height": 32, "palette": w.card.palette,
+        "pixels": [1] * 1024,
+    }))
+    w.refresh_card_library()
+    assert w._getting_started_next == "radio"
+    with patch.object(w, "open_station_settings") as settings:
+        w.getting_started_button.click()
+        settings.assert_called_once_with(3)
+    with patch.object(pixelqso.DATA2G_ADAPTER, "is_connected", return_value=True):
+        w._refresh_getting_started()
+        assert w._getting_started_next is None
+        assert w.getting_started_button.isHidden()
+    w._refresh_getting_started()
+    assert w._getting_started_next == "radio"
+
+
+def test_saved_gallery_card_assigns_selected_stage_only(workspace, tmp_path):
+    import json
+    from PySide6.QtCore import Qt
+    w = workspace
+    path = tmp_path / "cards" / "ready.json"
+    path.write_text(json.dumps({
+        "callsign": "W7TEST", "grid": "CN85", "card_id": 123,
+        "width": 32, "height": 32, "palette": w.card.palette,
+        "pixels": [1] * 1024,
+    }))
+    w.refresh_card_library()
+    w.stage_select_buttons["cq"].click()
+    w.browse_outgoing_cards.click()
+    item = next(w.library_list.item(i) for i in range(w.library_list.count())
+                if w.library_list.item(i).data(Qt.ItemDataRole.UserRole) == str(path))
+    w.library_list.setCurrentItem(item)
+    assert w.use_library_card_button.isVisible()
+    assert w.use_library_card_button.text() == "Use for CQ"
+    with patch.object(w, "transmit_exchange") as send:
+        w.use_library_card_button.click()
+        assert w.tabs.currentIndex() == 0
+        assert w._outgoing_message_type() == "cq"
+        assert w.stage_card_combos["cq"].currentData() == str(path)
+        assert all(w.stage_card_combos[s].currentData() is None for s in ("exchange", "report73", "final73"))
+        assert w._chosen_card().card_id == 123
+        w.refresh_card_library()
+        assert w.stage_card_combos["cq"].currentData() == str(path)
+        w.stage_card_combos["cq"].setCurrentIndex(0)
+        w.refresh_card_library()
+        assert w.stage_card_combos["cq"].currentData() is None
+        send.assert_not_called()
+
+
+def test_placeholder_does_not_autoconnect_data2g(tmp_path, monkeypatch):
+    qt = QApplication.instance() or QApplication([])
+    monkeypatch.setenv("PIXELQSO_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("PIXELQSO_CALLSIGN", raising=False)
+    old_data = pixelqso.DATA
+    for call, expected in (("N0CALL", False), ("W7TEST", True)):
+        (tmp_path / "settings.ini").write_text(f"[station]\ncallsign={call}\ngrid=CN85\n")
+        with patch("app.QTimer.singleShot") as schedule:
+            w = pixelqso.MainWindow()
+        try:
+            assert any(c.args[-1] == w._connect_data2g_host for c in schedule.call_args_list) == expected
+        finally:
+            w.close()
+            qt.processEvents()
+    pixelqso.DATA = old_data

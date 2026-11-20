@@ -1,0 +1,23 @@
+FROM desktop-dev:base
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-venv python3-dev build-essential git portaudio19-dev \
+    libegl1 libgl1 libxcb-cursor0 libxkbcommon-x11-0 libpulse0 libasound2 \
+    libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 \
+    libdbus-1-3 imagemagick xdotool \
+    && rm -rf /var/lib/apt/lists/*
+COPY pyproject.toml uv.lock /tmp/pixelqso-deps/
+RUN python3 -m venv /opt/app-venv \
+    && /opt/app-venv/bin/pip install --no-cache-dir uv \
+    && cd /tmp/pixelqso-deps \
+    && UV_PROJECT_ENVIRONMENT=/opt/app-venv /opt/app-venv/bin/uv sync --frozen --no-install-project \
+    && /opt/app-venv/bin/python -m ensurepip && /opt/app-venv/bin/python -m pip install --no-cache-dir pytest \
+    && /opt/app-venv/bin/python -c 'import numpy, PySide6, PIL, pyaudio, qrcode, zxingcpp'
+RUN mkdir -p /home/dev/pixelqso-data && chown dev:dev /home/dev/pixelqso-data
+USER dev
+WORKDIR /workspace
+ENV APP_COMMAND="bash /workspace/dev/desktop/launch.sh" \
+    PIXELQSO_DATA_DIR=/home/dev/pixelqso-data \
+    PIXELQSO_DATA2G_HOST=127.0.0.1 PIXELQSO_DATA2G_LOCAL_HOST=false \
+    PIXELQSO_DATA2G_RIGCTLD_HOST=127.0.0.1 PIXELQSO_RIGCTLD_HOST=127.0.0.1 \
+    PIXELQSO_AUDIO_TEST=true PIXELQSO_TEST_LINK=false

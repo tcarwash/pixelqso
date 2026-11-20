@@ -1,0 +1,19 @@
+name: pixelqso-ui
+services:
+  desktop:
+    build:
+      context: .
+      dockerfile: Dockerfile.desktop
+    image: pixelqso-desktop-dev:local
+    init: true
+    shm_size: 256m
+    ports:
+      - "${DESKTOP_BIND:-0.0.0.0}:${DESKTOP_PORT:-6083}:6080"
+    environment:
+      SCREEN_WIDTH: "${SCREEN_WIDTH:-1600}"
+      SCREEN_HEIGHT: "${SCREEN_HEIGHT:-1000}"
+    volumes:
+      - .:/workspace
+      - pixelqso-data:/home/dev/pixelqso-data
+volumes:
+  pixelqso-data:

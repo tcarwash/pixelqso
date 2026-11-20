@@ -54,7 +54,7 @@ def test_compact_layout_keeps_artwork_and_send_actions_visible(workspace):
             QApplication.processEvents()
         assert splitter.width() < 820
         assert splitter.orientation() == Qt.Orientation.Vertical
-        for widget in (w.outgoing_art, w.browse_outgoing_cards, *w.stage_send_buttons.values()):
+        for widget in (w.outgoing_art, w.browse_outgoing_cards, w.stage_send_buttons["card"]):
             assert widget.visibleRegion().boundingRect().contains(widget.rect())
         assert not w.session_wall_empty.visibleRegion().isEmpty()
     w.resize(1280, 900)
@@ -96,8 +96,11 @@ def test_navigation_stays_in_sync_with_existing_page_actions(workspace):
     assert not workspace.tabs.tabBar().isVisible()
 
 def test_stage_and_card_selection_never_transmit_and_refresh_preserves_stage(workspace):
-    assert workspace._outgoing_message_type() == 'exchange'
+    assert workspace._outgoing_message_type() == 'card'
+    assert workspace.stage_send_buttons["card"].isVisible()
+    assert not workspace.stage_send_buttons["exchange"].isVisible()
     with patch.object(workspace, 'transmit_exchange') as send:
+        workspace.qso_stage_toggle.click()
         workspace.stage_select_buttons['cq'].click()
         assert workspace._outgoing_message_type() == 'cq'
         assert workspace.stage_rows['cq'].isVisible()
@@ -176,6 +179,9 @@ def test_resizable_columns_keep_stages_visible_and_remember_sizes(workspace):
     workspace._configure_workspace_splitter(splitter, 'operate', [500, 300])
     qt.processEvents()
     assert splitter.sizes() == saved_sizes
+    assert workspace.stage_send_buttons["card"].isVisible()
+    workspace.qso_stage_toggle.click()
+    qt.processEvents()
     for button in workspace.stage_send_buttons.values():
         assert button.isVisible()
         assert button.visibleRegion().boundingRect().contains(button.rect())
@@ -207,6 +213,7 @@ def test_outgoing_card_and_details_fit_sender_viewport(workspace, text_size, wid
     workspace.show_experimental_modes.setChecked(True)
     workspace.backend_combo.setCurrentIndex(workspace.backend_combo.findData('experimental'))
     workspace.advanced_controls_action.setChecked(True)
+    workspace.send_details_toggle.setChecked(True)
     workspace.mode_combo.setCurrentIndex(workspace.mode_combo.findData('experimental_8fsk_orthogonal'))
     workspace.card_combo.addItem('A very long saved card title ' * 8, 'layout-only-card')
     workspace._apply_interface_text_size(text_size)
@@ -458,3 +465,114 @@ def test_card_collection_inspector_is_contextual(workspace, tmp_path):
     w.library_list.clearSelection()
     w.library_list.setCurrentRow(-1)
     assert w.library_inspector_preview.pixmap().isNull()
+
+
+
+def test_share_card_is_default_and_qso_is_optional(workspace):
+    w = workspace
+    assert w._outgoing_message_type() == "card"
+    assert w.stage_card_combos["card"].currentData() is None
+    assert w.stage_send_buttons["card"].text() == "Send card"
+    assert w.stage_send_buttons["card"].isVisible()
+    assert not w.qso_stage_toggle.isChecked()
+    assert not w.auto_stage_group.isVisible()
+    assert not w.send_details_group.isVisible()
+    assert "optional" in w.qso_stage_toggle.text()
+    with patch.object(w, "transmit_exchange") as send:
+        w.send_details_toggle.click()
+        assert w.send_details_group.isVisible()
+        w.send_details_toggle.click()
+        assert not w.send_details_group.isVisible()
+        send.assert_not_called()
+    assert w.cq_interval.value() == 60
+    assert w.log_deck_view.currentData() == "received_by_call"
+    with patch.object(w, "transmit_exchange") as transmit:
+        w.stage_card_combos["card"].setCurrentIndex(0)
+        assert w._outgoing_message_type() == "card"
+        transmit.assert_not_called()
+        w.stage_send_buttons["card"].click()
+        transmit.assert_called_once_with(card_override=None)
+    w.qso_stage_toggle.click()
+    assert w.auto_stage_group.isVisible()
+    assert w.stage_send_buttons["exchange"].isVisible()
+    assert w.call_cq_button.isVisible()
+    w.qso_stage_toggle.click()
+    assert not w.stage_send_buttons["exchange"].isVisible()
+    assert w.stage_send_buttons["card"].isVisible()
+
+
+def test_focus_heard_artwork_changes_target_without_sending(workspace):
+    w = workspace
+    first = {"card": {"callsign": "W7ONE", "grid": "CN85", "card_id": 10,
+                      "message_type": "card"},
+             "assembly_event": {"verified_complete": True}}
+    second = {"card": {"callsign": "W7TWO", "grid": "CN85", "card_id": 11,
+                       "message_type": "card"},
+              "assembly_event": {"verified_complete": True}}
+    with patch.object(w, "transmit_exchange") as transmit:
+        w._show_reply_action(first)
+        assert w.reply_report is first
+        assert "Share card after W7ONE" in w.reply_to_button.text()
+        w._focus_heard_card(first)
+        assert w._pinned_heard_key is not None
+        w._show_reply_action(second)
+        assert w.reply_report is first
+        assert w._latest_heard_report is second
+        w.heard_focus_clear.click()
+        assert w._pinned_heard_key is None
+        assert w.reply_report is second
+        transmit.assert_not_called()
+
+
+def test_standalone_card_reply_is_not_formal_exchange(workspace):
+    w = workspace
+    received = {"card": {"callsign": "W7ART", "grid": "CN85", "card_id": 98,
+                         "message_type": "card"},
+                "assembly_event": {"verified_complete": True}}
+    w._show_reply_action(received)
+    with patch.object(w, "transmit_exchange") as transmit, \
+         patch.object(w, "start_auto_exchange") as auto:
+        w.reply_to_received()
+        assert w._outgoing_message_type() == "card"
+        assert w.contact_stage == "idle"
+        transmit.assert_called_once()
+        auto.assert_not_called()
+    assert w._prepare_outgoing_card(w._chosen_card(), "card").reception_report is None
+
+
+def test_data2g_share_uses_standalone_card_wire_type(workspace):
+    """Broadcast card uses a standalone wire type, without completing a QSO."""
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    w = workspace
+    w.data2g_session = Mock()
+    backend = SimpleNamespace(
+        usable=True, mode_name="offline-test-mode", max_frame_bytes=128,
+        mode=SimpleNamespace(seconds_at_max=5),
+    )
+    try:
+        with patch.object(pixelqso.DATA2G_ADAPTER, "is_connected", return_value=True), \
+             patch.object(pixelqso.DATA2G_ADAPTER, "frame_card",
+                          return_value=[b"offline-test-frame"]) as frame, \
+             patch.object(pixelqso.DATA2G_ADAPTER, "select_mode") as select, \
+             patch.object(w, "_confirm_data2g_ptt_recovery", return_value=True), \
+             patch.object(w, "_data2g_send_next") as send, \
+             patch.object(w, "refresh_tx_button"), \
+             patch.object(pixelqso.QMessageBox, "warning",
+                          side_effect=AssertionError("Unexpected warning")):
+            w._prepare_data2g_transmission(backend)
+            assert frame.call_count == 1
+            assert frame.call_args.args[2] == "card"
+            assert frame.call_args.args[3] is None
+            assert select.call_count == 1
+            assert send.call_count == 1
+            assert w.tx_message_type == "card"
+            assert w.active_qso_log["deck_type"] == "broadcast"
+            assert w.active_qso_log["peer_callsign"] == "Broadcast"
+            assert "unconfirmed" in w.active_qso_log["status"]
+            assert w.active_qso_log["sent_cards"][0]["card"]["message_type"] == "card"
+    finally:
+        w.data2g_tx_total = 0
+        w.data2g_tx_frames = []
+        w.data2g_tx_waiting = None
+        w.data2g_session = None

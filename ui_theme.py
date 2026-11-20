@@ -166,6 +166,32 @@ def build_app_stylesheet(text_scale=1.0):
                                    border: 1px solid {c['border_subtle']};
                                    border-radius: {r['card']}px; }}
         QListWidget#collectionGallery {{ background: transparent; border: 0; padding: 4px; }}
+        QFrame#shareCardPanel {{ background: {c['surface_tab']};
+                                 border: 1px solid {c['border_control']};
+                                 border-radius: {r['panel']}px; }}
+        QFrame#operateJourney {{ background: {c['surface_tab']};
+                                 border: 1px solid {c['border_subtle']};
+                                 border-radius: {r['panel']}px; }}
+        QLabel#operateJourneyStep {{ color: {c['text_soft']}; font-size: 11px;
+                                     font-weight: 800; letter-spacing: 1px; }}
+        QLabel#operateJourneyHint {{ color: {c['text_muted']}; font-size: 11px; }}
+        QLabel#operateSectionHint {{ color: {c['text_muted']}; font-size: 12px;
+                                     padding: 3px 2px; }}
+        QPushButton#artworkSendAction {{ border: 1px solid {c['accent_checked_border']};
+                                          background: {c['accent_dim']};
+                                          color: {c['accent']}; padding: 8px 10px; }}
+        QPushButton#artworkSendAction:hover {{ background: {c['surface_selected']}; }}
+        QPushButton#artworkSendAction:disabled {{ color: {c['text_disabled']};
+                                                   background: {c['surface_disabled']};
+                                                   border-color: {c['border_subtle']}; }}
+        QFrame#contactInspector {{ background: {c['surface_tab']};
+                                   border: 1px solid {c['border_subtle']};
+                                   border-radius: {r['panel']}px; }}
+        QFrame#contactInspector QLabel {{ background: transparent; }}
+        QLabel#contactSelectedPreview {{ color: {c['card_frame']};
+                                          background: {c['surface_sunken']};
+                                          border: 1px solid {c['border_control']};
+                                          border-radius: {r['panel']}px; font-size: 36px; }}
         QFrame#libraryInspector {{ background: {c['surface_tab']};
                                    border: 1px solid {c['border_subtle']};
                                    border-radius: {r['panel']}px; }}

@@ -315,6 +315,9 @@ class TransferControlTests(unittest.TestCase):
                         window.rx_status, window.beacon_button, window.card_combo,
                         window.listen_indicator, window.exchange_log)])
                 window.exchange_mode.setCurrentIndex(0)
+                self.assertTrue(window.auto_stage_group.isHidden())
+                self.assertFalse(window.share_card_panel.isHidden())
+                window.qso_stage_toggle.click()
                 self.assertFalse(window.auto_stage_group.isHidden())
             finally:
                 window._apply_interface_text_size(100)

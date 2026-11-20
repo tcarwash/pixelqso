@@ -157,7 +157,7 @@ def window(tmp_path, monkeypatch):
     result.close(); application.processEvents(); pixelqso.DATA = original_data
 
 
-@pytest.mark.parametrize('incoming,outgoing', [('cq', 'exchange'), ('card', 'exchange'), ('exchange', 'report73')])
+@pytest.mark.parametrize('incoming,outgoing', [('cq', 'exchange'), ('card', 'card'), ('exchange', 'report73')])
 def test_user_can_reply_to_provisional_without_automatic_acceptance(window, incoming, outgoing):
     received = partial(incoming)
     window._show_receive_preview(window.card_image(received), card=received['card'], exact=False,
@@ -170,10 +170,11 @@ def test_user_can_reply_to_provisional_without_automatic_acceptance(window, inco
     assert window._outgoing_message_type() == outgoing
     assert not window.auto_armed and not received['card']['exact']
     outgoing_card = window._prepare_outgoing_card(reply_card(), outgoing)
-    assert outgoing_card.reception_report == make_report(received)
+    feedback = make_report(received) if outgoing in {'exchange', 'report73'} else None
+    assert outgoing_card.reception_report == feedback
     window._remember_tx_card(outgoing_card)
-    assert window.tx_card.reception_report == make_report(received)
-    assert window._local_card_snapshot(outgoing_card)['card']['reception_report'] == make_report(received)
+    assert window.tx_card.reception_report == feedback
+    assert window._local_card_snapshot(outgoing_card)['card']['reception_report'] == feedback
     for ordinary in ('cq', 'final73', 'card'):
         assert window._prepare_outgoing_card(outgoing_card, ordinary).reception_report is None
 

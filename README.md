@@ -27,6 +27,19 @@ Example cards made in the editor:
 ![example card, showing a cat](screenshots/cat.png)
 ![example card, showing a cat](screenshots/toad.png)
 
+### Artwork-first operating
+
+Operate now defaults to Share on air: choose a card and broadcast a standalone
+card message without a CQ or formal exchange. Expand Formal QSO stages to use
+one-shot CQ, exchange, reception report and 73; the optional repeating CQ
+control is inside that panel. Clicking a received artwork tile focuses the
+station for a possible reply, but selecting or flipping never transmits.
+
+Standalone cards are broadcast and do not confirm reception by any specific
+station. Contacts defaults to Stations heard; switch to Activity sessions for
+chronological records and unconfirmed sent broadcasts. The operating model,
+limits and next experiments are explained in docs/ARTWORK_FIRST.md.
+
 ### Card editor
 
 The card editor uses an Aseprite-inspired workbench: select pencil, eraser,

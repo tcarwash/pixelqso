@@ -2708,7 +2708,7 @@ class MainWindow(QMainWindow):
         body_layout.addWidget(pages, 1)
         shell_layout.addWidget(body, 1)
         def select_page(index):
-            copy = (("ON THE AIR", "A little art. A real connection.", "Choose a card, listen for a friend, and start an exchange."),
+            copy = (("ON THE AIR", "Send a little art into the world.", "Share a card, see what arrives, and exchange more if you like."),
                     ("YOUR COLLECTION", "A world in little squares.", "Create, collect, and find the next card you want to share."),
                     ("YOUR CONTACTS", "Every card has a story.", "Revisit the people and artwork you have met on the air."))[index]
             self.workspace_eyebrow.setText(copy[0]); self.workspace_title.setText(copy[1])
@@ -2930,7 +2930,21 @@ class MainWindow(QMainWindow):
 
     def make_qso_log_tab(self):
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(SPACING["md"])
-        layout.setContentsMargins(SPACING["lg"], SPACING["lg"], SPACING["lg"], SPACING["md"])
+        layout.setContentsMargins(SPACING["md"], SPACING["md"], SPACING["md"], SPACING["sm"])
+        heading = QHBoxLayout()
+        headline = QLabel("YOUR ON-AIR SCRAPBOOK")
+        headline.setObjectName("eyebrow")
+        heading.addWidget(headline)
+        heading.addStretch(1)
+        self.contact_summary = QLabel()
+        self.contact_summary.setObjectName("supportingText")
+        heading.addWidget(self.contact_summary)
+        layout.addLayout(heading)
+        self.contact_view_hint = QLabel(
+            "Heard stations are received artwork, not necessarily completed exchanges.")
+        self.contact_view_hint.setObjectName("operateSectionHint")
+        self.contact_view_hint.setWordWrap(True)
+        layout.addWidget(self.contact_view_hint)
         controls = QHBoxLayout(); controls.setSpacing(SPACING["sm"])
         self.log_search = QLineEdit(); self.log_search.setPlaceholderText("Find a callsign or grid…")
         self.log_search.setAccessibleName("Search contacts by callsign or grid")
@@ -2946,11 +2960,18 @@ class MainWindow(QMainWindow):
         self.log_clear_button.setVisible(False)
         controls.addWidget(self.log_clear_button)
         self.log_deck_view = QComboBox()
-        self.log_deck_view.addItem("Contact sessions", "sessions")
-        self.log_deck_view.addItem("Received by callsign", "received_by_call")
+        self.log_deck_view.addItem("Activity sessions", "sessions")
+        self.log_deck_view.addItem("Stations heard", "received_by_call")
         self.log_deck_view.setAccessibleName("Contact deck view")
         self.log_deck_view.setToolTip(
             "Show individual contact sessions or all received cards grouped by callsign.")
+        preferred_view = str(self.settings.value(
+            "ui/contacts/view", "received_by_call"))
+        self.log_deck_view.setCurrentIndex(
+            max(0, self.log_deck_view.findData(preferred_view)))
+        self.log_deck_view.currentIndexChanged.connect(
+            lambda *_: self.settings.setValue(
+                "ui/contacts/view", self.log_deck_view.currentData()))
         self.log_deck_view.currentIndexChanged.connect(self.refresh_qso_log)
         controls.addWidget(self.log_deck_view)
         self.log_sort = QComboBox(); self.log_sort.addItems(["Newest first", "Oldest first", "Callsign A–Z"])
@@ -2967,7 +2988,6 @@ class MainWindow(QMainWindow):
         self.copy_qso_button.clicked.connect(self.copy_selected_qso)
         self.copy_qso_button.setEnabled(False)
         contact_actions.addWidget(self.copy_qso_button)
-        layout.addLayout(contact_actions)
         self.log_gallery = QListWidget(); self.log_gallery.setViewMode(QListWidget.ViewMode.IconMode)
         self.log_gallery.setMovement(QListWidget.Movement.Static)
         self.log_gallery.setResizeMode(QListWidget.ResizeMode.Adjust)
@@ -2981,6 +3001,8 @@ class MainWindow(QMainWindow):
         self.log_gallery.setSpacing(SPACING["lg"]); self.log_gallery.itemClicked.connect(self.show_log_deck)
         self.log_gallery.itemActivated.connect(self.show_log_deck)
         self.log_gallery.itemSelectionChanged.connect(self._update_export_buttons)
+        self.log_gallery.itemSelectionChanged.connect(self._refresh_contact_inspector)
+        self.log_gallery.currentItemChanged.connect(self._refresh_contact_inspector)
         contact_gallery_page = QWidget(); contact_gallery_layout = QVBoxLayout(contact_gallery_page)
         contact_gallery_layout.setContentsMargins(0, 0, 0, 0)
         contact_gallery_layout.addWidget(self.log_gallery, 1)
@@ -2991,7 +3013,8 @@ class MainWindow(QMainWindow):
         self.contact_empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         contact_empty_layout.addWidget(self.contact_empty_title)
         self.contact_empty_copy = QLabel(
-            "Contacts appear here after you call CQ or reply and exchange cards.")
+            "Every received card can become part of your collection. "
+            "A formal contact is optional.")
         self.contact_empty_copy.setObjectName("supportingText")
         self.contact_empty_copy.setWordWrap(True)
         self.contact_empty_copy.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -3006,7 +3029,43 @@ class MainWindow(QMainWindow):
         self.contact_stack = QStackedWidget()
         self.contact_stack.addWidget(contact_gallery_page)
         self.contact_stack.addWidget(self.contact_empty_page)
-        layout.addWidget(self.contact_stack, 1)
+        contact_workspace = QHBoxLayout()
+        contact_workspace.setSpacing(SPACING["md"])
+        contact_workspace.addWidget(self.contact_stack, 1)
+        inspector = QFrame()
+        inspector.setObjectName("contactInspector")
+        inspector.setFixedWidth(270)
+        inspector_layout = QVBoxLayout(inspector)
+        inspector_layout.setContentsMargins(12, 12, 12, 12)
+        inspector_layout.setSpacing(9)
+        inspector_kicker = QLabel("SELECTED STATION")
+        inspector_kicker.setObjectName("eyebrow")
+        inspector_layout.addWidget(inspector_kicker)
+        self.contact_selected_preview = QLabel("▦")
+        self.contact_selected_preview.setObjectName("contactSelectedPreview")
+        self.contact_selected_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.contact_selected_preview.setMinimumHeight(240)
+        self.contact_selected_preview.setAccessibleName("Selected on-air card")
+        inspector_layout.addWidget(self.contact_selected_preview)
+        self.contact_selected_title = QLabel("Select a station")
+        self.contact_selected_title.setObjectName("sectionTitle")
+        self.contact_selected_title.setWordWrap(True)
+        inspector_layout.addWidget(self.contact_selected_title)
+        self.contact_selected_meta = QLabel(
+            "Received artwork and exchange records live here. "
+            "A heard CQ does not by itself mean a completed contact.")
+        self.contact_selected_meta.setObjectName("supportingText")
+        self.contact_selected_meta.setWordWrap(True)
+        inspector_layout.addWidget(self.contact_selected_meta)
+        self.open_qso_button = QPushButton("Open card deck")
+        self.open_qso_button.setObjectName("primaryAction")
+        self.open_qso_button.clicked.connect(lambda: self.show_log_deck())
+        self.open_qso_button.setEnabled(False)
+        inspector_layout.addWidget(self.open_qso_button)
+        inspector_layout.addLayout(contact_actions)
+        inspector_layout.addStretch(1)
+        contact_workspace.addWidget(inspector)
+        layout.addLayout(contact_workspace, 1)
         self.log_status = QLabel(); self.log_status.setObjectName("supportingText")
         layout.addWidget(self.log_status)
         self.log_search.textChanged.connect(self.refresh_qso_log)
@@ -3446,7 +3505,7 @@ class MainWindow(QMainWindow):
         if self.exchange_mode.currentIndex() == 2:
             return "beacon", self.card_combo
         stage = self._outgoing_message_type()
-        label = {"cq": "CQ", "exchange": "reply", "report73": "report", "final73": "73"}.get(stage, "reply")
+        label = {"card": "on air", "cq": "CQ", "exchange": "reply", "report73": "report", "final73": "73"}.get(stage, "reply")
         return label, self.stage_card_combos.get(stage)
 
     def _use_selected_library_card(self):
@@ -3689,8 +3748,16 @@ class MainWindow(QMainWindow):
                      f"{started}\n{status} · {count} card{'s' if count != 1 else ''}")
             item = QListWidgetItem(label)
             deck_kind = "RECEIVED ARCHIVE" if source.startswith("received-callsign:") else "CONTACT DECK"
-            item.setIcon(QIcon(card_art(image, call, str(entry.get("peer_grid", "")) + " · " + deck_kind, QSize(220, 275), stacked=True)))
+            preview = card_art(image, call, str(entry.get("peer_grid", "")) + " · " + deck_kind, QSize(220, 275), stacked=True)
+            icon = QIcon(preview)
+            icon.addPixmap(preview, QIcon.Mode.Selected)
+            item.setIcon(icon)
             item.setData(Qt.ItemDataRole.UserRole, source)
+            item.setData(Qt.ItemDataRole.UserRole + 1, {
+                "callsign": call, "grid": str(entry.get("peer_grid", "")),
+                "count": count, "status": status, "started": started,
+                "archive": source.startswith("received-callsign:"),
+            })
             item.setToolTip(f"Open {call}'s received-card archive" if source.startswith("received-callsign:")
                             else f"Open {call}'s contact deck")
             item.setData(
@@ -3701,6 +3768,15 @@ class MainWindow(QMainWindow):
                 f"{started or 'date unknown'} · {status} · {count} card"
                 f"{'s' if count != 1 else ''}")
             self.log_gallery.addItem(item)
+        archive_view = self.log_deck_view.currentData() == "received_by_call"
+        self.contact_summary.setText(
+            f"{len(display_entries)} stations" if archive_view else
+            f"{len(display_entries)} activity sessions")
+        self.contact_view_hint.setText(
+            "Stations heard groups received artwork by callsign, including CQ cards. "
+            "Reception alone is not a confirmed QSO." if archive_view else
+            "Activity sessions include sent cards and exchanges. Neither sending "
+            "nor hearing a CQ proves the other station received the artwork.")
         self.log_status.setText(
             (f"{len(display_entries)} callsign archive{'s' if len(display_entries) != 1 else ''}"
              if self.log_deck_view.currentData() == "received_by_call" else
@@ -3710,21 +3786,55 @@ class MainWindow(QMainWindow):
         if display_entries:
             self.contact_stack.setCurrentWidget(self.contact_stack.widget(0))
         else:
-            self.contact_empty_operate_button.setVisible(
-                not query and self.log_deck_view.currentData() == "sessions")
+            self.contact_empty_operate_button.setVisible(not query)
+            self.contact_empty_operate_button.setText(
+                "Go listen for cards" if self.log_deck_view.currentData() == "received_by_call"
+                else "Open Operate")
             if self.log_deck_view.currentData() == "received_by_call":
                 self.contact_empty_title.setText(
                     "No matching received cards" if query else "No received cards yet")
                 self.contact_empty_copy.setText(
-                    "Received card history is grouped by station callsign. Try another search or switch to contact sessions.")
+                    "Heard cards appear here, even without a formal QSO. Listen on air or switch to Activity sessions.")
             else:
                 self.contact_empty_title.setText(
                     "No matching contacts" if query else "No contacts yet")
                 self.contact_empty_copy.setText(
                     "Try another callsign or grid, or clear your search." if query else
-                    "Contacts appear here after you call CQ or reply and exchange cards.")
+                    "Send a card or listen for another station; "
+                    "formal contact records appear here when available.")
             self.contact_stack.setCurrentWidget(self.contact_empty_page)
         self._update_export_buttons()
+        self._refresh_contact_inspector()
+
+    def _refresh_contact_inspector(self, *_):
+        if not hasattr(self, "contact_selected_preview"):
+            return
+        item = self.log_gallery.currentItem()
+        if item is None or not item.isSelected():
+            self.contact_selected_preview.clear()
+            self.contact_selected_preview.setText("▦")
+            self.contact_selected_title.setText("Select a station")
+            self.contact_selected_meta.setText(
+                "Browse cards heard on air or open a recorded exchange. "
+                "A heard CQ alone isn't a completed QSO.")
+            self.open_qso_button.setEnabled(False)
+            return
+        metadata = item.data(Qt.ItemDataRole.UserRole + 1) or {}
+        pixmap = item.icon().pixmap(QSize(220, 275))
+        self.contact_selected_preview.setPixmap(pixmap)
+        self.contact_selected_preview.setAccessibleDescription(item.toolTip())
+        self.contact_selected_title.setText(
+            str(metadata.get("callsign") or "Unknown station"))
+        kind = ("Received artwork" if metadata.get("archive")
+                else "Activity session")
+        note = " · ".join(part for part in (
+            kind, str(metadata.get("grid") or "Grid not recorded"),
+            f'{metadata.get("count", 0)} cards',
+            str(metadata.get("status") or ""),
+            str(metadata.get("started") or ""),
+        ) if part)
+        self.contact_selected_meta.setText(note)
+        self.open_qso_button.setEnabled(True)
 
     @staticmethod
     def _received_archive_key(report):
@@ -5567,7 +5677,7 @@ class MainWindow(QMainWindow):
         manual_card_layout.setContentsMargins(0, 0, 0, 0); manual_card_layout.addWidget(self.card_combo)
         mode_form.addRow("Card", self.manual_card_widget)
         self.manual_card_label = mode_form.labelForField(self.manual_card_widget)
-        self.auto_stage_group = QGroupBox("Your contact · four stages")
+        self.auto_stage_group = QGroupBox("Picture exchange")
         self.auto_stage_group.setObjectName("senderSection")
         # Use explicit horizontal rows for the send actions. QFormLayout treats
         # its first column as label content and can collapse widget labels
@@ -5584,13 +5694,15 @@ class MainWindow(QMainWindow):
         self.stage_picker.setAccessibleName("Outgoing message stage")
         for key, label in (("cq", "CQ · start a contact"), ("exchange", "Exchange · share a card"), ("report73", "RR73 · reception report"), ("final73", "73 · final card")):
             self.stage_picker.addItem(label, key)
-        self.stage_picker.setCurrentIndex(1)
+        self.stage_picker.insertItem(0, "Card · share artwork", "card")
+        self.stage_picker.setCurrentIndex(0)
         self.stage_picker.currentIndexChanged.connect(lambda _index: self._select_manual_stage(self.stage_picker.currentData()))
         self.stage_picker.hide()  # Kept as a synchronized selection model; stages stay visible.
         self.manual_stage_group = QButtonGroup(self); self.manual_stage_group.setExclusive(True)
         self.manual_stage_buttons = {}
-        for stage, title in (("cq", "CQ"), ("exchange", "reply"),
-                              ("report73", "report"), ("final73", "73")):
+        for stage, title in (("card", "card"), ("cq", "CQ"),
+                             ("exchange", "exchange"), ("report73", "RR73"),
+                             ("final73", "73")):
             combo = QComboBox(); combo.setIconSize(QSize(24, 24))
             combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(10)
@@ -5610,7 +5722,9 @@ class MainWindow(QMainWindow):
             button.setProperty("normal_object_name", "stageSelector")
             button.setText(f"Send {title}")
             button.setObjectName("stageSelector")
-            button.setToolTip(f"Send the assigned {title} card; while transmitting, stop it")
+            button.setToolTip(
+                f"Transmit the assigned {title} card now; selecting a card alone does not transmit. "
+                "While transmitting, this button stops the transmission.")
             button.clicked.connect(lambda checked=False, s=stage: self._send_stage_card(s))
             self.manual_stage_group.addButton(button, len(self.manual_stage_buttons))
             self.manual_stage_buttons[stage] = button
@@ -5633,7 +5747,12 @@ class MainWindow(QMainWindow):
             row_widget = QWidget(); row_widget.setLayout(row)
             self.stage_rows[stage] = row_widget
             auto_stage_layout.addWidget(row_widget)
-        self.manual_stage_buttons["exchange"].setChecked(True)
+        self.manual_stage_buttons["card"].setChecked(True)
+        self.stage_send_buttons["card"].setObjectName("artworkSendAction")
+        self.stage_send_buttons["card"].setProperty("normal_object_name", "artworkSendAction")
+        self.stage_send_buttons["card"].setMinimumWidth(130)
+        self.stage_rows["card"].setObjectName("shareArtworkRow")
+        self.stage_select_buttons["card"].hide()
         self.manual_stage_group.buttonToggled.connect(self._refresh_transfer_summary)
         self.role_widget = QWidget(); role_form = QFormLayout(self.role_widget); role_form.setContentsMargins(0, 0, 0, 0)
         role_form.addRow("Role", self.exchange_role)
@@ -5711,14 +5830,22 @@ class MainWindow(QMainWindow):
         self.call_cq_button.setCheckable(True)
         self.call_cq_button.toggled.connect(self._toggle_call_cq)
         self.cq_interval = QSpinBox(); self.cq_interval.setRange(1, 3600)
-        self.cq_interval.setValue(int(self.settings.value("transfer/cq_interval_seconds", 5)))
+        self.cq_interval.setValue(int(self.settings.value("transfer/cq_interval_seconds", 60)))
         self.cq_interval.setSuffix(" s")
         self.cq_interval.setAccessibleName("CQ repeat interval")
         self.cq_interval.setAccessibleDescription(
             "Seconds between CQ calls while not exchanging. The first CQ sends immediately; "
             "this interval is locked while CQ calling is active.")
         self.cq_interval.valueChanged.connect(self._save_cq_interval)
-        cq_row = QHBoxLayout(); cq_row.setSpacing(SPACING["sm"]); cq_row.addWidget(self.call_cq_button); cq_row.addWidget(QLabel("Repeat every")); cq_row.addWidget(self.cq_interval); cq_row.addStretch(1)
+        self.call_cq_button.setToolTip(
+            "Start a repeating discovery CQ. This is not a picture exchange; "
+            "stop calling when you hear a station or want to send artwork.")
+        cq_row = QHBoxLayout()
+        cq_row.setSpacing(SPACING["sm"])
+        cq_row.addWidget(self.call_cq_button)
+        cq_row.addWidget(QLabel("CQ repeat"))
+        cq_row.addWidget(self.cq_interval)
+        cq_row.addStretch(1)
         self.cq_controls = QWidget(); self.cq_controls.setLayout(cq_row); transfer_form.addRow(self.cq_controls)
         self.beacon_timer = QTimer(self)
         self.beacon_timer.timeout.connect(self.transmit_beacon)
@@ -5769,7 +5896,7 @@ class MainWindow(QMainWindow):
         self.outgoing_art = QLabel(); self.outgoing_art.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.outgoing_art.setMinimumHeight(190)
         outgoing_header = QHBoxLayout(); outgoing_header.setSpacing(SPACING["xs"])
-        outgoing_label = QLabel("YOUR CARD"); outgoing_label.setObjectName("eyebrow")
+        outgoing_label = QLabel("YOUR OUTGOING ART"); outgoing_label.setObjectName("eyebrow")
         outgoing_header.addWidget(outgoing_label)
         outgoing_header.addStretch(1)
         self.browse_outgoing_cards = QPushButton("Choose card…")
@@ -5779,7 +5906,18 @@ class MainWindow(QMainWindow):
         outgoing_header.addWidget(self.browse_outgoing_cards)
         left_panel.addLayout(outgoing_header)
         left_panel.addWidget(self.outgoing_art, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.send_details_toggle = QPushButton()
+        self.send_details_toggle.setObjectName("activityDisclosure")
+        self.send_details_toggle.setCheckable(True)
+        self.send_details_toggle.setToolTip(
+            "Show transfer mode, airtime estimate and technical transmission details.")
+        self.send_details_toggle.setChecked(
+            self.settings.value("ui/operate/show_send_details", False, type=bool))
+        self.send_details_toggle.toggled.connect(self._toggle_send_details)
+        left_panel.addWidget(self.send_details_toggle)
         left_panel.addWidget(transfer_group)
+        self.send_details_group = transfer_group
+        self._toggle_send_details(self.send_details_toggle.isChecked())
         left = QWidget(); left.setLayout(left_panel)
         left.setMinimumWidth(0)
         left.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -5792,7 +5930,7 @@ class MainWindow(QMainWindow):
         self.traffic_preview.addWidget(self.receive_workspace)
         right_panel.addWidget(self.traffic_preview, 1)
         view_heading = QHBoxLayout()
-        session_title = QLabel("Heard this session"); session_title.setObjectName("sectionTitle")
+        session_title = QLabel("Heard on air"); session_title.setObjectName("sectionTitle")
         view_heading.addWidget(session_title, 1)
         self.listen_indicator = QLabel("● STARTING")
         self.listen_indicator.setAccessibleDescription("Current receiver activity state.")
@@ -5800,6 +5938,26 @@ class MainWindow(QMainWindow):
         self._refresh_listen_indicator_width()
         view_heading.addWidget(self.listen_indicator)
         received_layout.addLayout(view_heading)
+        self.operate_journey = QLabel("HEAR  →  SHARE A CARD  →  KEEP SHARING")
+        self.operate_journey.setWordWrap(True)
+        self.operate_journey.setObjectName("operateJourneyStep")
+        self.operate_journey.setToolTip(
+            "Enjoy the artwork without a formal QSO; reports and 73 are optional.")
+        received_layout.addWidget(self.operate_journey)
+        self.heard_focus_label = QLabel(
+            "Choose a received card to focus its station; click again to see signal details.")
+        self.heard_focus_label.setObjectName("operateSectionHint")
+        self.heard_focus_label.setWordWrap(True)
+        received_layout.addWidget(self.heard_focus_label)
+        self.heard_focus_clear = QPushButton("Follow newest")
+        self.heard_focus_clear.setObjectName("activityDisclosure")
+        self.heard_focus_clear.setToolTip(
+            "Unpin the selected station and use the newest actionable reception.")
+        self.heard_focus_clear.clicked.connect(self._clear_heard_focus)
+        self.heard_focus_clear.hide()
+        received_layout.addWidget(self.heard_focus_clear)
+        self._pinned_heard_key = None
+        self._latest_heard_report = None
         self.incoming_card_details = QLabel()
         self.incoming_card_details.setTextFormat(Qt.TextFormat.PlainText)
         self.incoming_card_details.setWordWrap(True)
@@ -5876,8 +6034,8 @@ class MainWindow(QMainWindow):
         self.session_wall.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.session_wall.setWordWrap(False)
         self.session_wall.setTextElideMode(Qt.TextElideMode.ElideNone)
-        self.session_wall.setIconSize(QSize(144, 144))
-        self.session_wall.setGridSize(QSize(160, 164))
+        self.session_wall.setIconSize(QSize(164, 164))
+        self.session_wall.setGridSize(QSize(182, 184))
         self.session_wall.setSpacing(8)
         self.session_wall.setObjectName("sessionWall")
         self.session_wall.setAccessibleName("Received cards for this session")
@@ -5957,10 +6115,12 @@ class MainWindow(QMainWindow):
         self.data2g_switch_button.hide()
         right_panel.addWidget(self.data2g_switch_button)
         right_panel.addWidget(receive_group)
-        self.reply_to_button = QPushButton("Reply to CQ")
+        self.reply_to_button = QPushButton("Reply with artwork")
         self.reply_to_button.setVisible(False)
+        self.reply_to_button.setToolTip(
+            "Transmits the next contact message immediately; a verified CQ may start an automatic sequence.")
         self.reply_to_button.clicked.connect(self.reply_to_received)
-        right_panel.addWidget(self.reply_to_button)
+        received_layout.addWidget(self.reply_to_button)
         self.stop_responding_button = QPushButton("Stop responding")
         self.stop_responding_button.setVisible(False)
         self.stop_responding_button.setToolTip(
@@ -5985,7 +6145,7 @@ class MainWindow(QMainWindow):
         quick_draw_row.addWidget(self.quick_draw_send_button)
         quick_draw_row.addWidget(self.quick_draw_status, 1)
         quick_draw_row.addWidget(self.clear_quick_draw_button)
-        right_panel.addLayout(quick_draw_row)
+        received_layout.addLayout(quick_draw_row)
         self.exchange_log = QTextEdit(); self.exchange_log.setReadOnly(True); self.exchange_log.setPlaceholderText("Exchange activity")
         self.exchange_log.setMinimumHeight(64); self.exchange_log.setMaximumHeight(140)
         self.exchange_log.document().setMaximumBlockCount(2000)
@@ -6007,9 +6167,41 @@ class MainWindow(QMainWindow):
         dock_layout.setContentsMargins(0, 0, 0, 0)
         dock_layout.setSpacing(SPACING["sm"])
         transfer_form.removeWidget(self.auto_stage_group)
+        self.share_card_panel = QFrame()
+        self.share_card_panel.setObjectName("shareCardPanel")
+        share_layout = QVBoxLayout(self.share_card_panel)
+        share_layout.setContentsMargins(10, 7, 10, 10)
+        share_layout.setSpacing(SPACING["sm"])
+        share_heading = QLabel("SHARE ON AIR")
+        share_heading.setObjectName("operateJourneyStep")
+        share_layout.addWidget(share_heading)
+        share_copy = QLabel(
+            "Broadcast a picture for anyone listening. No CQ, reply or completed QSO required.")
+        share_copy.setObjectName("operateSectionHint")
+        share_copy.setWordWrap(True)
+        share_layout.addWidget(share_copy)
+        share_layout.addWidget(self.stage_rows["card"])
+        dock_layout.addWidget(self.share_card_panel)
+
+        self.qso_stage_toggle = QPushButton()
+        self.qso_stage_toggle.setObjectName("activityDisclosure")
+        self.qso_stage_toggle.setAccessibleName("Show optional formal QSO stages")
+        self.qso_stage_toggle.setCheckable(True)
+        self.qso_stage_toggle.setToolTip(
+            "Optional directed contacts: one-shot CQ, exchange, reception report, and 73. "
+            "These controls are not required for sharing artwork.")
+        self.qso_stage_toggle.setChecked(
+            self.settings.value("ui/operate/show_qso_stages", False, type=bool))
+        self.qso_stage_toggle.toggled.connect(self._toggle_qso_stages)
+        dock_layout.addWidget(self.qso_stage_toggle)
         dock_layout.addWidget(self.auto_stage_group)
+        self._toggle_qso_stages(self.qso_stage_toggle.isChecked())
         for controls in (self.manual_tx_controls, self.auto_controls, self.cq_controls, self.beacon_controls):
-            transfer_form.removeWidget(controls); dock_layout.addWidget(controls)
+            transfer_form.removeWidget(controls)
+            if controls is self.cq_controls:
+                auto_stage_layout.addWidget(controls)
+            else:
+                dock_layout.addWidget(controls)
         sender_layout.addWidget(dock)
         left_panel.addStretch(1)
         self.operate_sender_layout = sender_layout
@@ -6067,7 +6259,7 @@ class MainWindow(QMainWindow):
             message = "Configure your modem and radio to receive cards."
             button = "Open Audio & Radio"
         else:
-            action, title = None, "Waiting for your next contact"
+            action, title = None, "Waiting for the next card"
             message = "Received artwork appears here.<br>Partial cards are marked provisional."
             button = ""
         self._getting_started_next = action
@@ -6123,7 +6315,10 @@ class MainWindow(QMainWindow):
         # Stage send controls are part of the everyday Operate workflow, not
         # an advanced-only setting. Keep their parent visible across backend
         # reconnects and advanced-control toggles.
-        self.auto_stage_group.setVisible(self.exchange_mode.currentIndex() != 2)
+        self.auto_stage_group.setVisible(
+            self.exchange_mode.currentIndex() != 2 and
+            (not hasattr(self, "qso_stage_toggle")
+             or self.qso_stage_toggle.isChecked() or self.auto_armed))
         if hasattr(self, "rx_visual_stack"):
             self._update_backend_ui()
 
@@ -7899,7 +8094,12 @@ class MainWindow(QMainWindow):
             self.quick_reply_card is not None and not automatic and not beacon and not self.auto_armed)
         legacy = self.selected_mode() == "standard"
         self.role_widget.setVisible(False)
-        self.auto_stage_group.setVisible(not beacon)
+        self.auto_stage_group.setVisible(
+            not beacon and (not hasattr(self, "qso_stage_toggle")
+                            or self.qso_stage_toggle.isChecked() or self.auto_armed))
+        if hasattr(self, "share_card_panel"):
+            self.share_card_panel.setVisible(not beacon and not self.auto_armed)
+            self.qso_stage_toggle.setVisible(not beacon and not self.auto_armed)
         for button in self.manual_stage_buttons.values():
             button.setEnabled(True)
         for button in self.stage_send_buttons.values():
@@ -7933,6 +8133,20 @@ class MainWindow(QMainWindow):
         self._refresh_operate_primary_action()
         self.frequency_controls.setVisible(not beacon and not local_audio_test and not host_mode)
 
+    def _toggle_send_details(self, expanded):
+        self.send_details_toggle.setText(
+            "▾  Transmission details" if expanded else "▸  Transmission details")
+        self.settings.setValue("ui/operate/show_send_details", bool(expanded))
+        self.send_details_group.setVisible(bool(expanded))
+
+    def _toggle_qso_stages(self, expanded):
+        self.qso_stage_toggle.setText(
+            "▾  Formal QSO stages" if expanded else "▸  Formal QSO stages · optional")
+        self.settings.setValue("ui/operate/show_qso_stages", bool(expanded))
+        if hasattr(self, "auto_stage_group"):
+            self.auto_stage_group.setVisible(
+                (expanded or self.auto_armed) and self.exchange_mode.currentIndex() != 2)
+
     def _refresh_operate_primary_action(self):
         buttons = [getattr(self, name, None) for name in (
             "tx_btn", "stop_tx_btn", "auto_stop_btn", "call_cq_button",
@@ -7944,6 +8158,7 @@ class MainWindow(QMainWindow):
         beacon_button = getattr(self, "beacon_button", None)
         reply_button = getattr(self, "reply_to_button", None)
         call_button = getattr(self, "call_cq_button", None)
+        share_button = getattr(self, "stage_send_buttons", {}).get("card")
         tx_button = getattr(self, "tx_btn", None)
         if (stop_tx is not None and not stop_tx.isHidden() and
                 not self.manual_tx_controls.isHidden()):
@@ -7960,6 +8175,8 @@ class MainWindow(QMainWindow):
             primary = tx_button
         elif reply_button is not None and not reply_button.isHidden():
             primary = reply_button
+        elif share_button is not None and hasattr(self, "share_card_panel") and not self.share_card_panel.isHidden():
+            primary = share_button
         elif call_button is not None and not self.cq_controls.isHidden():
             primary = call_button
         elif tx_button is not None and not self.manual_tx_controls.isHidden():
@@ -8010,7 +8227,9 @@ class MainWindow(QMainWindow):
             if state == "listen_cq":
                 stage = "cq" if role == "responder" else "exchange"
         else:
-            self.exchange_status.setText("CQ → Reply / Exchange → RR73 → 73\nCall CQ, or click Reply on a received CQ to start automatic sequencing.")
+            self.exchange_status.setText(
+                "Optional formal contact: CQ → Exchange → RR73 → 73. "
+                "Artwork broadcasts work without this sequence.")
             return
         labels = {"send_cq": "Sending CQ", "listen_cq": "Waiting for an exchange" if role == "caller" else "Waiting for a CQ",
                   "send_exchange": "Sending exchange", "await_report73": "Waiting for RR73",
@@ -8519,7 +8738,7 @@ class MainWindow(QMainWindow):
                     "send_report73": "report73", "send_final73": "final73"}.get(state, "exchange")
         if hasattr(self, "manual_stage_group"):
             button = self.manual_stage_group.checkedButton()
-            return button.property("stage") if button else "exchange"
+            return button.property("stage") if button else "card"
         return "card"
 
     def _send_stage_card(self, stage):
@@ -9312,7 +9531,7 @@ class MainWindow(QMainWindow):
                 return
             next_stage = 'exchange'
         elif stage == 'card':
-            next_stage = 'exchange'
+            next_stage = 'card'
         elif stage == "exchange":
             next_stage = "report73"
         elif stage == "73" and (card.get("snr_db") is not None or card.get('reception_report')):
@@ -9326,7 +9545,7 @@ class MainWindow(QMainWindow):
         self.tx_snr_db = card.get("measured_snr_db") if next_stage in {"exchange", "report73"} else None
         self.reply_to_button.setVisible(False)
         self._refresh_operate_primary_action()
-        self.contact_stage = "send_" + next_stage
+        self.contact_stage = "idle" if next_stage == "card" else "send_" + next_stage
         self.exchange_mode.setCurrentIndex(0)
         self.pending_reply_retry = None
         retry_card = None
@@ -9340,7 +9559,13 @@ class MainWindow(QMainWindow):
                 feedback.get('callsign') == self.station_call.text().strip().upper() and
                 feedback.get('card_id') == self.auto_own_card_id)
 
-    def _show_reply_action(self, report):
+    def _show_reply_action(self, report, *, operator_selected=False):
+        if hasattr(self, "_latest_heard_report"):
+            if not operator_selected:
+                self._latest_heard_report = report
+            key = session_wall_card_key(report)
+            if self._pinned_heard_key is not None and key != self._pinned_heard_key and not self.auto_armed:
+                return
         card = report.get("card") or {}
         if str(card.get("callsign") or "").strip().upper() in self.stopped_reply_peers:
             return
@@ -9365,7 +9590,7 @@ class MainWindow(QMainWindow):
         peer = str(card.get("callsign") or "station")
         next_stage = {
             "cq": f"Reply to {peer}",
-            "card": f"Send Exchange to {peer}",
+            "card": f"Share card after {peer}",
             "exchange": f"Send RR73 with report to {peer}",
         }.get(kind)
         if kind == "73" and self._reply_stage(report) == 'final73':
@@ -9384,6 +9609,9 @@ class MainWindow(QMainWindow):
         self.reply_to_button.setToolTip(
             (f"Repeat the same artwork and card ID. The current reply's reception report will be included."
              if retry and retry.get("peer") == peer.upper() else
+             f"Broadcast a card after hearing {peer}. This standalone card is not addressed "
+             "to a specific station and does not confirm anyone received it."
+             if kind == "card" else
              f"Send the next exchange stage to {peer}, including received pixels and CRC-passed blocks.")
             if next_stage else "")
         self.reply_to_button.setVisible(bool(next_stage))
@@ -9404,6 +9632,30 @@ class MainWindow(QMainWindow):
             "Sketch a card while receiving or transmitting; use it for the next manual send.")
         self.quick_draw_button.setVisible(self.exchange_mode.currentIndex() == 0 and not self.auto_armed)
         self._refresh_operate_primary_action()
+
+    def _focus_heard_card(self, report):
+        """Pin a received station as the reply target; selection never transmits."""
+        card = (report or {}).get("card") or {}
+        if not card.get("callsign") or card.get("card_id") is None:
+            return
+        self._pinned_heard_key = session_wall_card_key(report)
+        integrity = ("Verified card" if self._assembly_verified(report)
+                     else "Provisional artwork")
+        stage = card.get("message_type", "card")
+        self.heard_focus_label.setText(
+            f"Focused: {card['callsign']} · {stage.upper()} · {integrity}. "
+            "The reply button sends immediately; Quick draw lets you create a different card.")
+        self.heard_focus_clear.show()
+        self._show_reply_action(report, operator_selected=True)
+
+    def _clear_heard_focus(self):
+        self._pinned_heard_key = None
+        self.heard_focus_label.setText(
+            "Following the newest actionable card. Select a received card to focus its station.")
+        self.heard_focus_clear.hide()
+        latest = self._latest_heard_report
+        if latest is not None:
+            self._show_reply_action(latest)
 
     def _find_sent_card_for_retry(self, report):
         feedback = ((report.get("card") or {}).get("reception_report") or {})
@@ -9631,7 +9883,9 @@ class MainWindow(QMainWindow):
             self.exchange_log.append("WebSDR window is receive-only.")
             return
         if not self.auto_armed:
-            self.contact_stage = "send_" + self._outgoing_message_type()
+            self.contact_stage = (
+                "idle" if self._outgoing_message_type() == "card"
+                else "send_" + self._outgoing_message_type())
             self._refresh_contact_stage_indicator()
         backend = self.selected_backend()
         if self.selected_adapter().capabilities.kind is AdapterKind.FRAME_TRANSPORT:
@@ -9707,7 +9961,13 @@ class MainWindow(QMainWindow):
             if wire_type == "cq":
                 self.last_cq_snapshot = self._local_card_snapshot(card, wire_type, snr_db)
             elif not beacon:
-                self._begin_qso_log(self.auto_peer or "Unknown", "")
+                standalone = wire_type == "card" and not self.auto_armed
+                new_broadcast = standalone and self.active_qso_log is None
+                self._begin_qso_log(
+                    "Broadcast" if new_broadcast else self.auto_peer or "Unknown", "")
+                if new_broadcast and self.active_qso_log is not None:
+                    self.active_qso_log["status"] = "Artwork sent · receipt unconfirmed"
+                    self.active_qso_log["deck_type"] = "broadcast"
                 self._append_qso_card("sent_cards", self._local_card_snapshot(card, wire_type, snr_db))
             self.tx_label = "Data2G host beacon" if beacon else "Data2G host card frames"
             self.stop_tx_btn.setEnabled(True)
@@ -10120,7 +10380,13 @@ class MainWindow(QMainWindow):
             try:
                 card = self.tx_card or self._chosen_card()
                 if self.auto_peer or self.tx_message_type != "cq":
-                    self._begin_qso_log(self.auto_peer or "Unknown", "")
+                    standalone = self.tx_message_type == "card" and not self.auto_armed
+                    new_broadcast = standalone and self.active_qso_log is None
+                    self._begin_qso_log(
+                        "Broadcast" if new_broadcast else self.auto_peer or "Unknown", "")
+                    if new_broadcast and self.active_qso_log is not None:
+                        self.active_qso_log["status"] = "Artwork sent · receipt unconfirmed"
+                        self.active_qso_log["deck_type"] = "broadcast"
                     self._append_qso_card("sent_cards", self._local_card_snapshot(card, self.tx_message_type, self.tx_snr_db))
             except Exception as exc:
                 self.exchange_log.append(f"Could not add transmitted card to QSO log: {exc}")
@@ -11109,7 +11375,7 @@ class MainWindow(QMainWindow):
         if card.get('message_type') == '73' and card.get('reception_report'):
             kind = 'RR73 · report'
         received_at = time.strftime("%H:%M:%S")
-        tile = image.scaled(QSize(144, 144), Qt.AspectRatioMode.KeepAspectRatio,
+        tile = image.scaled(QSize(164, 164), Qt.AspectRatioMode.KeepAspectRatio,
                             Qt.TransformationMode.FastTransformation)
         icon = QIcon(QPixmap.fromImage(tile))
         exact = self._assembly_verified(report)
@@ -11155,12 +11421,12 @@ class MainWindow(QMainWindow):
         ))
         if existing is None:
             item = QListWidgetItem()
-            item.setSizeHint(QSize(148, 148))
+            item.setSizeHint(QSize(168, 168))
             self.session_wall.insertItem(0, item)
             card_face = QPushButton()
             card_face.setCheckable(True)
-            card_face.setFixedSize(144, 144)
-            card_face.setIconSize(QSize(132, 132))
+            card_face.setFixedSize(164, 164)
+            card_face.setIconSize(QSize(152, 152))
             card_face.setStyleSheet("QPushButton { background:#101a17; border:1px solid #43564d; border-radius:7px; padding:4px; } QPushButton:checked { background:#18251f; color:#e2eee6; border-color:#70927d; font-size:10px; font-weight:600; text-align:left; }")
             def flip_card(show_back, button=card_face):
                 if show_back and getattr(button, '_animation_report', None):
@@ -11174,6 +11440,9 @@ class MainWindow(QMainWindow):
                     (" · card back; receive details" if show_back else
                      " · card front; activate to read receive details"))
             card_face.toggled.connect(flip_card)
+            card_face.clicked.connect(
+                lambda _checked=False, button=card_face:
+                    self._focus_heard_card(button._report))
             self.session_wall.setItemWidget(item, card_face)
             self.session_wall_items[key] = (item, card_face)
             self.session_wall_count += 1
@@ -11192,7 +11461,8 @@ class MainWindow(QMainWindow):
         card_face._report.setdefault('receive_profile', profile)
         item.setToolTip(accessible_label)
         item.setData(Qt.ItemDataRole.AccessibleTextRole, accessible_label)
-        card_face.setToolTip(accessible_label + " · click to flip for receive details")
+        card_face.setToolTip(
+            accessible_label + " · click to focus this station and flip for receive details")
         if card_face.isChecked():
             card_face.setIcon(QIcon())
             card_face.setText(back_text)

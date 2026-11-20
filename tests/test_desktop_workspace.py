@@ -867,3 +867,114 @@ def test_live_preview_keeps_raw_pixel_values_until_verified(workspace):
         assert w.session_wall_count == 1
         assert "verified" in w.heard_arrival_label.text().casefold()
         send.assert_not_called()
+
+
+def test_partial_archive_threshold_upserts_one_saved_card_with_proof(workspace):
+    """Heard artwork crosses threshold once, then improves without new entries."""
+    import json
+    from copy import deepcopy
+    w = workspace
+    assert w.partial_archive_threshold.value() == 25
+    card = {
+        "callsign": "W7PIX", "grid": "CN85", "card_id": 121,
+        "width": 4, "height": 4, "message_type": "card",
+        "palette": [[0, 0, 0], [15, 0, 0]], "exact": False,
+        "pixel_coverage": [True] * 3 + [False] * 13,
+        "verified_pixel_coverage": [False] * 16,
+    }
+    report = {"card": card, "pixels": [1] * 16,
+              "assembly_event": {"verified_complete": False}}
+    with patch.object(w, "transmit_exchange") as tx:
+        image = w.card_image(report)
+        w._show_receive_preview(image, card=card, report=report,
+                                coverage=card["pixel_coverage"],
+                                verified_coverage=card["verified_pixel_coverage"])
+        assert w.session_wall_count == 1  # low quality still visible live
+        assert w.active_qso_log is None  # not archived yet
+        assert not list(w.qso_log_dir.glob("*.json"))
+
+        w.partial_archive_threshold.setValue(50)
+        assert w.settings.value("ui/operate/partial_archive_minimum", type=int) == 50
+        report["card"]["pixel_coverage"] = [True] * 8 + [False] * 8
+        w._show_receive_preview(w.card_image(report), card=card, report=report,
+                                coverage=card["pixel_coverage"])
+        entry = w.active_qso_log
+        assert entry is not None
+        assert len(entry["received_cards"]) == 1
+        assert entry["received_cards"][0]["receive_attempts"] == 1
+        assert not w._assembly_verified(entry["received_cards"][0])
+        assert entry["status"] == "Partial artwork heard"
+        assert len(list(w.qso_log_dir.glob("*.json"))) == 1
+        first_saved = w._active_qso_path.read_text()
+
+        # The same live preview should not inflate the number of receive attempts.
+        w._show_receive_preview(w.card_image(report), card=card, report=report,
+                                coverage=card["pixel_coverage"])
+        assert len(entry["received_cards"]) == 1
+        assert entry["received_cards"][0]["receive_attempts"] == 1
+        assert w._active_qso_path.read_text() == first_saved
+
+        improved = deepcopy(report)
+        improved["card"]["pixel_coverage"] = [True] * 12 + [False] * 4
+        improved["card"]["verified_pixel_coverage"] = [True] * 8 + [False] * 8
+        w._show_receive_preview(w.card_image(improved), card=improved["card"],
+                                report=improved,
+                                coverage=improved["card"]["pixel_coverage"],
+                                verified_coverage=improved["card"]["verified_pixel_coverage"])
+        assert len(entry["received_cards"]) == 1
+        assert sum(entry["received_cards"][0]["card"]["pixel_coverage"]) == 12
+        assert entry["received_cards"][0]["receive_attempts"] == 2
+
+        verified = deepcopy(improved)
+        verified["card"]["exact"] = True
+        verified["card"]["pixel_coverage"] = [True] * 16
+        verified["card"]["verified_pixel_coverage"] = [True] * 16
+        verified["assembly_event"]["verified_complete"] = True
+        # The verified path uses the same existing archive record.
+        w._record_received_card(verified)
+        assert len(entry["received_cards"]) == 1
+        assert w._assembly_verified(entry["received_cards"][0])
+        assert entry["status"] == "Verified artwork heard"
+        assert len(list(w.qso_log_dir.glob("*.json"))) == 1
+        persisted = json.loads(w._active_qso_path.read_text())
+        assert persisted["received_cards"][0]["card"]["exact"]
+        assert persisted["received_cards"][0]["receive_attempts"] == 3
+        assert persisted["received_cards"][0]["logged_at"] == entry["received_cards"][0]["logged_at"]
+        tx.assert_not_called()
+
+
+def test_partial_archive_is_unique_by_identity_per_session(workspace):
+    w = workspace
+    def partial(call, number, *, ratio=0.5):
+        return {"card": {
+            "callsign": call, "card_id": number, "width": 4, "height": 4,
+            "message_type": "card", "pixel_coverage":
+            [True] * int(16 * ratio) + [False] * (16-int(16*ratio)),
+            "verified_pixel_coverage": [False] * 16,
+        }, "pixels": [1] * 16, "assembly_event": {"verified_complete": False}}
+    assert w._record_received_card(partial("W7ONE", 1)) is True
+    assert w._record_received_card(partial("W7ONE", 1)) is False
+    assert len(w.active_qso_log["received_cards"]) == 1
+    assert w._record_received_card(partial("W7ONE", 2)) is True
+    assert len(w.active_qso_log["received_cards"]) == 2
+    assert w._record_received_card(partial("VK2TWO", 1)) is True
+    assert len(w.passive_received_logs["VK2TWO"][0]["received_cards"]) == 1
+    assert len(w.active_qso_log["received_cards"]) == 2
+
+
+def test_verified_reception_always_archives_even_without_partial_mask(workspace):
+    """A high partial threshold never blocks the existing verified-card path."""
+    w = workspace
+    w.partial_archive_threshold.setValue(100)
+    report = {
+        "card": {"callsign": "K7TEST", "grid": "CN85", "card_id": 300,
+                 "width": 4, "height": 4, "message_type": "card",
+                 "exact": True},
+        "pixels": [1] * 16,
+        "assembly_event": {"verified_complete": True},
+    }
+    assert w._record_received_card(report) is True
+    assert w.active_qso_log["status"] == "Verified artwork heard"
+    assert len(w.active_qso_log["received_cards"]) == 1
+    assert w._assembly_verified(w.active_qso_log["received_cards"][0])
+    assert w._active_qso_path.is_file()

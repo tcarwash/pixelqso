@@ -65,7 +65,10 @@ heard pixels even when a partial card might be incorrect, alongside separate
 heard-pixel and CRC-verified coverage. When the assembler confirms the whole
 card, that same gallery tile visibly upgrades to **VERIFIED**. The optional
 **Mark unverified pixels** toggle tints tentative pixels without modifying
-saved artwork. See [Reception confidence and benchmark workflow](docs/RECEPTION-CONFIDENCE.md).
+saved artwork. **Save partials at** defaults to 25% heard pixels, requiring
+an identifiable callsign and card ID. The threshold can be changed in Operate;
+qualifying partials persist in Recent Cards and improve in place as stronger
+copies arrive. See [Reception confidence and benchmark workflow](docs/RECEPTION-CONFIDENCE.md).
 
 ### Card editor
 

@@ -55,7 +55,7 @@ from card_backends import (BACKENDS, DEFAULT_MODE_KEY, LEGACY_MODE_KEY, MODE_REG
 from card_transfer import CardAssemblyService
 from card_requests import RequestCache, UNVERIFIED, ANIMATION_PARTNER
 from cardcast_queue import CardcastQueue
-from reception_quality import reception_quality
+from reception_quality import reception_quality, archivable_partial
 from data2g_transport import Data2GMode
 from data2g_runtime import (data2g_audio_device_selector,
                             data2g_host_audio_devices,
@@ -6189,6 +6189,29 @@ class MainWindow(QMainWindow):
         self.heard_confidence_toggle.toggled.connect(
             self._refresh_reception_confidence_view)
         received_layout.addWidget(self.heard_confidence_toggle)
+        archive_row = QHBoxLayout()
+        archive_row.setSpacing(6)
+        archive_caption = QLabel("Save partials at")
+        archive_caption.setObjectName("supportingText")
+        archive_row.addWidget(archive_caption)
+        self.partial_archive_threshold = QSpinBox()
+        self.partial_archive_threshold.setObjectName("partialArchiveThreshold")
+        self.partial_archive_threshold.setAccessibleName("Minimum heard artwork for partial archive")
+        self.partial_archive_threshold.setRange(1, 100)
+        self.partial_archive_threshold.setSingleStep(5)
+        self.partial_archive_threshold.setSuffix("% heard")
+        self.partial_archive_threshold.setValue(max(1, min(100, self.settings.value(
+            "ui/operate/partial_archive_minimum", 25, type=int))))
+        self.partial_archive_threshold.setToolTip(
+            "Save identifiable, unverified artwork to Recent Cards once this "
+            "percentage of raw pixels has been heard. CRC-verified cards "
+            "are always saved. Cards below this threshold still appear live.")
+        self.partial_archive_threshold.valueChanged.connect(
+            lambda value: self.settings.setValue(
+                "ui/operate/partial_archive_minimum", value))
+        archive_row.addWidget(self.partial_archive_threshold)
+        archive_row.addStretch(1)
+        received_layout.addLayout(archive_row)
         self.heard_arrival_label = QLabel()
         self.heard_arrival_label.setObjectName("heardArrivalLabel")
         self.heard_arrival_label.setAccessibleName("Latest card arrival or verification update")
@@ -12154,9 +12177,28 @@ class MainWindow(QMainWindow):
             self.rx_status.setText(self._listening_status())
 
     def _record_received_card(self, report):
+        # Always preserve verified receptions; tentative pictures enter the
+        # persistent gallery only after identity and coverage meet policy.
+        if (not self._assembly_verified(report) and not archivable_partial(
+                report, self.partial_archive_threshold.value())):
+            return False
         card = report.get("card") or {}
         callsign = str(card.get("callsign", "Unknown")).strip().upper() or "Unknown"
         active_call = str((self.active_qso_log or {}).get("peer_callsign", "")).strip().upper()
+        archive = self.active_qso_log
+        if archive is not None and active_call and active_call != callsign:
+            passive = self.passive_received_logs.get(callsign)
+            archive = passive[0] if passive is not None else None
+        if not self._assembly_verified(report) and archive is not None:
+            matching = next((item for item in archive.get("received_cards", [])
+                             if same_received_card(item, report) and
+                             bool(item.get("duplicate_receipt")) ==
+                             bool(report.get("duplicate_receipt"))), None)
+            if matching is not None and (
+                    _receive_report_rank(report) <= _receive_report_rank(matching) and
+                    matching.get("pixels") == report.get("pixels") and
+                    matching.get("card") == report.get("card")):
+                return False
         if self.active_qso_log is not None and active_call and active_call != callsign:
             # Keep an unrelated station's reception out of the active QSO. A
             # passive per-station log preserves it for the callsign archive and
@@ -12177,12 +12219,13 @@ class MainWindow(QMainWindow):
                 self._append_qso_card("received_cards", copy.deepcopy(report))
             finally:
                 self.active_qso_log, self._active_qso_path = original_log, original_path
-            return
+            return True
         self._begin_qso_log(card.get("callsign", "Unknown"), card.get("grid", ""))
         if card.get("message_type") == "exchange" and self.last_cq_snapshot:
             if not any((item.get("card") or {}).get("message_type") == "cq" for item in self.active_qso_log["sent_cards"]):
                 self._append_qso_card("sent_cards", copy.deepcopy(self.last_cq_snapshot))
         self._append_qso_card("received_cards", report)
+        return True
 
     def _begin_qso_log(self, callsign="Unknown", grid=""):
         if self.active_qso_log is not None: return
@@ -12225,6 +12268,15 @@ class MainWindow(QMainWindow):
             self.active_qso_log[bucket].append(card_data)
         if bucket == "received_cards":
             meta = new_card
+            # A received-only card is an artwork reception, not evidence of a
+            # finished two-way QSO. Preserve explicit formal-contact statuses.
+            if (not self.active_qso_log.get("sent_cards") and
+                    self.active_qso_log.get("status") in {
+                        "In progress", "Partial artwork heard", "Verified artwork heard"}):
+                self.active_qso_log["status"] = (
+                    "Verified artwork heard" if any(self._assembly_verified(item)
+                        for item in self.active_qso_log["received_cards"]) else
+                    "Partial artwork heard")
             self.active_qso_log["peer_callsign"] = meta.get("callsign", self.active_qso_log.get("peer_callsign", "Unknown"))
             self.active_qso_log["peer_grid"] = meta.get("grid", self.active_qso_log.get("peer_grid", ""))
         self.active_qso_log["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")

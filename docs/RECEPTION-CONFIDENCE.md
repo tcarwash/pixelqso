@@ -33,6 +33,29 @@ visual arrival pulse. Subsequent updates reuse the same gallery tile when the
 receiver's card identity remains the same. Provisional artwork remains
 available in the saved Recent Cards/Stations Heard collection.
 
+## When a partial becomes permanent
+
+Operate has a **Save partials at** control, defaulting to **25% heard pixels**
+(adjustable from 1% to 100%). The archive requires a plausible decoded
+callsign, a card ID, and a heard-pixel coverage mask reaching that threshold.
+If an older decoder reports only CRC-verified region coverage, that known
+coverage is a conservative lower bound on heard pixels.
+A callsign by itself is not enough to fill the archive with blank images;
+`N0CALL`/unknown placeholders are excluded. Raw pixels count toward the
+threshold even when none has passed CRC, so weak signals can still become
+saved artwork.
+
+Below-threshold receptions continue to appear in the live receive preview and
+session wall. Once the threshold is crossed, the receiver persists a **partial
+artwork heard** record. Repeated snapshots of the same card and message type
+in a session update that record in place. Stronger copies improve it; a
+subsequent whole-card integrity verification upgrades it to **verified artwork
+heard** without adding another gallery entry. Received-only artwork is not
+counted as a completed QSO.
+
+The setting is local to the UI and does not affect decoding, the modem,
+retransmissions, radio PTT, or the whole-card verification requirements.
+
 ## Benchmarking weak signals
 
 The project already contains a real reproducible modem benchmark harness:

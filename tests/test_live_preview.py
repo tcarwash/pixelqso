@@ -1333,7 +1333,9 @@ class LivePreviewTests(unittest.TestCase):
                 window._begin_qso_log("K1AAA", "FN31")
                 active_log = window.active_qso_log
                 report = {"card": {"callsign": "W1ABC", "grid": "FN42", "card_id": 9,
-                                   "message_type": "cq", "width": 1, "height": 1},
+                                   "message_type": "cq", "width": 1, "height": 1,
+                                   "pixel_coverage": [True],
+                                   "verified_pixel_coverage": [False]},
                           "pixels": [0]}
                 window._record_received_card(report)
                 self.assertIs(window.active_qso_log, active_log)

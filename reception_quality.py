@@ -70,3 +70,34 @@ def reception_quality(card, *, verified_complete=False):
         total, bool(verified_complete),
         _mask(card.get("pixel_coverage"), total),
         _mask(card.get("verified_pixel_coverage"), total))
+
+
+def archivable_partial(report, threshold_percent=25):
+    """Only archive identifiable pictures with sufficient raw pixel coverage.
+
+    Unknown/missing coverage is not zero, but it cannot meet a numerical
+    threshold. CRC proof is deliberately *not* required for a provisional save.
+    Whole-card verified reports are handled by the application's existing
+    verified receive path and do not depend on this threshold.
+    """
+    card = (report or {}).get("card") or {}
+    pixels = (report or {}).get("pixels")
+    if pixels is None or not hasattr(pixels, "__len__") or len(pixels) == 0:
+        return False
+    callsign = str(card.get("callsign") or "").strip().upper()
+    if (not 3 <= len(callsign) <= 16 or callsign in
+            {"UNKNOWN", "STATION", "N0CALL", "NO-CALL", "NOCALL"} or
+            not callsign.isascii() or
+            any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/-" for ch in callsign) or
+            not any(ch.isalpha() for ch in callsign) or
+            not any(ch.isdigit() for ch in callsign) or
+            card.get("card_id") is None):
+        return False
+    quality = reception_quality(card)
+    # Older decoders may supply only CRC-checked region coverage. Every
+    # verified pixel has necessarily been heard, so it is a safe lower bound.
+    known_pixels = quality.heard if quality.heard is not None else quality.checked
+    if known_pixels is None:
+        return False
+    cutoff = max(1, min(100, int(threshold_percent)))
+    return sum(known_pixels) * 100 >= cutoff * quality.total_pixels

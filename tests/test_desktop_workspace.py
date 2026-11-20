@@ -777,3 +777,93 @@ def test_recent_cards_archive_is_individual_and_chronological(workspace, tmp_pat
         assert w.log_gallery.count() == 1
         assert w.contact_summary.text() == "1 station"
         send.assert_not_called()
+
+
+def test_raw_received_art_upgrades_in_place_after_crc_verification(workspace):
+    from copy import deepcopy
+    from PySide6.QtCore import Qt
+    w = workspace
+    card = {
+        "callsign": "W7PIX", "grid": "CN85", "card_id": 674,
+        "width": 4, "height": 2, "palette": [[0, 0, 0], [15, 0, 0]],
+        "message_type": "card", "exact": False,
+        "pixel_coverage": [True] * 8,
+        "verified_pixel_coverage": [True] * 4 + [False] * 4,
+    }
+    partial = {"card": card, "pixels": [1] * 8,
+               "assembly_event": {"verified_complete": False}}
+    raw = w.card_image(partial)
+    assert raw.pixelColor(3, 0).name() == "#ff0000"
+    w._add_session_wall_card(partial)
+    assert w.session_wall_count == 1
+    tile = next(iter(w.session_wall_items.values()))[1]
+    assert "PREVIEW" in tile._caption.text()
+    assert "100% heard" in tile._caption.text()
+    assert "50% CRC" in tile._caption.text()
+    assert "raw artwork arrived" in w.heard_arrival_label.text()
+    assert not w._assembly_verified(tile._report)
+    with patch.object(w, "transmit_exchange") as send:
+        w.heard_confidence_toggle.click()
+        assert w.heard_confidence_toggle.isChecked()
+        assert w.settings.value("ui/operate/mark_uncertain_pixels", type=bool)
+        assert w.card_image(partial).pixelColor(3, 0).name() == "#ff0000"
+        w.heard_confidence_toggle.click()
+        assert not w.heard_confidence_toggle.isChecked()
+        send.assert_not_called()
+
+    complete = deepcopy(partial)
+    complete["card"]["exact"] = True
+    complete["card"]["verified_pixel_coverage"] = [True] * 8
+    complete["assembly_event"]["verified_complete"] = True
+    w._add_session_wall_card(complete)
+    assert w.session_wall_count == 1
+    assert next(iter(w.session_wall_items.values()))[1] is tile
+    assert "✓ VERIFIED" in tile._caption.text()
+    assert "artwork verified" in w.heard_arrival_label.text()
+    assert tile._arrival_animation is not None
+    assert w._assembly_verified(tile._report)
+    assert "provisional" not in tile._caption.text().casefold()
+
+
+def test_live_preview_keeps_raw_pixel_values_until_verified(workspace):
+    from copy import deepcopy
+    w = workspace
+    card = {
+        "callsign": "K7PIX", "grid": "CN85", "card_id": 902,
+        "message_type": "card", "width": 2, "height": 2,
+        "palette": [[0, 0, 0], [15, 5, 0]],
+        "pixel_coverage": [True] * 4,
+        "verified_pixel_coverage": [False] * 4,
+        "exact": False,
+    }
+    partial = {"card": card, "pixels": [1] * 4,
+               "assembly_event": {"verified_complete": False}}
+    image = w.card_image(partial)
+    with patch.object(w, "_record_received_card"), \
+         patch.object(w, "transmit_exchange") as send:
+        w._show_receive_preview(image, card=card, exact=False, report=partial,
+                                coverage=card["pixel_coverage"],
+                                verified_coverage=card["verified_pixel_coverage"])
+        assert "PREVIEW" in w.receive_quality_label.text()
+        assert "0% CRC" in w.receive_quality_label.text()
+        assert "may be incorrect" in w.receive_quality_label.toolTip()
+        assert w.receive_qr_image is None
+        assert w.receive_progress.value() == 100  # heard, NOT verified
+        before = w.receive_view.pixmap().toImage()
+        w.heard_confidence_toggle.click()
+        tinted = w.receive_view.pixmap().toImage()
+        assert before.pixelColor(91, 91) != tinted.pixelColor(91, 91)
+        assert image.pixelColor(0, 0).name() == "#ff5500"
+        complete = deepcopy(partial)
+        complete["card"]["exact"] = True
+        complete["card"]["verified_pixel_coverage"] = [True] * 4
+        complete["assembly_event"]["verified_complete"] = True
+        w._show_receive_preview(image, card=complete["card"], exact=True,
+                                report=complete, coverage=[True] * 4,
+                                verified_coverage=[True] * 4)
+        assert "✓ VERIFIED" in w.receive_quality_label.text()
+        assert w.receive_progress.value() == 100
+        assert w.receive_qr_image is not None
+        assert w.session_wall_count == 1
+        assert "verified" in w.heard_arrival_label.text().casefold()
+        send.assert_not_called()

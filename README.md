@@ -22,6 +22,17 @@ The Operate screenshot uses an isolated fresh profile and does not show active
 reception or transmission. The editor screenshot uses the included 73 Sunset
 starter card.
 
+### Provisional artwork becoming verified
+
+These three screenshots use a **synthetic receive report** in an isolated UI
+profile, not an on-air test. The decoder's raw image is shown first; checking
+**Mark unverified pixels** adds a temporary amber confidence overlay, and a
+later verified report upgrades the same card tile without adding another card.
+
+| As heard · 75% received | Confidence overlay · 25% CRC | Verified · 100% |
+| --- | --- | --- |
+| <img src="screenshots/reception-provisional.png" alt="Raw pixel art at 75 percent reception with provisional label" width="280"> | <img src="screenshots/reception-confidence.png" alt="Amber overlay on raw pixels that have not passed CRC" width="280"> | <img src="screenshots/reception-verified.png" alt="Same received card now marked 100 percent verified" width="280"> |
+
 Example cards made in the editor:
 
 ![example card, showing a cat](screenshots/cat.png)
@@ -48,6 +59,13 @@ station's saved archive. Contacts now defaults to chronological **Recent cards**
 and also offers Stations heard (grouped by callsign) and Activity sessions
 (including unconfirmed sent broadcasts). The operating model, limits and next
 experiments are explained in docs/ARTWORK_FIRST.md.
+
+**Weak-signal artwork stays visible.** The gallery and live preview show raw
+heard pixels even when a partial card might be incorrect, alongside separate
+heard-pixel and CRC-verified coverage. When the assembler confirms the whole
+card, that same gallery tile visibly upgrades to **VERIFIED**. The optional
+**Mark unverified pixels** toggle tints tentative pixels without modifying
+saved artwork. See [Reception confidence and benchmark workflow](docs/RECEPTION-CONFIDENCE.md).
 
 ### Card editor
 

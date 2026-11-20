@@ -15,6 +15,7 @@ import cardmodem as pixel
 from card_backends import get_backend, MODE_REGISTRY
 from backend_adapters import EXPERIMENTAL_ADAPTER
 from card_transfer import CardAssemblyService
+from reception_quality import reception_quality
 from tools.hf_channel import PROFILES, simulate
 
 def digest(audio):
@@ -56,7 +57,8 @@ def trial(mode, audio, expected, profile, seed, snr, *, id_markers='on',
                peak_process_rss_kb=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
                id_markers=id_markers, audio_placement=audio_placement,
                interlaced=interlaced,
-               exact_match=False, false_verified=False)
+               exact_match=False, false_verified=False,
+               heard_percent=None, crc_verified_percent=None)
     case = json.dumps(dict(mode=mode, profile=profile, seed=seed, snr=snr,
                            expected=expected), sort_keys=True, separators=(',', ':'))
     row['case_id'] = hashlib.sha256(case.encode()).hexdigest()
@@ -73,9 +75,12 @@ def trial(mode, audio, expected, profile, seed, snr, *, id_markers='on',
     matches = (expected is not None and report.get('pixels') == expected_pixels and
                card.get('callsign') == expected['callsign'] and card.get('grid') == expected['grid'])
     verified = bool(report['assembly_event']['verified_complete'])
+    quality = reception_quality(card, verified_complete=verified)
     row.update(verified=verified and matches, exact_match=matches,
                false_verified=verified and not matches,
                coverage_pixels=sum(card.get('pixel_coverage') or []),
+               heard_percent=quality.heard_percent,
+               crc_verified_percent=quality.checked_percent,
                diagnostics=card.get('diagnostics') or report.get('diagnostics') or {})
     row['stage'] = failure_stage(row)
     return row

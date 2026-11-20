@@ -178,6 +178,12 @@ def build_app_stylesheet(text_scale=1.0):
                                                     color: {c['text_bright']}; }}
         QLabel#heardCardCaption {{ color: {c['text_soft']}; font-size: 11px;
                                    font-weight: 700; padding: 0 2px; }}
+        QCheckBox#confidenceOverlayToggle {{ color: {c['text_muted']}; font-size: 12px;
+                                             padding: 2px 0px; }}
+        QLabel#heardArrivalLabel {{ color: {c['accent']}; font-size: 12px;
+                                    font-weight: 700; padding: 3px 4px; }}
+        QLabel#receiveQualityLabel {{ color: {c['text_soft']}; font-size: 11px;
+                                      font-weight: 700; padding: 2px; }}
         QFrame#shareCardPanel {{ background: {c['surface_tab']};
                                  border: 1px solid {c['border_control']};
                                  border-radius: {r['panel']}px; }}

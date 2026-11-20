@@ -23,7 +23,7 @@ for _thread_env in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"
     os.environ[_thread_env] = os.environ.get("PIXELQSO_DSP_THREADS", "1")
 
 import numpy as np
-from PySide6.QtCore import Qt, QRect, QSize, QObject, QTimer, QEvent, QRunnable, QThreadPool, Signal, QStandardPaths, QMimeData, QPoint, QUrl, QSortFilterProxyModel, QBuffer, QByteArray, QIODevice, QSettings, QSignalBlocker
+from PySide6.QtCore import Qt, QRect, QSize, QObject, QTimer, QEvent, QRunnable, QThreadPool, Signal, QStandardPaths, QMimeData, QPoint, QUrl, QSortFilterProxyModel, QBuffer, QByteArray, QIODevice, QSettings, QSignalBlocker, QPropertyAnimation
 from PySide6.QtGui import QAction, QColor, QPainter, QPen, QImage, QPixmap, QFont, QIcon, QKeySequence, QShortcut, QDrag, QStandardItem, QStandardItemModel
 from PySide6.QtNetwork import QTcpSocket, QUdpSocket, QHostAddress
 from PySide6.QtMultimedia import QAudio, QAudioDevice, QAudioFormat, QAudioSink, QAudioSource, QMediaDevices
@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QListWidget
     QFormLayout, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QInputDialog,
     QMessageBox, QPushButton, QSpinBox, QTabWidget, QTextEdit, QDialog,
     QVBoxLayout, QWidget, QButtonGroup, QScrollArea, QTableView, QAbstractItemView, QFrame, QCheckBox, QGroupBox,
-    QStackedWidget, QProgressBar, QMenu, QSizePolicy, QSplitter, QBoxLayout)
+    QStackedWidget, QProgressBar, QMenu, QSizePolicy, QSplitter, QBoxLayout, QGraphicsOpacityEffect)
 
 import cardmodem as modem
 from card_ids import allocate_card_id
@@ -55,6 +55,7 @@ from card_backends import (BACKENDS, DEFAULT_MODE_KEY, LEGACY_MODE_KEY, MODE_REG
 from card_transfer import CardAssemblyService
 from card_requests import RequestCache, UNVERIFIED, ANIMATION_PARTNER
 from cardcast_queue import CardcastQueue
+from reception_quality import reception_quality
 from data2g_transport import Data2GMode
 from data2g_runtime import (data2g_audio_device_selector,
                             data2g_host_audio_devices,
@@ -6158,7 +6159,8 @@ class MainWindow(QMainWindow):
             "Enjoy the artwork without a formal QSO; reports and 73 are optional.")
         received_layout.addWidget(self.operate_journey)
         self.heard_focus_label = QLabel(
-            "Choose a received card to focus its station; click again to see signal details.")
+            "See artwork as decoded, even before CRC confirms it. "
+            "Click a card to focus its station and inspect details.")
         self.heard_focus_label.setObjectName("operateSectionHint")
         self.heard_focus_label.setWordWrap(True)
         received_layout.addWidget(self.heard_focus_label)
@@ -6173,6 +6175,26 @@ class MainWindow(QMainWindow):
         self.heard_archive_button.clicked.connect(self._open_heard_archive)
         heard_toolbar.addWidget(self.heard_archive_button)
         received_layout.addLayout(heard_toolbar)
+        self.heard_confidence_toggle = QCheckBox("Mark unverified pixels")
+        self.heard_confidence_toggle.setObjectName("confidenceOverlayToggle")
+        self.heard_confidence_toggle.setToolTip(
+            "Off: show the raw decoded image, even if some pixels are wrong. "
+            "On: tint pixels that were heard but lack CRC verification amber. "
+            "Neither mode changes the saved pixels or verification status.")
+        self.heard_confidence_toggle.setAccessibleDescription(
+            "Reveal which of the raw received pixels are provisional. "
+            "The underlying artwork is always preserved.")
+        self.heard_confidence_toggle.setChecked(self.settings.value(
+            "ui/operate/mark_uncertain_pixels", False, type=bool))
+        self.heard_confidence_toggle.toggled.connect(
+            self._refresh_reception_confidence_view)
+        received_layout.addWidget(self.heard_confidence_toggle)
+        self.heard_arrival_label = QLabel()
+        self.heard_arrival_label.setObjectName("heardArrivalLabel")
+        self.heard_arrival_label.setAccessibleName("Latest card arrival or verification update")
+        self.heard_arrival_label.setWordWrap(True)
+        self.heard_arrival_label.hide()
+        received_layout.addWidget(self.heard_arrival_label)
         self.heard_focus_actions = QWidget()
         focus_actions = QHBoxLayout(self.heard_focus_actions)
         focus_actions.setContentsMargins(0, 0, 0, 0)
@@ -6275,12 +6297,13 @@ class MainWindow(QMainWindow):
         self.session_wall.setWordWrap(False)
         self.session_wall.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.session_wall.setIconSize(QSize(164, 164))
-        self.session_wall.setGridSize(QSize(188, 219))
+        self.session_wall.setGridSize(QSize(188, 239))
         self.session_wall.setSpacing(8)
         self.session_wall.setObjectName("sessionWall")
         self.session_wall.setAccessibleName("Received cards for this session")
         self.session_wall.setAccessibleDescription(
-            "Newest cards appear first. A card may be provisional until whole-card integrity checks pass.")
+            "Newest cards appear first. Raw decoded pixels may be wrong until "
+            "CRC checks or whole-card integrity verification succeed.")
         self.session_wall.hide()
         wall_list_layout.addWidget(self.session_wall, 1)
         wall_list_layout.addWidget(self.card_requests_toggle)
@@ -6308,6 +6331,13 @@ class MainWindow(QMainWindow):
         self.receive_duplicate_label.hide()
         preview_layout.addWidget(self.receive_duplicate_label, 0, Qt.AlignmentFlag.AlignCenter)
         preview_layout.addWidget(self.receive_view, 0, Qt.AlignmentFlag.AlignCenter)
+        self.receive_quality_label = QLabel("RAW PREVIEW · awaiting CRC")
+        self.receive_quality_label.setObjectName("receiveQualityLabel")
+        self.receive_quality_label.setWordWrap(True)
+        self.receive_quality_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.receive_quality_label.setAccessibleName("Incoming artwork verification state")
+        preview_layout.addWidget(self.receive_quality_label)
+        self._current_receive_preview = None
         self.receive_progress = QProgressBar()
         self.receive_progress.setRange(0, 100)
         self.receive_progress.setValue(0)
@@ -8656,7 +8686,9 @@ class MainWindow(QMainWindow):
         self.receive_activity_timeout.stop()
         self.receive_activity_pending = False
         self.receive_progress.setRange(0, 100)
-        self.listen_indicator.setText("● LISTENING" if exact else "● RECEIVING CARD")
+        verified = (self._assembly_verified(report) if report is not None and
+                    "assembly_event" in report else bool(exact))
+        self.listen_indicator.setText("● LISTENING" if verified else "● RECEIVING CARD")
         card = card or {}
         if (report is not None and not duplicate and card.get("callsign") and
                 card.get("card_id") is not None):
@@ -8664,24 +8696,36 @@ class MainWindow(QMainWindow):
             self._show_reply_action(report)
             if card.get('reception_report'):
                 self._refresh_animation_references()
-            if not exact:
+            if not verified:
                 self._record_received_card(report)
         identity = " ".join(value for value in (
             str(card.get("callsign") or "station not identified"),
             str(card.get("grid") or "")) if value)
-        verification = "whole card verified" if exact else "provisional, not yet verified"
+        verification = "whole card verified" if verified else "provisional, not yet verified"
         self.current_preview_is_duplicate = bool(duplicate)
         self.receive_duplicate_label.setVisible(bool(duplicate))
-        self.receive_qr_image = image.copy() if exact else None
-        self.receive_qr_button.setVisible(bool(exact))
+        self.receive_qr_image = image.copy() if verified else None
+        self.receive_qr_button.setVisible(bool(verified))
         self.receive_view.setAccessibleName(
             f"Duplicate card preview from {identity} · {verification}" if duplicate else
             f"Card preview from {identity} · {verification}")
-        self.receive_view.setPixmap(QPixmap.fromImage(image).scaled(
+        quality_card = dict(card)
+        if coverage is not None:
+            quality_card["pixel_coverage"] = coverage
+        if verified_coverage is not None:
+            quality_card["verified_pixel_coverage"] = verified_coverage
+        quality = reception_quality(quality_card, verified_complete=verified)
+        self._current_receive_preview = (image.copy(), report, quality)
+        self.receive_quality_label.setText(quality.caption)
+        self.receive_quality_label.setToolTip(quality.detail)
+        self.receive_quality_label.setAccessibleDescription(quality.detail)
+        display = self._image_with_reception_confidence(
+            image, quality, self._confidence_view_enabled())
+        self.receive_view.setPixmap(QPixmap.fromImage(display).scaled(
             184, 184, Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.FastTransformation))
         self.receive_progress.show()
-        if exact:
+        if verified:
             self.receive_progress.setValue(100)
             self.receive_progress.setFormat("100% · whole card verified")
             self.receive_progress.setToolTip("Whole card integrity verified.")
@@ -8689,19 +8733,13 @@ class MainWindow(QMainWindow):
                 "100 percent received. Whole card integrity verified.")
         else:
             percent = self._coverage_percent(coverage)
-            verified_percent = self._coverage_percent(verified_coverage)
             self.receive_progress.setValue(percent)
             self.receive_progress.setFormat(f"{percent}% received")
-            self.receive_progress.setToolTip(
-                f"{percent}% received; {verified_percent}% of image regions verified. "
-                "Provisional until whole-card integrity checks pass.")
-            self.receive_progress.setAccessibleDescription(
-                f"{percent} percent of the card image received; "
-                f"{verified_percent} percent of image regions verified. "
-                "The preview is provisional until whole-card integrity verification completes.")
+            self.receive_progress.setToolTip(quality.detail)
+            self.receive_progress.setAccessibleDescription(quality.detail)
         self.receive_preview_box.show()
         self.discard_preview_button.setEnabled(True)
-        if exact and not duplicate:
+        if verified and not duplicate:
             self.live_preview_timeout.start(5000)
         else:
             self.live_preview_timeout.stop()
@@ -8714,6 +8752,7 @@ class MainWindow(QMainWindow):
         self.receive_qr_image = None
         self.receive_qr_button.hide()
         self.current_preview_is_duplicate = False
+        self._current_receive_preview = None
         self.receive_preview_box.hide()
 
     def _discard_receive_preview(self):
@@ -8736,6 +8775,8 @@ class MainWindow(QMainWindow):
         self.current_preview_is_duplicate = False
         self.receive_duplicate_label.hide()
         self.receive_view.clear()
+        self._current_receive_preview = None
+        self.receive_quality_label.setText("RAW PREVIEW · awaiting CRC")
         self.receive_view.setText("Listening for a card")
         self.receive_view.setAccessibleName("Waiting for a new card preview")
         self.receive_progress.setRange(0, 100)
@@ -11697,6 +11738,78 @@ class MainWindow(QMainWindow):
                         image.setPixelColor(x, y, QColor(*(int(v)*17 for v in rgb)))
         return image
 
+    @staticmethod
+    def _image_with_reception_confidence(image, quality, enabled):
+        """Optional amber tint of heard-but-unverified pixels; raw stays intact."""
+        if image is None or image.isNull() or not enabled or quality.whole_verified:
+            return image
+        result = image.copy()
+        width = result.width()
+        for index in range(min(quality.total_pixels, width * result.height())):
+            # Unknown/unheard pixels already have a neutral checkerboard from
+            # card_image. Never tint them as though they were actually heard.
+            if quality.heard is not None and not quality.heard[index]:
+                continue
+            if quality.checked is not None and quality.checked[index]:
+                continue
+            x, y = index % width, index // width
+            color = result.pixelColor(x, y)
+            # Keep the underlying decoded RGB discernible under an amber wash.
+            color.setRgb(round(color.red() * .72 + 245 * .28),
+                         round(color.green() * .72 + 160 * .28),
+                         round(color.blue() * .72 + 45 * .28))
+            result.setPixelColor(x, y, color)
+        return result
+
+    def _confidence_view_enabled(self):
+        return (hasattr(self, "heard_confidence_toggle") and
+                self.heard_confidence_toggle.isChecked())
+
+    def _refresh_reception_confidence_view(self, *_):
+        """Refresh UI-only images; never mutate decoded pixels or transmit."""
+        show = self._confidence_view_enabled()
+        self.settings.setValue("ui/operate/mark_uncertain_pixels", show)
+        for _item, button in self.session_wall_items.values():
+            if not hasattr(button, "_report"):
+                continue
+            report = button._report
+            image = self.card_image(report)
+            if image is None or image.isNull():
+                continue
+            quality = reception_quality(report.get("card") or {},
+                                        verified_complete=self._assembly_verified(report))
+            display = self._image_with_reception_confidence(image, quality, show)
+            icon = QIcon(QPixmap.fromImage(display.scaled(
+                QSize(164, 164), Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.FastTransformation)))
+            button._ordinary_icon = icon
+        self._update_wall_animations()
+        current = getattr(self, "_current_receive_preview", None)
+        if current is not None:
+            image, report, quality = current
+            display = self._image_with_reception_confidence(image, quality, show)
+            self.receive_view.setPixmap(QPixmap.fromImage(display).scaled(
+                184, 184, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.FastTransformation))
+
+    @staticmethod
+    def _pulse_received_tile(button):
+        """Subtle visual indication of an arrival or provisional→verified upgrade."""
+        effect = getattr(button, "_arrival_effect", None)
+        if effect is None:
+            effect = QGraphicsOpacityEffect(button)
+            button.setGraphicsEffect(effect)
+            button._arrival_effect = effect
+        previous = getattr(button, "_arrival_animation", None)
+        if previous is not None:
+            previous.stop()
+        animation = QPropertyAnimation(effect, b"opacity", button)
+        animation.setDuration(600)
+        animation.setStartValue(.82)
+        animation.setEndValue(1.)
+        button._arrival_animation = animation
+        animation.start()
+
     def _show_duplicate_card(self, report):
         """Keep one receipt for each retransmitted card during this app session."""
         card = report.get("card") or {}
@@ -11730,6 +11843,8 @@ class MainWindow(QMainWindow):
             return
         key = session_wall_card_key(report)
         existing = self.session_wall_items.get(key)
+        was_verified = bool(existing is not None and
+            self._assembly_verified(getattr(existing[1], "_report", {})))
         callsign = str(card.get("callsign") or "Unknown station")
         grid = str(card.get("grid") or "")
         kind = {"cq": "CQ", "exchange": "Exchange", "report73": "RR73",
@@ -11739,8 +11854,13 @@ class MainWindow(QMainWindow):
         received_at = time.strftime("%H:%M:%S")
         tile = image.scaled(QSize(164, 164), Qt.AspectRatioMode.KeepAspectRatio,
                             Qt.TransformationMode.FastTransformation)
-        icon = QIcon(QPixmap.fromImage(tile))
         exact = self._assembly_verified(report)
+        quality = reception_quality(card, verified_complete=exact)
+        display = self._image_with_reception_confidence(
+            image, quality, self._confidence_view_enabled())
+        tile = display.scaled(QSize(164, 164), Qt.AspectRatioMode.KeepAspectRatio,
+                              Qt.TransformationMode.FastTransformation)
+        icon = QIcon(QPixmap.fromImage(tile))
         received_percent = self._coverage_percent(card.get("pixel_coverage"))
         verified_percent = self._coverage_percent(card.get("verified_pixel_coverage"))
         total_pixels = int(card.get("width", image.width())) * int(card.get("height", image.height()))
@@ -11783,7 +11903,7 @@ class MainWindow(QMainWindow):
         ))
         if existing is None:
             item = QListWidgetItem()
-            item.setSizeHint(QSize(184, 214))
+            item.setSizeHint(QSize(184, 234))
             self.session_wall.insertItem(0, item)
             card_face = QPushButton()
             card_face.setCheckable(True)
@@ -11815,7 +11935,7 @@ class MainWindow(QMainWindow):
             caption.setFixedWidth(172)
             caption.setWordWrap(True)
             caption.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-            caption.setMaximumHeight(38)
+            caption.setMaximumHeight(54)
             cell_layout.addWidget(caption, 0, Qt.AlignmentFlag.AlignHCenter)
             card_face._caption = caption
             self.session_wall.setItemWidget(item, cell)
@@ -11831,11 +11951,12 @@ class MainWindow(QMainWindow):
         card_face._ordinary_back = back_text
         card_face._ordinary_label = accessible_label
         if hasattr(card_face, "_caption"):
-            quality = ("✓ VERIFIED" if exact else f"~ {received_percent}% PREVIEW")
+            label = quality.caption
             if duplicate:
-                quality += " · REPEAT"
-            card_face._caption.setText(f"{callsign} · {kind}\n{quality}")
-            card_face._caption.setToolTip(integrity_text)
+                label += " · REPEAT"
+            card_face._caption.setText(f"{callsign} · {kind}\n{label}")
+            card_face._caption.setToolTip(quality.detail)
+            card_face._caption.setAccessibleDescription(quality.detail)
         card_face._report = copy.deepcopy(report)
         card_face._report.setdefault('logged_at', time.strftime('%Y-%m-%d %H:%M:%S'))
         card_face._report.setdefault('frequency_hz', frequency_hz)
@@ -11856,6 +11977,21 @@ class MainWindow(QMainWindow):
         self.getting_started_button.hide()
         self.session_wall.show()
         self._refresh_heard_gallery_count()
+        if exact and not was_verified:
+            event = (f"✓ {callsign}: artwork verified!" if existing is not None
+                     else f"✓ Verified artwork arrived from {callsign}")
+            self.heard_arrival_label.setText(event)
+            self.heard_arrival_label.show()
+            self._pulse_received_tile(card_face)
+        elif existing is None:
+            self.heard_arrival_label.setText(
+                f"◌ {callsign}: raw artwork arrived · CRC confirmation pending")
+            self.heard_arrival_label.show()
+            self._pulse_received_tile(card_face)
+        elif not was_verified and quality.heard_percent is not None:
+            self.heard_arrival_label.setText(
+                f"◌ {callsign}: {quality.heard_percent}% heard · still unconfirmed")
+            self.heard_arrival_label.show()
         self._update_wall_animations()
 
     def _saved_animation_candidates(self):
@@ -11946,6 +12082,10 @@ class MainWindow(QMainWindow):
                 button.setIcon(button._front_icon)
             else:
                 button.setText(button._back_text)
+        if self._confidence_view_enabled():
+            if hasattr(self, "_animation_wall_timer"):
+                self._animation_wall_timer.stop()
+            return
         for _item, button in tiles:
             second = button._report
             first = animation_partner(second, candidates)

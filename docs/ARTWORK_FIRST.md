@@ -55,6 +55,9 @@ callsign) and Activity sessions (including unconfirmed broadcasts).
   whose art inspired the response. The UI must not claim remote delivery.
 - Audio-test and Data2G host ACKs do not imply successful remote reception.
 - Provisional images remain clearly distinct from CRC-verified images.
+  Raw, potentially incorrect pixels should still be shown. The optional
+  confidence overlay never changes the original image; see
+  [Reception confidence](RECEPTION-CONFIDENCE.md).
 - Retain existing CAT/PTT preflights, card integrity checking, reception
   reports, retries and cancellation behavior.
 - Physical radio validation is separate from the isolated noVNC UI sandbox.

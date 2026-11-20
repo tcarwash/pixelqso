@@ -30,6 +30,31 @@ def render(data):
             airtime = selected[0]['airtime_seconds']
             cpu = sum(r['decode_seconds'] for r in selected) / len(selected)
             lines.append(f'| `{mode}` | {airtime:.2f} | {snr:g} | ' + ' | '.join(cells) + f' | {cpu:.2f} |')
+    # Coverage is a useful companion to full-card success at weak SNR, but
+    # missing decoder reports are unknown, not zero-percent images.
+    if any(r.get('heard_percent') is not None or
+           r.get('crc_verified_percent') is not None for r in rows):
+        lines += ['', '## Provisional reception coverage', '',
+                  'Means include attempts with usable card data only. Failed '
+                  'acquisitions are excluded, not counted as 0% heard. '
+                  'Coverage does not prove the pixels are correct.', '',
+                  '| Mode | Channel | SNR dB | Heard pixels | CRC-verified pixels |',
+                  '|---|---|---:|---:|---:|']
+        for mode in args['modes']:
+            for snr in args['snr_db']:
+                for profile in profiles:
+                    group = [r for r in rows if r['mode'] == mode and
+                             r['snr_db_2500'] == snr and r['profile'] == profile]
+                    if not group:
+                        continue
+                    def metric(key):
+                        values = [r[key] for r in group if r.get(key) is not None]
+                        return (f'{sum(values) / len(values):.1f}% '
+                                f'({len(values)}/{len(group)})' if values else '—')
+                    lines.append(
+                        f'| `{mode}` | {profile} | {snr:g} | '
+                        f'{metric("heard_percent")} | '
+                        f'{metric("crc_verified_percent")} |')
     controls = [r for r in rows if r['profile'] == 'noise_only']
     errors = [r for r in rows if r.get('failure_kind') == 'backend_error']
     lines += ['', f"Noise-only controls: {len(controls)}; false verified cards across all attempts: "

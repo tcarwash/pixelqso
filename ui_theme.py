@@ -166,6 +166,18 @@ def build_app_stylesheet(text_scale=1.0):
                                    border: 1px solid {c['border_subtle']};
                                    border-radius: {r['card']}px; }}
         QListWidget#collectionGallery {{ background: transparent; border: 0; padding: 4px; }}
+        QFrame#cardcastPanel {{ background: {c['surface_tab']};
+                                border: 1px solid {c['border_subtle']};
+                                border-radius: {r['panel']}px; }}
+        QListWidget#cardcastQueue {{ background: {c['surface_sunken']};
+                                     border: 1px solid {c['border_subtle']};
+                                     border-radius: {r['control']}px;
+                                     padding: 3px; }}
+        QListWidget#cardcastQueue::item {{ padding: 3px 6px; }}
+        QListWidget#cardcastQueue::item:selected {{ background: {c['accent_dim']};
+                                                    color: {c['text_bright']}; }}
+        QLabel#heardCardCaption {{ color: {c['text_soft']}; font-size: 11px;
+                                   font-weight: 700; padding: 0 2px; }}
         QFrame#shareCardPanel {{ background: {c['surface_tab']};
                                  border: 1px solid {c['border_control']};
                                  border-radius: {r['panel']}px; }}

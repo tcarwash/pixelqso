@@ -22,9 +22,30 @@ The primary experience is now a shared over-the-air gallery of pixel art.
    available through an expandable panel. The separate automatic mode remains
    unavailable in the normal UI; this change does not silently enable it.
 
-Heard artwork is valuable without a completed exchange. Contacts defaults to
-Stations heard, grouped by callsign, and offers Activity sessions for
-chronological records including unconfirmed broadcasts.
+Heard artwork is valuable without a completed exchange. Contacts defaults
+to Recent cards, ordered by time, and also offers Stations heard (grouped by
+callsign) and Activity sessions (including unconfirmed broadcasts).
+
+## Cardcasting workflow
+
+- Save or personalize several cards under My Cards, then add them using
+  **Add to on-air queue**. The ordered playlist is persisted locally in
+  settings. Deleted/missing saved cards are pruned automatically.
+- On Operate, select and load a queued card to make it the current outgoing
+  artwork. This is not a transmit action.
+- Use **Send card** to broadcast the current art, or **Send selected** on the
+  queue to manually transmit the chosen item once. Entries are not removed
+  or advanced on a failed attempt or an unconfirmed host ACK.
+- Move queued entries up/down, duplicate by queueing again, or remove an entry
+  without deleting the original saved card. There is no background send loop.
+- The recent-session gallery shows verified/provisional state and station
+  identity on each card. Selecting received art focuses it without
+  transmitting. **Draw something new** prepares a card for later manual
+  transmission, and **See this station** opens the saved reception archive.
+- The persistent Recent cards view works even after an application restart:
+  it reads recorded receptions from disk rather than relying only on the
+  in-memory wall.
+
 
 ## Safety and semantics
 

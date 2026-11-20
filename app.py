@@ -54,6 +54,7 @@ from card_backends import (BACKENDS, DEFAULT_MODE_KEY, LEGACY_MODE_KEY, MODE_REG
                            register_data2g_mode_backends, EXPERIMENTAL_MODE_DESCRIPTIONS)
 from card_transfer import CardAssemblyService
 from card_requests import RequestCache, UNVERIFIED, ANIMATION_PARTNER
+from cardcast_queue import CardcastQueue
 from data2g_transport import Data2GMode
 from data2g_runtime import (data2g_audio_device_selector,
                             data2g_host_audio_devices,
@@ -2804,20 +2805,26 @@ class MainWindow(QMainWindow):
         selection_actions = QGridLayout()
         selection_actions.setSpacing(SPACING["xs"])
         heading.removeWidget(open_button)
-        selection_actions.addWidget(self.use_library_card_button, 0, 0, 1, 2)
-        selection_actions.addWidget(open_button, 1, 0, 1, 2)
+        self.queue_library_card_button = QPushButton("Add to on-air queue")
+        self.queue_library_card_button.setObjectName("primaryAction")
+        self.queue_library_card_button.setToolTip(
+            "Add this saved card to the manual sharing playlist. Does not transmit.")
+        self.queue_library_card_button.clicked.connect(self._queue_selected_library_card)
+        selection_actions.addWidget(self.queue_library_card_button, 0, 0, 1, 2)
+        selection_actions.addWidget(self.use_library_card_button, 1, 0, 1, 2)
+        selection_actions.addWidget(open_button, 2, 0, 1, 2)
         self.export_card_button = QPushButton("Export selected…")
         self.export_card_button.setEnabled(False)
         self.export_card_button.clicked.connect(self.export_selected_card)
-        selection_actions.addWidget(self.export_card_button, 2, 0)
+        selection_actions.addWidget(self.export_card_button, 3, 0)
         self.export_animation_button = QPushButton("Export animation…")
         self.export_animation_button.setEnabled(False)
         self.export_animation_button.clicked.connect(self.export_selected_animation)
-        selection_actions.addWidget(self.export_animation_button, 3, 0, 1, 2)
+        selection_actions.addWidget(self.export_animation_button, 4, 0, 1, 2)
         self.copy_card_button = QPushButton("Copy PNG")
         self.copy_card_button.clicked.connect(self.copy_selected_card)
         self.copy_card_button.setEnabled(False)
-        selection_actions.addWidget(self.copy_card_button, 2, 1)
+        selection_actions.addWidget(self.copy_card_button, 3, 1)
         more_menu = QMenu(self)
         duplicate = more_menu.addAction("Duplicate card")
         duplicate.triggered.connect(self.duplicate_library_card)
@@ -2828,7 +2835,7 @@ class MainWindow(QMainWindow):
         delete = more_menu.addAction("Delete card…")
         delete.triggered.connect(self.delete_library_card)
         more = QPushButton("More"); more.setMenu(more_menu); more.setToolTip("More card actions")
-        selection_actions.addWidget(more, 4, 0, 1, 2)
+        selection_actions.addWidget(more, 5, 0, 1, 2)
         self.more_card_button = more
         layout.addLayout(heading)
         library_controls = QHBoxLayout(); library_controls.setSpacing(SPACING["sm"])
@@ -2960,13 +2967,14 @@ class MainWindow(QMainWindow):
         self.log_clear_button.setVisible(False)
         controls.addWidget(self.log_clear_button)
         self.log_deck_view = QComboBox()
-        self.log_deck_view.addItem("Activity sessions", "sessions")
+        self.log_deck_view.addItem("Recent cards", "recent")
         self.log_deck_view.addItem("Stations heard", "received_by_call")
+        self.log_deck_view.addItem("Activity sessions", "sessions")
         self.log_deck_view.setAccessibleName("Contact deck view")
         self.log_deck_view.setToolTip(
-            "Show individual contact sessions or all received cards grouped by callsign.")
+            "Recent received artwork, cards grouped by station, or all activity sessions.")
         preferred_view = str(self.settings.value(
-            "ui/contacts/view", "received_by_call"))
+            "ui/contacts/view", "recent"))
         self.log_deck_view.setCurrentIndex(
             max(0, self.log_deck_view.findData(preferred_view)))
         self.log_deck_view.currentIndexChanged.connect(
@@ -3162,6 +3170,8 @@ class MainWindow(QMainWindow):
         self.filter_card_library()
         self._refresh_transfer_summary()
         self._refresh_getting_started()
+        if hasattr(self, "cardcast_queue_list"):
+            self._refresh_cardcast_queue()
 
     def filter_card_library(self, *_):
         if not hasattr(self, "library_list"): return
@@ -3271,7 +3281,10 @@ class MainWindow(QMainWindow):
         self._sync_editor_controls()
         self.card_path = None
         self.editor_baseline = self.editor_signature()
-        can_reply = self._reply_stage(self.reply_report) is not None
+        incoming_kind = ((self.reply_report or {}).get("card") or {}).get(
+            "message_type", "card")
+        can_reply = (incoming_kind != "card" and
+                     self._reply_stage(self.reply_report) is not None)
         peer = str(((self.reply_report or {}).get("card") or {}).get("callsign") or "station")
         self.editor_done_button.setText(
             f"Send reply to {peer}" if can_reply else "Use this card")
@@ -3297,9 +3310,12 @@ class MainWindow(QMainWindow):
                 self.card.width, self.card.height, copy.deepcopy(self.card.animation))
             self.quick_draw_active = False
             self.editor_dialog.accept()
-            if self._reply_stage(self.reply_report):
+            incoming_kind = ((self.reply_report or {}).get("card") or {}).get(
+                "message_type", "card")
+            if incoming_kind != "card" and self._reply_stage(self.reply_report):
                 self.reply_to_received()
             else:
+                self._select_manual_stage("card")
                 self._refresh_quick_draw_status()
         except Exception as exc:
             QMessageBox.warning(self.editor_dialog, "Couldn't send quick reply", str(exc))
@@ -3486,6 +3502,142 @@ class MainWindow(QMainWindow):
         self.library_filter.setCurrentIndex(self.library_filter.findData(
             "starter" if not self._has_saved_library_cards and has_starters else "all"))
         self._update_export_buttons()
+
+    def _jump_to_cardcast_queue(self):
+        """Scroll the artwork pane to the playlist without touching the radio."""
+        if hasattr(self, "operate_sender_scroll"):
+            self.operate_sender_scroll.ensureWidgetVisible(
+                self.cardcast_panel, 0, 12)
+
+    def _browse_cardcast_queue(self):
+        """Open the artwork gallery. Adding to the playlist is always manual."""
+        self.tabs.setCurrentIndex(1)
+        self.library_search.clear()
+        index = self.library_filter.findData("all")
+        if index >= 0:
+            self.library_filter.setCurrentIndex(index)
+
+    def _persist_cardcast_queue(self):
+        self.settings.setValue("ui/cardcast/queue", list(self.cardcast_playlist.paths))
+
+    def _refresh_cardcast_queue(self, *, selected_row=None):
+        """Prune missing cards and rebuild from the validated local library."""
+        if not hasattr(self, "cardcast_queue_list") or not hasattr(self, "library_list"):
+            return
+        allowed = {
+            self.library_list.item(i).data(Qt.ItemDataRole.UserRole):
+                self.library_list.item(i)
+            for i in range(self.library_list.count())
+            if self.library_list.item(i).data(Qt.ItemDataRole.UserRole + 1) in {"my", "sent"}
+        }
+        if self.cardcast_playlist.prune(set(allowed)):
+            self._persist_cardcast_queue()
+        queue = self.cardcast_queue_list
+        if selected_row is None:
+            selected_row = queue.currentRow()
+        with QSignalBlocker(queue):
+            queue.clear()
+            for number, path in enumerate(self.cardcast_playlist.paths, 1):
+                artwork = allowed[path]
+                label = f"{number}. {Path(path).stem}"
+                item = QListWidgetItem(artwork.icon(), label)
+                item.setToolTip(artwork.toolTip() + " · queued, not transmitted")
+                item.setData(Qt.ItemDataRole.UserRole, path)
+                queue.addItem(item)
+            if queue.count():
+                queue.setCurrentRow(max(0, min(selected_row, queue.count() - 1)))
+        count = queue.count()
+        self.cardcast_count.setText(f"{count} queued")
+        if hasattr(self, "cardcast_peek_button"):
+            self.cardcast_peek_button.setText(
+                f"▸ Up next · {count} queued" if count else
+                "▸ Up next · build a card playlist")
+        self.cardcast_empty.setVisible(count == 0)
+        queue.setVisible(count > 0)
+        self.cardcast_queue_actions.setVisible(count > 0)
+        self.cardcast_send_button.setVisible(count > 0)
+        self.cardcast_load_button.setVisible(count > 0)
+        self._sync_cardcast_queue_actions()
+
+    def _sync_cardcast_queue_actions(self, *_):
+        if not hasattr(self, "cardcast_queue_list"):
+            return
+        row = self.cardcast_queue_list.currentRow()
+        count = len(self.cardcast_playlist.paths)
+        selected = 0 <= row < count
+        self.cardcast_load_button.setEnabled(selected)
+        self.cardcast_send_button.setEnabled(selected)
+        self.cardcast_remove_button.setEnabled(selected)
+        self.cardcast_up_button.setEnabled(selected and row > 0)
+        self.cardcast_down_button.setEnabled(selected and row < count - 1)
+
+    def _queue_selected_library_card(self):
+        item, _ = self._selected_library_item()
+        if item is None or item.data(Qt.ItemDataRole.UserRole + 1) not in {"my", "sent"}:
+            return
+        path = str(item.data(Qt.ItemDataRole.UserRole))
+        if not Path(path).is_file():
+            self.refresh_card_library()
+            return
+        if not self.cardcast_playlist.add(path):
+            self.library_choice_hint.setText(
+                "Queue is full (40 cards). Remove one from Operate before adding more.")
+            return
+        self._persist_cardcast_queue()
+        self._refresh_cardcast_queue(
+            selected_row=len(self.cardcast_playlist.paths) - 1)
+        self.library_choice_hint.setText(
+            f"Added {Path(path).stem}. {len(self.cardcast_playlist.paths)} queued. "
+            "No transmission started.")
+
+    def _load_queued_card(self):
+        if self._station_operation_active():
+            self.cardcast_queue_status.setText(
+                "Finish the current transmission or beacon before changing cards.")
+            return False
+        item = self.cardcast_queue_list.currentItem()
+        if item is None:
+            return False
+        path = item.data(Qt.ItemDataRole.UserRole)
+        combo = self.stage_card_combos["card"]
+        index = combo.findData(path)
+        if index < 0:
+            self.cardcast_queue_status.setText(
+                "That saved card is unavailable. Refresh the collection.")
+            self.refresh_card_library()
+            return False
+        self.exchange_mode.setCurrentIndex(0)
+        combo.setCurrentIndex(index)
+        self._select_manual_stage("card")
+        self._refresh_send_workspace()
+        self.cardcast_queue_status.setText(
+            f"Loaded {Path(path).stem}. Send card when ready; loading does not transmit.")
+        return True
+
+    def _send_queued_card(self):
+        """One explicit send only. Never dequeue on failed or unconfirmed TX."""
+        if not self._load_queued_card():
+            return
+        self.cardcast_queue_status.setText(
+            "Sending requested. The card stays queued for retry or manual removal; "
+            "no remote receipt is implied.")
+        self._send_stage_card("card")
+
+    def _remove_queued_card(self):
+        row = self.cardcast_queue_list.currentRow()
+        if self.cardcast_playlist.remove(row) is None:
+            return
+        self._persist_cardcast_queue()
+        self._refresh_cardcast_queue(selected_row=row)
+        self.cardcast_queue_status.setText("Removed from playlist; saved card preserved.")
+
+    def _move_queued_card(self, delta):
+        row = self.cardcast_queue_list.currentRow()
+        next_row = self.cardcast_playlist.move(row, delta)
+        if row == next_row:
+            return
+        self._persist_cardcast_queue()
+        self._refresh_cardcast_queue(selected_row=next_row)
 
     def _highlight_saved_library_card(self):
         if self.card_path is None or self.tabs.currentIndex() != 1:
@@ -3714,15 +3866,34 @@ class MainWindow(QMainWindow):
             try:
                 entry = json.loads(path.read_text())
                 if not isinstance(entry, dict): continue
-                by_call_view = (getattr(self, "log_deck_view", None) is not None and
-                                self.log_deck_view.currentData() == "received_by_call")
-                if (query and not by_call_view and query not in
+                current_view = self.log_deck_view.currentData()
+                by_call_view = current_view == "received_by_call"
+                if (query and not by_call_view and current_view != "recent" and query not in
                         (str(entry.get("peer_callsign", "")) + " " +
                          str(entry.get("peer_grid", ""))).casefold()):
                     continue
                 entries.append((path, entry))
             except (OSError, ValueError): continue
-        if getattr(self, "log_deck_view", None) is not None and self.log_deck_view.currentData() == "received_by_call":
+        view = self.log_deck_view.currentData()
+        if view == "recent":
+            display_entries = []
+            for path, entry in entries:
+                for index, report in enumerate(entry.get("received_cards", [])):
+                    card = report.get("card") or {}
+                    call = str(card.get("callsign") or "Unknown")
+                    grid = str(card.get("grid") or "")
+                    if query and query not in f"{call} {grid}".casefold():
+                        continue
+                    timestamp = str(report.get("logged_at") or entry.get("started_at") or "")
+                    verified = self._assembly_verified(report) or card.get("exact") is True
+                    single = {
+                        "peer_callsign": call, "peer_grid": grid,
+                        "started_at": timestamp,
+                        "status": "Verified reception" if verified else "Provisional reception",
+                        "sent_cards": [], "received_cards": [report],
+                    }
+                    display_entries.append((f"recent-card:{path.name}:{index}", single))
+        elif view == "received_by_call":
             decks = self._aggregate_received_decks(entries)
             if query:
                 decks = {call: entry for call, entry in decks.items()
@@ -3743,11 +3914,16 @@ class MainWindow(QMainWindow):
             started = str(entry.get("started_at", ""))
             status = str(entry.get("status", "Saved"))
             count = len(events)
-            label = (f"{call}\n{count} received card{'s' if count != 1 else ''} · all time"
-                     if source.startswith("received-callsign:") else
+            recent = source.startswith("recent-card:")
+            archive = source.startswith("received-callsign:")
+            label = (f"{call}\n{status} · {started}"
+                     if recent else
+                     f"{call}\n{count} received card{'s' if count != 1 else ''} · all time"
+                     if archive else
                      f"{started}\n{status} · {count} card{'s' if count != 1 else ''}")
             item = QListWidgetItem(label)
-            deck_kind = "RECEIVED ARCHIVE" if source.startswith("received-callsign:") else "CONTACT DECK"
+            deck_kind = ("RECENT RECEPTION" if recent else
+                         "RECEIVED ARCHIVE" if archive else "ACTIVITY SESSION")
             preview = card_art(image, call, str(entry.get("peer_grid", "")) + " · " + deck_kind, QSize(220, 275), stacked=True)
             icon = QIcon(preview)
             icon.addPixmap(preview, QIcon.Mode.Selected)
@@ -3756,31 +3932,39 @@ class MainWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole + 1, {
                 "callsign": call, "grid": str(entry.get("peer_grid", "")),
                 "count": count, "status": status, "started": started,
-                "archive": source.startswith("received-callsign:"),
+                "archive": archive or recent,
             })
-            item.setToolTip(f"Open {call}'s received-card archive" if source.startswith("received-callsign:")
-                            else f"Open {call}'s contact deck")
+            item.setToolTip(
+                f"Open received card from {call}" if recent else
+                f"Open {call}'s received-card archive" if archive else
+                f"Open {call}'s activity session")
             item.setData(
                 Qt.ItemDataRole.AccessibleTextRole,
-                (f"All received cards from {call} · {entry.get('peer_grid') or 'grid unknown'} · "
-                 if source.startswith("received-callsign:") else
-                 f"Contact with {call} · {entry.get('peer_grid') or 'grid unknown'} · ") +
+                (f"Received card from {call} · {entry.get('peer_grid') or 'grid unknown'} · "
+                 if recent else
+                 f"All received cards from {call} · {entry.get('peer_grid') or 'grid unknown'} · "
+                 if archive else
+                 f"Activity with {call} · {entry.get('peer_grid') or 'grid unknown'} · ") +
                 f"{started or 'date unknown'} · {status} · {count} card"
                 f"{'s' if count != 1 else ''}")
             self.log_gallery.addItem(item)
-        archive_view = self.log_deck_view.currentData() == "received_by_call"
+        archive_view = view == "received_by_call"
+        recent_view = view == "recent"
         self.contact_summary.setText(
-            f"{len(display_entries)} stations" if archive_view else
+            f"{len(display_entries)} cards" if recent_view else
+            f"{len(display_entries)} station{'s' if len(display_entries) != 1 else ''}" if archive_view else
             f"{len(display_entries)} activity sessions")
         self.contact_view_hint.setText(
+            "Most recently received artwork, one card at a time. Provisional images "
+            "are labeled separately from verified receptions." if recent_view else
             "Stations heard groups received artwork by callsign, including CQ cards. "
             "Reception alone is not a confirmed QSO." if archive_view else
             "Activity sessions include sent cards and exchanges. Neither sending "
             "nor hearing a CQ proves the other station received the artwork.")
         self.log_status.setText(
-            (f"{len(display_entries)} callsign archive{'s' if len(display_entries) != 1 else ''}"
-             if self.log_deck_view.currentData() == "received_by_call" else
-             f"{len(display_entries)} contact deck{'s' if len(display_entries) != 1 else ''}")
+            (f"{len(display_entries)} received cards" if recent_view else
+             f"{len(display_entries)} station archives" if archive_view else
+             f"{len(display_entries)} activity sessions")
             if display_entries else "")
         self.log_clear_button.setVisible(bool(query))
         if display_entries:
@@ -3788,13 +3972,14 @@ class MainWindow(QMainWindow):
         else:
             self.contact_empty_operate_button.setVisible(not query)
             self.contact_empty_operate_button.setText(
-                "Go listen for cards" if self.log_deck_view.currentData() == "received_by_call"
+                "Go listen for cards" if view in {"received_by_call", "recent"}
                 else "Open Operate")
-            if self.log_deck_view.currentData() == "received_by_call":
+            if view in {"received_by_call", "recent"}:
                 self.contact_empty_title.setText(
                     "No matching received cards" if query else "No received cards yet")
                 self.contact_empty_copy.setText(
-                    "Heard cards appear here, even without a formal QSO. Listen on air or switch to Activity sessions.")
+                    "Heard artwork is saved without needing a formal QSO. "
+                    "Listen on air or switch between Recent cards and Stations heard.")
             else:
                 self.contact_empty_title.setText(
                     "No matching contacts" if query else "No contacts yet")
@@ -3834,6 +4019,9 @@ class MainWindow(QMainWindow):
             str(metadata.get("started") or ""),
         ) if part)
         self.contact_selected_meta.setText(note)
+        self.open_qso_button.setText(
+            "Open received card" if self.log_deck_view.currentData() == "recent"
+            else "Open card deck")
         self.open_qso_button.setEnabled(True)
 
     @staticmethod
@@ -3902,6 +4090,28 @@ class MainWindow(QMainWindow):
                 return self._aggregate_received_decks(entries).get(call), None
             except OSError:
                 return None, None
+        if source.startswith("recent-card:"):
+            try:
+                identifier = source[len("recent-card:"):]
+                filename, row = identifier.rsplit(":", 1)
+                if Path(filename).name != filename or not filename.endswith(".json"):
+                    return None, None
+                path = self.qso_log_dir / filename
+                saved = json.loads(path.read_text())
+                report = saved["received_cards"][int(row)]
+                card = report.get("card") or {}
+                single = {
+                    "peer_callsign": card.get("callsign") or "Unknown",
+                    "peer_grid": card.get("grid") or "",
+                    "started_at": report.get("logged_at") or saved.get("started_at", ""),
+                    "status": ("Verified reception" if (
+                        self._assembly_verified(report) or card.get("exact") is True)
+                        else "Provisional reception"),
+                    "sent_cards": [], "received_cards": [report],
+                }
+                return single, None
+            except (ValueError, OSError, KeyError, IndexError, TypeError):
+                return None, None
         path = Path(source)
         return json.loads(path.read_text()), path
 
@@ -3925,6 +4135,9 @@ class MainWindow(QMainWindow):
                     self.library_inspector_preview.setAccessibleDescription("No card selected")
             self.open_library_button.setVisible(selected)
             self.open_library_button.setText("Personalize starter" if kind == "starter" else "Edit selected")
+            if hasattr(self, "queue_library_card_button"):
+                self.queue_library_card_button.setVisible(saved)
+                self.queue_library_card_button.setEnabled(saved)
             if hasattr(self, "library_choice_hint"):
                 label, _ = self._library_outgoing_destination()
                 self.use_library_card_button.setText(f"Use for {label}")
@@ -3933,7 +4146,7 @@ class MainWindow(QMainWindow):
                 if kind == "starter":
                     hint = "Personalize this starter in the editor, then save your own copy."
                 elif saved:
-                    hint = f"Use this card for {label}, or edit it first. Assigning a card does not transmit."
+                    hint = "Queue it for later or load it to share once. Neither action transmits."
                 elif not getattr(self, "_has_saved_library_cards", False):
                     hint = "Start with any design below, or create a card from scratch. Save it before assigning it to a send stage."
                 else:
@@ -5949,6 +6162,33 @@ class MainWindow(QMainWindow):
         self.heard_focus_label.setObjectName("operateSectionHint")
         self.heard_focus_label.setWordWrap(True)
         received_layout.addWidget(self.heard_focus_label)
+        heard_toolbar = QHBoxLayout()
+        heard_toolbar.setSpacing(6)
+        self.heard_gallery_count = QLabel("No cards heard yet")
+        self.heard_gallery_count.setObjectName("supportingText")
+        heard_toolbar.addWidget(self.heard_gallery_count, 1)
+        self.heard_archive_button = QPushButton("Browse heard cards…")
+        self.heard_archive_button.setToolTip(
+            "Open the saved receive archive. No transmission.")
+        self.heard_archive_button.clicked.connect(self._open_heard_archive)
+        heard_toolbar.addWidget(self.heard_archive_button)
+        received_layout.addLayout(heard_toolbar)
+        self.heard_focus_actions = QWidget()
+        focus_actions = QHBoxLayout(self.heard_focus_actions)
+        focus_actions.setContentsMargins(0, 0, 0, 0)
+        focus_actions.setSpacing(6)
+        self.heard_draw_button = QPushButton("Draw something new…")
+        self.heard_draw_button.setToolTip(
+            "Open the art editor; preparing artwork never starts a transmission.")
+        self.heard_draw_button.clicked.connect(self.start_quick_draw_reply)
+        focus_actions.addWidget(self.heard_draw_button)
+        self.heard_station_archive_button = QPushButton("See this station")
+        self.heard_station_archive_button.clicked.connect(
+            lambda: self._open_heard_archive(focused=True))
+        focus_actions.addWidget(self.heard_station_archive_button)
+        focus_actions.addStretch(1)
+        self.heard_focus_actions.hide()
+        received_layout.addWidget(self.heard_focus_actions)
         self.heard_focus_clear = QPushButton("Follow newest")
         self.heard_focus_clear.setObjectName("activityDisclosure")
         self.heard_focus_clear.setToolTip(
@@ -6035,7 +6275,7 @@ class MainWindow(QMainWindow):
         self.session_wall.setWordWrap(False)
         self.session_wall.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.session_wall.setIconSize(QSize(164, 164))
-        self.session_wall.setGridSize(QSize(182, 184))
+        self.session_wall.setGridSize(QSize(188, 219))
         self.session_wall.setSpacing(8)
         self.session_wall.setObjectName("sessionWall")
         self.session_wall.setAccessibleName("Received cards for this session")
@@ -6128,7 +6368,9 @@ class MainWindow(QMainWindow):
         self.stop_responding_button.clicked.connect(self.stop_responding)
         right_panel.addWidget(self.stop_responding_button)
         self.quick_draw_button = QPushButton("Quick draw")
-        self.quick_draw_button.setToolTip("Sketch a card while receiving or transmitting; use it for the next manual send.")
+        self.quick_draw_button.setToolTip(
+            "Draw artwork and prepare it for the next manual send. "
+            "No transmission starts when the editor closes.")
         self.quick_draw_button.clicked.connect(self.start_quick_draw_reply)
         self.quick_draw_status = QLabel("")
         self.quick_draw_status.setObjectName("quickDrawStatus")
@@ -6182,6 +6424,94 @@ class MainWindow(QMainWindow):
         share_layout.addWidget(share_copy)
         share_layout.addWidget(self.stage_rows["card"])
         dock_layout.addWidget(self.share_card_panel)
+
+        # Cardcasting playlist. Loading artwork is separate from transmission.
+        saved_queue = self.settings.value("ui/cardcast/queue", [])
+        self.cardcast_playlist = CardcastQueue(saved_queue)
+        self.cardcast_panel = QFrame()
+        self.cardcast_panel.setObjectName("cardcastPanel")
+        queue_layout = QVBoxLayout(self.cardcast_panel)
+        queue_layout.setContentsMargins(10, 8, 10, 8)
+        queue_layout.setSpacing(5)
+        queue_header = QHBoxLayout()
+        queue_label = QLabel("UP NEXT")
+        queue_label.setObjectName("operateJourneyStep")
+        queue_header.addWidget(queue_label)
+        queue_header.addStretch(1)
+        self.cardcast_count = QLabel("0 queued")
+        self.cardcast_count.setObjectName("supportingText")
+        queue_header.addWidget(self.cardcast_count)
+        queue_layout.addLayout(queue_header)
+        self.cardcast_queue_list = QListWidget()
+        self.cardcast_queue_list.setObjectName("cardcastQueue")
+        self.cardcast_queue_list.setIconSize(QSize(34, 42))
+        self.cardcast_queue_list.setMaximumHeight(116)
+        self.cardcast_queue_list.setMinimumHeight(78)
+        self.cardcast_queue_list.setAccessibleName("Saved cards queued to share")
+        self.cardcast_queue_list.setToolTip(
+            "Choose a saved card; double-click to load it. Selection never transmits.")
+        self.cardcast_queue_list.currentRowChanged.connect(
+            self._sync_cardcast_queue_actions)
+        self.cardcast_queue_list.itemDoubleClicked.connect(
+            lambda _item: self._load_queued_card())
+        queue_layout.addWidget(self.cardcast_queue_list)
+        self.cardcast_empty = QLabel(
+            "Make a playlist of saved cards. Nothing sends automatically.")
+        self.cardcast_empty.setObjectName("operateSectionHint")
+        self.cardcast_empty.setWordWrap(True)
+        queue_layout.addWidget(self.cardcast_empty)
+        queue_buttons = QHBoxLayout()
+        queue_buttons.setSpacing(5)
+        self.cardcast_browse_button = QPushButton("Add cards…")
+        self.cardcast_browse_button.setToolTip(
+            "Browse My Cards and add saved artwork to this playlist.")
+        self.cardcast_browse_button.clicked.connect(self._browse_cardcast_queue)
+        queue_buttons.addWidget(self.cardcast_browse_button)
+        self.cardcast_load_button = QPushButton("Load")
+        self.cardcast_load_button.setToolTip(
+            "Make this the current outgoing card. No transmission.")
+        self.cardcast_load_button.clicked.connect(self._load_queued_card)
+        queue_buttons.addWidget(self.cardcast_load_button)
+        self.cardcast_send_button = QPushButton("Send selected")
+        self.cardcast_send_button.setToolTip(
+            "Manually transmit the selected queued card once. "
+            "It stays queued for retry until you remove it.")
+        self.cardcast_send_button.clicked.connect(self._send_queued_card)
+        queue_buttons.addWidget(self.cardcast_send_button)
+        queue_layout.addLayout(queue_buttons)
+        queue_actions = QHBoxLayout()
+        queue_actions.setSpacing(5)
+        self.cardcast_up_button = QPushButton("↑")
+        self.cardcast_up_button.setAccessibleName("Move queued card earlier")
+        self.cardcast_up_button.clicked.connect(lambda: self._move_queued_card(-1))
+        self.cardcast_down_button = QPushButton("↓")
+        self.cardcast_down_button.setAccessibleName("Move queued card later")
+        self.cardcast_down_button.clicked.connect(lambda: self._move_queued_card(1))
+        self.cardcast_remove_button = QPushButton("Remove")
+        self.cardcast_remove_button.setToolTip(
+            "Remove this entry from the playlist, not the saved card.")
+        self.cardcast_remove_button.clicked.connect(self._remove_queued_card)
+        queue_actions.addWidget(self.cardcast_up_button)
+        queue_actions.addWidget(self.cardcast_down_button)
+        queue_actions.addStretch(1)
+        queue_actions.addWidget(self.cardcast_remove_button)
+        self.cardcast_queue_actions = QWidget()
+        self.cardcast_queue_actions.setLayout(queue_actions)
+        queue_layout.addWidget(self.cardcast_queue_actions)
+        self.cardcast_queue_status = QLabel("")
+        self.cardcast_queue_status.setObjectName("supportingText")
+        self.cardcast_queue_status.setWordWrap(True)
+        queue_layout.addWidget(self.cardcast_queue_status)
+        # The full playlist scrolls with the artwork instead of inflating the
+        # minimum window height. A compact shortcut stays beside Send card.
+        left_panel.addWidget(self.cardcast_panel)
+        self.cardcast_peek_button = QPushButton("▸ Up next · 0 queued")
+        self.cardcast_peek_button.setObjectName("activityDisclosure")
+        self.cardcast_peek_button.setToolTip(
+            "Jump to the saved-card queue above. Selecting or loading cannot transmit.")
+        self.cardcast_peek_button.clicked.connect(self._jump_to_cardcast_queue)
+        dock_layout.addWidget(self.cardcast_peek_button)
+        self._refresh_cardcast_queue()
 
         self.qso_stage_toggle = QPushButton()
         self.qso_stage_toggle.setObjectName("activityDisclosure")
@@ -8767,6 +9097,8 @@ class MainWindow(QMainWindow):
             self._stop_current_transmit()
             return
         self.exchange_mode.setCurrentIndex(0)
+        if ((self.reply_report or {}).get("card") or {}).get("message_type", "card") == "card":
+            self._select_manual_stage("card")
         self._active_send_control = self.quick_draw_send_button
         self.transmit_exchange(card_override=self.quick_reply_card)
 
@@ -9623,15 +9955,40 @@ class MainWindow(QMainWindow):
                 self.reply_to_button.setToolTip(
                     "Repeat the same artwork and card ID; the current reply's reception report will be included.")
                 self.reply_to_button.setVisible(True)
-        quick_reply = self._reply_stage(report) is not None
+        quick_reply = (kind != "card" and self._reply_stage(report) is not None)
         self.quick_draw_button.setText(
-            f"Quick reply to {peer}" if quick_reply else "Quick draw")
+            f"Quick reply to {peer}" if quick_reply else "Draw a card to share")
         self.quick_draw_button.setToolTip(
-            f"Draw a card for {peer}'s next exchange stage."
+            f"Draw a card for {peer}'s next formal exchange stage."
             if quick_reply else
-            "Sketch a card while receiving or transmitting; use it for the next manual send.")
+            "Prepare artwork after hearing this station. The editor does not transmit; "
+            "use Send quick draw when ready.")
         self.quick_draw_button.setVisible(self.exchange_mode.currentIndex() == 0 and not self.auto_armed)
         self._refresh_operate_primary_action()
+
+    def _refresh_heard_gallery_count(self):
+        if not hasattr(self, "heard_gallery_count"):
+            return
+        tiles = [button for _item, button in self.session_wall_items.values()
+                 if hasattr(button, "_report")]
+        verified = sum(self._assembly_verified(button._report) for button in tiles)
+        count = len(tiles)
+        self.heard_gallery_count.setText(
+            (f"{count} heard · {verified} verified · {count - verified} provisional"
+             if count else "No cards heard yet · start listening"))
+
+    def _open_heard_archive(self, *, focused=False):
+        """Navigate to saved receptions without sending or changing radio state."""
+        callsign = ""
+        if focused and self._pinned_heard_key is not None:
+            card = (self.reply_report or {}).get("card") or {}
+            callsign = str(card.get("callsign") or "")
+        self.tabs.setCurrentIndex(2)
+        target_view = "received_by_call" if focused else "recent"
+        index = self.log_deck_view.findData(target_view)
+        if index >= 0:
+            self.log_deck_view.setCurrentIndex(index)
+        self.log_search.setText(callsign)
 
     def _focus_heard_card(self, report):
         """Pin a received station as the reply target; selection never transmits."""
@@ -9646,6 +10003,10 @@ class MainWindow(QMainWindow):
             f"Focused: {card['callsign']} · {stage.upper()} · {integrity}. "
             "The reply button sends immediately; Quick draw lets you create a different card.")
         self.heard_focus_clear.show()
+        self.heard_focus_actions.show()
+        if (stage == "card" and not self.auto_armed and
+                not self._station_operation_active()):
+            self._select_manual_stage("card")
         self._show_reply_action(report, operator_selected=True)
 
     def _clear_heard_focus(self):
@@ -9653,6 +10014,7 @@ class MainWindow(QMainWindow):
         self.heard_focus_label.setText(
             "Following the newest actionable card. Select a received card to focus its station.")
         self.heard_focus_clear.hide()
+        self.heard_focus_actions.hide()
         latest = self._latest_heard_report
         if latest is not None:
             self._show_reply_action(latest)
@@ -11421,7 +11783,7 @@ class MainWindow(QMainWindow):
         ))
         if existing is None:
             item = QListWidgetItem()
-            item.setSizeHint(QSize(168, 168))
+            item.setSizeHint(QSize(184, 214))
             self.session_wall.insertItem(0, item)
             card_face = QPushButton()
             card_face.setCheckable(True)
@@ -11443,7 +11805,20 @@ class MainWindow(QMainWindow):
             card_face.clicked.connect(
                 lambda _checked=False, button=card_face:
                     self._focus_heard_card(button._report))
-            self.session_wall.setItemWidget(item, card_face)
+            cell = QWidget()
+            cell_layout = QVBoxLayout(cell)
+            cell_layout.setContentsMargins(3, 2, 3, 2)
+            cell_layout.setSpacing(2)
+            cell_layout.addWidget(card_face, 0, Qt.AlignmentFlag.AlignHCenter)
+            caption = QLabel()
+            caption.setObjectName("heardCardCaption")
+            caption.setFixedWidth(172)
+            caption.setWordWrap(True)
+            caption.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+            caption.setMaximumHeight(38)
+            cell_layout.addWidget(caption, 0, Qt.AlignmentFlag.AlignHCenter)
+            card_face._caption = caption
+            self.session_wall.setItemWidget(item, cell)
             self.session_wall_items[key] = (item, card_face)
             self.session_wall_count += 1
             self.session_wall_keys.add(key)
@@ -11455,6 +11830,12 @@ class MainWindow(QMainWindow):
         card_face._ordinary_icon = icon
         card_face._ordinary_back = back_text
         card_face._ordinary_label = accessible_label
+        if hasattr(card_face, "_caption"):
+            quality = ("✓ VERIFIED" if exact else f"~ {received_percent}% PREVIEW")
+            if duplicate:
+                quality += " · REPEAT"
+            card_face._caption.setText(f"{callsign} · {kind}\n{quality}")
+            card_face._caption.setToolTip(integrity_text)
         card_face._report = copy.deepcopy(report)
         card_face._report.setdefault('logged_at', time.strftime('%Y-%m-%d %H:%M:%S'))
         card_face._report.setdefault('frequency_hz', frequency_hz)
@@ -11474,6 +11855,7 @@ class MainWindow(QMainWindow):
         self.session_wall_empty.hide()
         self.getting_started_button.hide()
         self.session_wall.show()
+        self._refresh_heard_gallery_count()
         self._update_wall_animations()
 
     def _saved_animation_candidates(self):

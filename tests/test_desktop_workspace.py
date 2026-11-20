@@ -485,7 +485,7 @@ def test_share_card_is_default_and_qso_is_optional(workspace):
         assert not w.send_details_group.isVisible()
         send.assert_not_called()
     assert w.cq_interval.value() == 60
-    assert w.log_deck_view.currentData() == "received_by_call"
+    assert w.log_deck_view.currentData() == "recent"
     with patch.object(w, "transmit_exchange") as transmit:
         w.stage_card_combos["card"].setCurrentIndex(0)
         assert w._outgoing_message_type() == "card"
@@ -576,3 +576,204 @@ def test_data2g_share_uses_standalone_card_wire_type(workspace):
         w.data2g_tx_frames = []
         w.data2g_tx_waiting = None
         w.data2g_session = None
+
+
+def test_cardcast_playlist_add_load_send_and_reorder_are_explicit(workspace, tmp_path):
+    """Queueing and navigating cannot accidentally key the radio."""
+    import json
+    from PySide6.QtCore import Qt
+    w = workspace
+    cards = []
+    for i in range(2):
+        path = tmp_path / "cards" / f"art-{i}.json"
+        path.write_text(json.dumps({
+            "callsign": "W7TEST", "grid": "CN85", "card_id": 400 + i,
+            "width": 32, "height": 32, "palette": w.card.palette,
+            "pixels": [i] * 1024,
+        }))
+        cards.append(str(path))
+    w.refresh_card_library()
+
+    with patch.object(w, "transmit_exchange") as send:
+        w.cardcast_browse_button.click()
+        assert w.tabs.currentIndex() == 1
+        assert w.cardcast_playlist.paths == []
+        for path in cards:
+            item = next(w.library_list.item(i) for i in range(w.library_list.count())
+                        if w.library_list.item(i).data(Qt.ItemDataRole.UserRole) == path)
+            w.library_list.setCurrentItem(item)
+            assert w.queue_library_card_button.isVisible()
+            w.queue_library_card_button.click()
+        assert w.cardcast_playlist.paths == cards
+        assert w.cardcast_queue_list.count() == 2
+        assert len(w.settings.value("ui/cardcast/queue")) == 2
+        assert w.stage_card_combos["card"].currentData() is None
+        send.assert_not_called()
+
+        w.tabs.setCurrentIndex(0)
+        w.cardcast_queue_list.setCurrentRow(1)
+        w.cardcast_up_button.click()
+        assert w.cardcast_playlist.paths == list(reversed(cards))
+        assert w.cardcast_queue_list.currentRow() == 0
+        w.cardcast_load_button.click()
+        assert w.stage_card_combos["card"].currentData() == cards[1]
+        assert w._outgoing_message_type() == "card"
+        assert "does not transmit" in w.cardcast_queue_status.text()
+        send.assert_not_called()
+
+        w.cardcast_send_button.click()
+        send.assert_called_once()
+        assert send.call_args.kwargs["card_override"].card_id == 401
+        assert w.cardcast_playlist.paths == list(reversed(cards))
+        assert "stays queued" in w.cardcast_queue_status.text()
+        w.cardcast_remove_button.click()
+        assert w.cardcast_playlist.paths == [cards[0]]
+        assert all(path in w.settings.value("ui/cardcast/queue") for path in [cards[0]])
+        assert cards[1] not in w.settings.value("ui/cardcast/queue")
+        assert (tmp_path / "cards" / "art-1.json").is_file()
+        # A running TX/beacon must neither be replaced nor stopped by a queue click.
+        with patch.object(w, "_station_operation_active", return_value=True):
+            w.cardcast_send_button.click()
+            assert "Finish the current transmission" in w.cardcast_queue_status.text()
+            assert w.cardcast_playlist.paths == [cards[0]]
+        send.assert_called_once()
+
+
+def test_cardcast_queue_prunes_deleted_library_card(workspace, tmp_path):
+    import json
+    from PySide6.QtCore import Qt
+    w = workspace
+    path = tmp_path / "cards" / "going-away.json"
+    path.write_text(json.dumps({
+        "callsign": "W7TEST", "grid": "CN85", "card_id": 987,
+        "width": 32, "height": 32, "palette": w.card.palette,
+        "pixels": [1] * 1024,
+    }))
+    w.refresh_card_library()
+    w.library_list.setCurrentItem(next(
+        w.library_list.item(i) for i in range(w.library_list.count())
+        if w.library_list.item(i).data(Qt.ItemDataRole.UserRole) == str(path)))
+    w._queue_selected_library_card()
+    assert w.cardcast_playlist.paths == [str(path)]
+    path.unlink()
+    w.refresh_card_library()
+    assert not w.cardcast_playlist.paths
+    assert w.cardcast_queue_list.count() == 0
+    assert w.cardcast_empty.isVisible() or w.tabs.currentIndex() != 0
+
+
+def test_heard_gallery_tiles_show_integrity_and_safe_actions(workspace):
+    w = workspace
+    def report(call, card_id, verified):
+        return {
+            "card": {
+                "callsign": call, "grid": "CN85", "card_id": card_id,
+                "message_type": "card", "width": 16, "height": 16,
+                "pixel_coverage": [True] * 256,
+                "verified_pixel_coverage": ([True] * 256 if verified
+                                             else [False] * 256),
+            },
+            "pixels": [[[12, 4, 2]] * 16 for _ in range(16)],
+            "assembly_event": {"verified_complete": verified},
+        }
+    w._add_session_wall_card(report("W7ART", 44, True))
+    w._add_session_wall_card(report("W7MORE", 45, False))
+    assert w.session_wall_count == 2
+    assert "2 heard" in w.heard_gallery_count.text()
+    assert "1 verified" in w.heard_gallery_count.text()
+    assert "1 provisional" in w.heard_gallery_count.text()
+    tiles = [button for _item, button in w.session_wall_items.values()]
+    assert any("✓ VERIFIED" in button._caption.text() for button in tiles)
+    assert any("PREVIEW" in button._caption.text() for button in tiles)
+
+    with patch.object(w, "transmit_exchange") as send:
+        verified = next(button for button in tiles
+                        if button._report["card"]["callsign"] == "W7ART")
+        verified.click()
+        assert w.heard_focus_actions.isVisible()
+        assert w._pinned_heard_key is not None
+        w.heard_station_archive_button.click()
+        assert w.tabs.currentIndex() == 2
+        assert w.log_deck_view.currentData() == "received_by_call"
+        assert w.log_search.text() == "W7ART"
+        w.tabs.setCurrentIndex(0)
+        w.heard_focus_clear.click()
+        assert not w.heard_focus_actions.isVisible()
+        w.heard_archive_button.click()
+        assert w.log_search.text() == ""
+        assert w.log_deck_view.currentData() == "recent"
+        send.assert_not_called()
+
+
+def test_quick_draw_after_standalone_art_only_prepares_next_card(workspace):
+    w = workspace
+    incoming = {"card": {"callsign": "W7ART", "grid": "CN85",
+                         "card_id": 123, "message_type": "card"},
+                "assembly_event": {"verified_complete": True}}
+    w._focus_heard_card(incoming)
+    seen = []
+    with patch.object(w.editor_dialog, "exec",
+                      side_effect=lambda: seen.append(w.editor_done_button.text())), \
+         patch.object(w, "transmit_exchange") as send:
+        w.start_quick_draw_reply()
+        assert seen == ["Use this card"]
+        send.assert_not_called()
+    assert w._outgoing_message_type() == "card"
+
+
+
+def test_recent_cards_archive_is_individual_and_chronological(workspace, tmp_path):
+    import json
+    from PySide6.QtCore import Qt
+    w = workspace
+
+    def reception(call, card_id, when, verified):
+        return {
+            "card": {"callsign": call, "grid": "CN85",
+                     "card_id": card_id, "message_type": "card",
+                     "width": 16, "height": 16, "exact": verified},
+            "pixels": [[[11, 3, 5]] * 16 for _ in range(16)],
+            "logged_at": when,
+            "assembly_event": {"verified_complete": verified},
+        }
+
+    reports = [
+        reception("K7FIRST", 12, "2026-11-20 09:00:00", True),
+        reception("K7LAST", 13, "2026-11-20 10:00:00", False),
+    ]
+    w.qso_log_dir.mkdir(parents=True, exist_ok=True)
+    path = w.qso_log_dir / "saved-cards.json"
+    path.write_text(json.dumps({
+        "peer_callsign": "Some session",
+        "started_at": "2026-11-20 08:00:00",
+        "received_cards": reports,
+        "sent_cards": [],
+    }))
+    w.tabs.setCurrentIndex(2)
+    w.log_deck_view.setCurrentIndex(w.log_deck_view.findData("recent"))
+    w.refresh_qso_log()
+    assert w.log_gallery.count() == 2
+    assert w.contact_summary.text() == "2 cards"
+    newest = w.log_gallery.item(0)
+    assert newest.data(Qt.ItemDataRole.UserRole).startswith("recent-card:")
+    assert newest.data(Qt.ItemDataRole.UserRole + 1)["callsign"] == "K7LAST"
+    assert "Provisional" in newest.data(Qt.ItemDataRole.UserRole + 1)["status"]
+    source = newest.data(Qt.ItemDataRole.UserRole)
+    loaded, editable_path = w._load_qso_deck_source(source)
+    assert editable_path is None
+    assert loaded["received_cards"][0]["card"]["card_id"] == 13
+    assert loaded["sent_cards"] == []
+
+    w.log_gallery.setCurrentRow(0)
+    assert w.contact_selected_title.text() == "K7LAST"
+    assert w.open_qso_button.text() == "Open received card"
+    with patch.object(w, "transmit_exchange") as send:
+        w.log_sort.setCurrentIndex(1)
+        assert w.log_gallery.item(0).data(Qt.ItemDataRole.UserRole + 1)["callsign"] == "K7FIRST"
+        w.log_sort.setCurrentIndex(0)
+        w.log_search.setText("K7FIRST")
+        assert w.log_gallery.count() == 1
+        w.log_deck_view.setCurrentIndex(w.log_deck_view.findData("received_by_call"))
+        assert w.log_gallery.count() == 1
+        assert w.contact_summary.text() == "1 station"
+        send.assert_not_called()

@@ -36,9 +36,18 @@ control is inside that panel. Clicking a received artwork tile focuses the
 station for a possible reply, but selecting or flipping never transmits.
 
 Standalone cards are broadcast and do not confirm reception by any specific
-station. Contacts defaults to Stations heard; switch to Activity sessions for
-chronological records and unconfirmed sent broadcasts. The operating model,
-limits and next experiments are explained in docs/ARTWORK_FIRST.md.
+station. **Up next** is a manually operated playlist: add saved artwork from
+My Cards, reorder it, load a card (without transmitting), or explicitly send
+the selected card once. A queue entry is retained for retry or manual removal.
+The playlist is restored on restart, with deleted cards pruned when the
+library refreshes. It does not schedule automatic transmissions.
+
+Recently received cards show callsign, card type, verification state, and a
+preview. Click one to focus its station, draw another card, or open that
+station's saved archive. Contacts now defaults to chronological **Recent cards**,
+and also offers Stations heard (grouped by callsign) and Activity sessions
+(including unconfirmed sent broadcasts). The operating model, limits and next
+experiments are explained in docs/ARTWORK_FIRST.md.
 
 ### Card editor
 

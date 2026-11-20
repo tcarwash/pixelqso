@@ -248,3 +248,27 @@ def test_preview_and_editor_sidebar_fit_default_window(editor):
     from PySide6.QtWidgets import QScrollArea
     sidebar = editor.editor_dialog.findChild(QScrollArea)
     assert sidebar.widget().width() <= sidebar.viewport().width()
+
+
+def test_animation_affordance_explains_second_frame_and_keeps_preview(editor):
+    author = editor.animation_author
+    assert author.start_button.text() == "Add frame 2"
+    assert "editable frame" in author.start_button.accessibleDescription()
+    assert author.controls.isHidden()
+    author.start_button.click()
+    assert len(author.frames) == 2
+    assert author.active == 1
+    assert author.controls.isVisible()
+    assert author.preview_panel.isVisible()
+    assert "Frame 2 is a copy" in author.hint.text()
+    assert author.more_tools.isHidden()
+    author.more_tools_toggle.click()
+    assert author.more_tools.isVisible()
+    assert author.copy_frame.isVisible()
+    author.more_tools_toggle.click()
+    assert author.more_tools.isHidden()
+    assert editor.canvas.onion_image is not None
+    author.frame_buttons[0].click()
+    assert author.active == 0
+    author.frame_buttons[1].click()
+    assert author.active == 1

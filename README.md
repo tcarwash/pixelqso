@@ -27,6 +27,19 @@ Example cards made in the editor:
 ![example card, showing a cat](screenshots/cat.png)
 ![example card, showing a cat](screenshots/toad.png)
 
+### Card editor
+
+The default toolbar keeps **Draw**, **Erase**, **Fill**, **Pick**, **Select** and
+**Stamp** available beside the canvas. Expand **Shape tools** for rectangle and
+ellipse drawing. The selected color is highlighted in the palette, with its
+index and hex value shown alongside. **New stamp…** offers reusable text/emoji,
+drawn, and imported stamps; double-click a stamp in the shelf to place it.
+
+Select **Add frame 2** to animate a card. Frame 2 begins as a copy of frame 1;
+draw a change or move a placed stamp, then use the live preview. Onion skin,
+frame duration and switching remain visible; **More tools** exposes copying
+selections or replacing the other frame. Frame switching does not transmit.
+
 ### Two-frame animation
 
 The editor supports paired card frames. This capture shows frame switching and
@@ -140,7 +153,8 @@ IDs. The new common copy-header format is versioned; historical native payloads 
 **8-FSK · black & white · fast** thresholds artwork to two colors and sends a
 32×32 raster at one bit per pixel with protected identity and whole-card checks.
 It takes about 3 seconds for the card payload, plus framing. In the card editor,
-**QR code…** creates a centered QR card; keep the QR inside the canvas. When a
+**Make QR card…** under Card file creates a centered QR card, replacing the
+current artwork (Undo can restore it); keep the QR inside the canvas. When a
 received card is fully verified, **Read QR code** shows its decoded text. New
 monochrome and QR features require the same Pixel QSO version at both stations.
 

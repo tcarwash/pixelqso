@@ -85,7 +85,7 @@ class CanvasToolsTests(unittest.TestCase):
                 image = QImage(str(paths[0])); self.assertEqual((image.width(), image.height()), (4, 5))
                 self.assertEqual(window.card.pixels, before)
                 self.assertTrue(window.stamp_list.count())
-                self.assertEqual(window.palette_layout.getItemPosition(7)[:2], (1, 3))
+                self.assertEqual(window.palette_layout.getItemPosition(7)[:2], (0, 7))
             finally:
                 window.close()
 

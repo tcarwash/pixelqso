@@ -170,6 +170,13 @@ def build_app_stylesheet(text_scale=1.0):
                                    border: 0; font-weight: 700; }}
         QPushButton#stageNumber:hover {{ color: {c['accent']}; }}
         QPushButton#stageNumber:focus {{ border: 2px solid {c['focus_ring']}; }}
+        QPushButton#editorDisclosure {{ text-align: left; color: {c['text_muted']};
+                                          background: transparent; border: 0; padding: 6px 3px; }}
+        QPushButton#editorDisclosure:hover {{ color: {c['text_soft']};
+                                               background: {c['surface_hover']}; }}
+        QLabel#editorToolHint {{ color: {c['text_muted']}; font-size: {type_size['body']-1}px;
+                                 padding: 0 2px; }}
+        QPushButton#editorTool {{ padding: 8px 6px; }}
         QPushButton#activityDisclosure {{ text-align: left; color: {c['text_muted']};
                                           background: transparent; border: 0; padding: 6px 2px; }}
         QPushButton#activityDisclosure:hover {{ color: {c['text_soft']}; }}

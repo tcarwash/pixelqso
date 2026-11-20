@@ -84,10 +84,11 @@ class AnimationAuthor(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         entry = QHBoxLayout()
-        heading = QLabel('Animation'); heading.setObjectName('sectionTitle')
+        heading = QLabel('Two-frame animation'); heading.setObjectName('sectionTitle')
         entry.addWidget(heading)
-        self.start_button = QPushButton('Animate this card')
-        self.start_button.setToolTip('Create a second frame from this drawing, keeping stamps editable.')
+        self.start_button = QPushButton('Add frame 2')
+        self.start_button.setToolTip('Duplicate this card into a second editable frame. Make a small change to create an animation.')
+        self.start_button.setAccessibleDescription('Create a two-frame animation. Your current drawing becomes frame 1, and a copy becomes the second editable frame.')
         self.start_button.clicked.connect(self.start)
         entry.addStretch(); entry.addWidget(self.start_button)
         layout.addLayout(entry)
@@ -96,8 +97,8 @@ class AnimationAuthor(QWidget):
         strip = QHBoxLayout(); self.frame_buttons = []
         for index in range(2):
             button = QPushButton(f'Frame {index+1}')
-            button.setCheckable(True); button.setIconSize(QSize(48, 48))
-            button.setMinimumHeight(60)
+            button.setCheckable(True); button.setIconSize(QSize(40, 40))
+            button.setMinimumHeight(50)
             button.clicked.connect(lambda _=False, i=index: self.switch(i))
             strip.addWidget(button, 1); self.frame_buttons.append(button)
         self.flip_button = QPushButton('Flip ⇄')
@@ -114,6 +115,7 @@ class AnimationAuthor(QWidget):
         self.opacity.setRange(10, 70); self.opacity.setValue(30); self.opacity.setMaximumWidth(90)
         self.opacity.setAccessibleName('Onion skin opacity')
         self.opacity.valueChanged.connect(self.update_overlay)
+        self.onion.toggled.connect(self.opacity.setEnabled)
         options.addWidget(self.opacity)
         options.addStretch()
         self.duration = QSpinBox(); self.duration.setRange(100, 10000)
@@ -121,8 +123,16 @@ class AnimationAuthor(QWidget):
         self.duration.setSuffix(' ms / frame'); self.duration.setAccessibleName('Animation frame duration')
         self.duration.valueChanged.connect(self.timing_changed)
         options.addWidget(self.duration)
+        self.more_tools_toggle = QPushButton("More tools ▸")
+        self.more_tools_toggle.setObjectName("activityDisclosure")
+        self.more_tools_toggle.setCheckable(True)
+        self.more_tools_toggle.setToolTip("Copy selected pixels, stamps, or a complete frame to the other animation frame.")
+        self.more_tools_toggle.toggled.connect(self._toggle_more_tools)
+        options.addWidget(self.more_tools_toggle)
         controls.addLayout(options)
-        transfers = QHBoxLayout()
+        self.more_tools = QWidget()
+        transfers = QHBoxLayout(self.more_tools)
+        transfers.setContentsMargins(0, 0, 0, 0)
         self.copy_selection = QPushButton('Copy selection → other frame')
         self.copy_selection.setToolTip('Copy the box selection or selected stamp, then switch to move or resize the copy.')
         self.copy_selection.clicked.connect(self.copy_to_other)
@@ -131,8 +141,9 @@ class AnimationAuthor(QWidget):
         self.copy_frame.setToolTip('Replace the other frame with this drawing. Undo on that frame restores it.')
         self.copy_frame.clicked.connect(self.copy_whole_frame)
         transfers.addWidget(self.copy_frame)
-        controls.addLayout(transfers)
-        self.hint = QLabel('Edit either frame with the drawing tools below. Each frame has its own Undo / Redo.')
+        controls.addWidget(self.more_tools)
+        self.more_tools.hide()
+        self.hint = QLabel('Frame 2 is a copy — draw or move a stamp to animate it. Preview on the right.')
         self.hint.setWordWrap(True); self.hint.setObjectName('supportingText')
         controls.addWidget(self.hint)
         layout.addWidget(self.controls)
@@ -162,6 +173,10 @@ class AnimationAuthor(QWidget):
             # Parent is changed by attach_shortcuts so drawing focus also works.
             shortcut.activated.connect(lambda: self.switch(1-self.active) if self.frames else None)
         self.window.canvas.changed.connect(self.changed)
+
+    def _toggle_more_tools(self, expanded):
+        self.more_tools.setVisible(expanded)
+        self.more_tools_toggle.setText("More tools ▾" if expanded else "More tools ▸")
 
     def attach_shortcuts(self, editor):
         for shortcut in self.findChildren(QShortcut):
@@ -212,7 +227,7 @@ class AnimationAuthor(QWidget):
         second.update(path=None, undo=[], redo=[], saved=None)
         self.frames.append(second)
         self.enable(); self.switch(1)
-        self.window.status.setText('Frame 2 created · move a stamp or box-select pixels to change the pose.')
+        self.window.status.setText('Frame 2 created as a copy · draw a change or move a stamp, then preview the loop.')
 
     def enable(self):
         self.start_button.hide(); self.controls.show(); self.preview_panel.show()

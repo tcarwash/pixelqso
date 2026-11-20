@@ -315,3 +315,53 @@ def test_placeholder_does_not_autoconnect_data2g(tmp_path, monkeypatch):
             w.close()
             qt.processEvents()
     pixelqso.DATA = old_data
+
+
+def test_editor_tool_disclosure_and_palette_are_discoverable(workspace):
+    w = workspace
+    w.editor_dialog.show()
+    for _ in range(4):
+        QApplication.processEvents()
+    assert w.tool_buttons["draw"].isVisible()
+    assert w.tool_buttons["select"].isVisible()
+    assert w.editor_shapes_widget.isHidden()
+    assert "Draw" in w.editor_tool_hint.text()
+    assert w.palette_layout.getItemPosition(7)[:2] == (0, 7)
+    assert w.palette_selected_label.text().startswith("2/8")
+    w.editor_shapes_toggle.click()
+    assert w.editor_shapes_widget.isVisible()
+    w.tool_buttons["filled_rect"].click()
+    assert w.canvas.tool == "filled_rect"
+    assert "Filled rectangle" in w.editor_tool_hint.text()
+    w.editor_shapes_toggle.click()
+    assert w.editor_shapes_widget.isHidden()
+    w.set_editor_tool("ellipse")
+    assert w.editor_shapes_widget.isVisible()
+    w.palette_layout.itemAt(3).widget().click()
+    assert w.canvas.color_index == 3
+    assert w.canvas.tool == "draw"
+    assert w.palette_selected_label.text().startswith("4/8")
+    assert w.new_stamp_button.menu() is not None
+    assert [a.text() for a in w.new_stamp_button.menu().actions()] == [
+        "Text / emoji…", "Draw a stamp…", "Import image…"]
+    assert w.new_stamp_button.isVisible()
+    assert w.stamp_list.isVisible()
+
+
+def test_editor_canvas_has_usable_space_at_common_display_sizes(workspace):
+    w = workspace
+    w.editor_dialog.show()
+    for width, height in ((1260, 860), (1080, 780)):
+        w.editor_dialog.resize(width, height)
+        for _ in range(6):
+            QApplication.processEvents()
+        # Toolbars, palettes, and status must not leave a tiny canvas.
+        assert w.canvas.visibleRegion().boundingRect().width() >= 320
+        assert w.canvas.visibleRegion().boundingRect().height() >= 320
+        assert w.editor_done_button.isVisible()
+    w._apply_interface_text_size(115)
+    for _ in range(6):
+        QApplication.processEvents()
+    assert w.canvas.visibleRegion().boundingRect().width() >= 320
+    assert w.editor_done_button.isVisible()
+    w._apply_interface_text_size(100)
